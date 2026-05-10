@@ -43,6 +43,27 @@ const params = new URLSearchParams(location.search);
 const token = params.get("token") || localStorage.getItem("codexPhoneToken") || "";
 let selectedThread = params.get("thread") || "";
 if (token) localStorage.setItem("codexPhoneToken", token);
+const manifestLink = document.querySelector('link[rel="manifest"]');
+
+function proxyBasePath() {
+  const match = location.pathname.match(/^\/(?:abs)?proxy\/\d+(?=\/|$)/);
+  return match ? match[0] : "";
+}
+
+const appBasePath = proxyBasePath();
+
+function appPath(path) {
+  const raw = String(path || "");
+  if (/^[a-z][a-z0-9+.-]*:/i.test(raw)) return raw;
+  if (!raw.startsWith("/")) return raw;
+  return `${appBasePath}${raw}`;
+}
+
+if (manifestLink && token) {
+  manifestLink.href = appPath(
+    `/site.webmanifest?token=${encodeURIComponent(token)}&base=${encodeURIComponent(appBasePath)}`,
+  );
+}
 
 const themeOptions = [
   { id: "simple", name: "シンプル", detail: "今のCodex Desktop風" },
@@ -461,7 +482,7 @@ function setEntryText(body, kind, text) {
 }
 
 function urlWithToken(url) {
-  const target = new URL(url, location.href);
+  const target = new URL(appPath(url), location.href);
   target.searchParams.set("token", token);
   return target.pathname + target.search;
 }
@@ -679,7 +700,19 @@ function authQuery() {
 
 async function apiGet(path) {
   const separator = path.includes("?") ? "&" : "?";
-  const response = await fetch(`${path}${separator}${authQuery()}`, { cache: "no-store" });
+  const response = await fetch(appPath(`${path}${separator}${authQuery()}`), { cache: "no-store" });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || `${response.status} ${response.statusText}`);
+  return result;
+}
+
+async function apiPost(path, body = {}) {
+  const separator = path.includes("?") ? "&" : "?";
+  const response = await fetch(appPath(`${path}${separator}${authQuery()}`), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
   const result = await response.json();
   if (!response.ok) throw new Error(result.error || `${response.status} ${response.statusText}`);
   return result;
@@ -867,15 +900,20 @@ async function showSettings() {
   renderThemeSettings();
   const loadingRow = addPanelRow("読み込み中...");
   try {
-    const result = await apiGet("/api/config");
+    const [configResult, localResult] = await Promise.allSettled([apiGet("/api/config"), apiGet("/api/local-settings")]);
     if (renderSeq !== settingsRenderSeq) return;
     loadingRow.remove();
+    if (localResult.status === "fulfilled") renderLocalSettings(localResult.value);
+    else addPanelRow("起動設定を読めませんでした", localResult.reason.message);
+
+    if (configResult.status === "rejected") throw configResult.reason;
+    const result = configResult.value;
     const config = result.config?.config || {};
     addPanelRow("認証", result.auth?.authMethod || "unknown");
     addPanelRow("既定モデル", config.model || selectedModel || "unknown");
     addPanelRow("承認", accessMode.approvalPolicy);
     addPanelRow("サンドボックス", accessMode.sandboxMode);
-    addPanelRow("作業ディレクトリ", config.cwd || "");
+    addPanelRow("作業ディレクトリ", localResult.value?.active?.workdir || "");
     if (result.errors?.length) addPanelRow("補足エラー", result.errors.join(" / "));
   } catch (error) {
     if (renderSeq !== settingsRenderSeq) return;
@@ -883,6 +921,139 @@ async function showSettings() {
     addPanelRow("読み込みに失敗しました", error.message);
     addEntry("error", `設定: ${error.message}`);
   }
+}
+
+function renderLocalSettings(payload) {
+  const group = document.createElement("section");
+  group.className = "local-settings";
+
+  const title = document.createElement("div");
+  title.className = "theme-settings-title";
+  title.textContent = "起動設定";
+  group.appendChild(title);
+
+  const active = payload.active || {};
+  const settings = payload.settings || {};
+  const options = payload.options || {};
+
+  const modelLabel = document.createElement("div");
+  modelLabel.className = "local-settings-current";
+  modelLabel.textContent = `現在: ${active.model || "unknown"} / ${shortenPath(active.workdir || "")}`;
+  group.appendChild(modelLabel);
+
+  const modelSelect = document.createElement("select");
+  modelSelect.className = "settings-select";
+  const modelValues = new Set([settings.model, active.model, selectedModel, ...(options.models || [])].filter(Boolean));
+  for (const modelValue of modelValues) {
+    const option = document.createElement("option");
+    option.value = modelValue;
+    option.textContent = modelValue;
+    modelSelect.appendChild(option);
+  }
+  modelSelect.value = settings.model || active.model || selectedModel || "";
+
+  const workspaceSelect = document.createElement("select");
+  workspaceSelect.className = "settings-select";
+  const workspaceValues = new Map();
+  for (const item of options.workspaces || []) workspaceValues.set(item.path, item.label || item.path);
+  if (settings.workdir && !workspaceValues.has(settings.workdir)) workspaceValues.set(settings.workdir, shortenPath(settings.workdir));
+  if (active.workdir && !workspaceValues.has(active.workdir)) workspaceValues.set(active.workdir, shortenPath(active.workdir));
+  for (const [workspacePath, label] of workspaceValues) {
+    const option = document.createElement("option");
+    option.value = workspacePath;
+    option.textContent = label;
+    workspaceSelect.appendChild(option);
+  }
+  workspaceSelect.value = settings.workdir || active.workdir || "";
+
+  const historyLabel = document.createElement("label");
+  historyLabel.className = "settings-check";
+  const historyInput = document.createElement("input");
+  historyInput.type = "checkbox";
+  historyInput.checked = settings.historySyncEnabled !== false;
+  historyLabel.append(historyInput, document.createTextNode("履歴同期"));
+
+  const status = document.createElement("div");
+  status.className = payload.restartRequired ? "settings-status warning" : "settings-status";
+  status.textContent = payload.restartRequired ? "保存済み設定があります。再起動で反映します。" : "起動中の設定と一致しています。";
+
+  const form = document.createElement("form");
+  form.className = "settings-form";
+  form.append(
+    settingField("モデル", modelSelect),
+    settingField("作業ディレクトリ", workspaceSelect),
+    historyLabel,
+    status,
+  );
+
+  const actions = document.createElement("div");
+  actions.className = "settings-actions";
+  const saveButton = document.createElement("button");
+  saveButton.type = "submit";
+  saveButton.textContent = "保存";
+  const restartButton = document.createElement("button");
+  restartButton.type = "button";
+  restartButton.className = "secondary";
+  restartButton.textContent = "再起動";
+  actions.append(saveButton, restartButton);
+  form.appendChild(actions);
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    saveButton.disabled = true;
+    status.textContent = "保存中...";
+    try {
+      const result = await apiPost("/api/local-settings", {
+        model: modelSelect.value,
+        workdir: workspaceSelect.value,
+        historySyncEnabled: historyInput.checked,
+      });
+      selectedModel = modelSelect.value;
+      selectedModelLabel = selectedModel.replace(/^gpt-/, "");
+      localStorage.setItem("codexPhoneModel", selectedModel);
+      localStorage.setItem("codexPhoneModelLabel", selectedModelLabel);
+      updateModelButton();
+      status.className = result.restartRequired ? "settings-status warning" : "settings-status";
+      status.textContent = result.restartRequired ? "保存しました。再起動で反映します。" : "保存しました。";
+      addStatus("起動設定を保存しました。");
+    } catch (error) {
+      status.className = "settings-status error";
+      status.textContent = error.message;
+    } finally {
+      saveButton.disabled = false;
+    }
+  });
+
+  restartButton.addEventListener("click", async () => {
+    restartButton.disabled = true;
+    status.textContent = "再起動中...";
+    addStatus("phone bridgeを再起動しています。");
+    try {
+      await apiPost("/api/restart", {});
+    } catch (error) {
+      status.className = "settings-status error";
+      status.textContent = error.message;
+      restartButton.disabled = false;
+      return;
+    }
+    setTimeout(() => location.reload(), 1800);
+  });
+
+  group.appendChild(form);
+  artifactList.appendChild(group);
+}
+
+function settingField(labelText, control) {
+  const label = document.createElement("label");
+  label.className = "settings-field";
+  const span = document.createElement("span");
+  span.textContent = labelText;
+  label.append(span, control);
+  return label;
+}
+
+function shortenPath(value) {
+  return String(value || "").replace(/^\/Users\/[^/]+/, "~");
 }
 
 function renderThemeSettings() {
@@ -1083,7 +1254,7 @@ function connect() {
 
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   const threadParam = selectedThread ? `&thread=${encodeURIComponent(selectedThread)}` : "";
-  ws = new WebSocket(`${proto}//${location.host}/bridge?token=${encodeURIComponent(token)}${threadParam}`);
+  ws = new WebSocket(`${proto}//${location.host}${appPath(`/bridge?token=${encodeURIComponent(token)}${threadParam}`)}`);
   connectButton.disabled = true;
   meta.textContent = "接続中";
 

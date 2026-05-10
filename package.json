@@ -11,6 +11,7 @@
     "probe:ws": "node scripts/probe-ws.js",
     "phone": "node scripts/start-phone.js",
     "screenshots:readme": "node scripts/capture-readme-screenshots.js",
+    "phone:loop": "sh -c 'while :; do npm run phone; code=$?; [ \"$code\" = 42 ] || exit \"$code\"; sleep 1; done'",
     "test": "node --test scripts/*.test.js",
     "check": "node --check scripts/start-phone.js && node --check scripts/probe-ws.js && node --check public/main.js",
     "docs:dev": "vitepress dev docs",

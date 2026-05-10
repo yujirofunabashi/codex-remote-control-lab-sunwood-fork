@@ -1332,10 +1332,105 @@ textarea::placeholder {
   border-bottom: 1px solid var(--line);
 }
 
+.local-settings {
+  margin: 0 0 14px;
+  padding: 0 0 14px;
+  border-bottom: 1px solid var(--line);
+}
+
 .theme-settings-title {
   margin: 0 0 10px;
   color: var(--muted);
   font-size: 13px;
+}
+
+.local-settings-current {
+  margin-bottom: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.settings-form {
+  display: grid;
+  gap: 10px;
+}
+
+.settings-field {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.settings-select {
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0 10px;
+  background: var(--field);
+  color: var(--text);
+}
+
+.settings-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.settings-check input {
+  width: 18px;
+  height: 18px;
+}
+
+.settings-status {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: var(--soft);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.settings-status.warning {
+  border-color: var(--warning-line);
+  background: var(--warning-bg);
+  color: var(--warning-text);
+}
+
+.settings-status.error {
+  border-color: color-mix(in srgb, var(--error) 35%, var(--line));
+  color: var(--error);
+}
+
+.settings-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.settings-actions button {
+  min-height: 38px;
+  border: 1px solid var(--button);
+  border-radius: 10px;
+  background: var(--button);
+  color: var(--button-text);
+}
+
+.settings-actions button.secondary {
+  border-color: var(--line);
+  background: var(--card);
+  color: var(--text);
+}
+
+.settings-actions button:disabled {
+  cursor: default;
+  opacity: 0.55;
 }
 
 .theme-options {

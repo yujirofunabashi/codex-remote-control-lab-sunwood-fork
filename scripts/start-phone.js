@@ -31,7 +31,9 @@ function loadEnvFile(filePath) {
 loadEnvFile(path.join(root, ".env"));
 
 const codexBin = path.join(root, "node_modules", ".bin", "codex");
+const envPath = path.join(root, ".env");
 const uiPort = Number(process.env.PHONE_UI_PORT || 45214);
+const uiHost = process.env.PHONE_UI_HOST || "0.0.0.0";
 const codexPort = Number(process.env.CODEX_APP_SERVER_PORT || 45213);
 const codexSocketPath = process.env.CODEX_APP_SERVER_SOCK || "";
 const codexUrl = process.env.CODEX_APP_SERVER_URL || (codexSocketPath ? "ws://codex-app-server/rpc" : `ws://127.0.0.1:${codexPort}`);
@@ -41,6 +43,7 @@ const model = process.env.CODEX_MODEL || "gpt-5.4";
 const historySyncEnabled = isHistorySyncEnabled(process.env);
 const tokenPath = path.join(root, ".phone-token");
 const uploadDir = path.join(root, ".uploads");
+const modelOptions = ["gpt-5.5", "gpt-5.4", "gpt-5.3-codex", "gpt-5.3-codex-spark", "gpt-5.2"];
 const bridges = new Map();
 const historyLimit = 80;
 const imageExtensions = new Map([
@@ -67,6 +70,169 @@ function getToken() {
   const token = crypto.randomBytes(18).toString("base64url");
   fs.writeFileSync(tokenPath, `${token}\n`, { mode: 0o600 });
   return token;
+}
+
+function parseEnvValues(filePath) {
+  if (!fs.existsSync(filePath)) return {};
+  const values = {};
+  const lines = fs.readFileSync(filePath, "utf8").split(/\r?\n/);
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const match = trimmed.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+    if (!match) continue;
+    let value = match[2].trim();
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+    values[match[1]] = value;
+  }
+  return values;
+}
+
+function encodeEnvValue(value) {
+  const text = String(value ?? "");
+  if (/[\n\r]/.test(text)) throw new Error("Environment values cannot contain newlines");
+  if (!text || /[\s#"'\\]/.test(text)) return JSON.stringify(text);
+  return text;
+}
+
+function writeEnvValues(updates) {
+  const existing = fs.existsSync(envPath) ? fs.readFileSync(envPath, "utf8").split(/\r?\n/) : [];
+  const pending = new Map(Object.entries(updates).filter(([, value]) => value !== undefined));
+  const lines = existing.map((line) => {
+    const match = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=/);
+    if (!match || !pending.has(match[1])) return line;
+    const value = pending.get(match[1]);
+    pending.delete(match[1]);
+    return `${match[1]}=${encodeEnvValue(value)}`;
+  });
+  for (const [key, value] of pending) lines.push(`${key}=${encodeEnvValue(value)}`);
+  const output = `${lines.filter((line, index) => line || index < lines.length - 1).join("\n")}\n`;
+  fs.writeFileSync(envPath, output, { mode: 0o600 });
+  try {
+    fs.chmodSync(envPath, 0o600);
+  } catch {
+    // Best effort: the bridge still works if the filesystem refuses chmod.
+  }
+}
+
+function isUnderHome(target) {
+  const home = path.resolve(os.homedir());
+  const resolved = path.resolve(target);
+  return resolved === home || resolved.startsWith(`${home}${path.sep}`);
+}
+
+function validateWorkdir(input) {
+  const target = path.resolve(String(input || ""));
+  if (!path.isAbsolute(target) || !isUnderHome(target)) throw new Error("Workdir must be an absolute path under the home folder");
+  if (!fs.existsSync(target) || !fs.statSync(target).isDirectory()) throw new Error("Workdir does not exist");
+  return target;
+}
+
+function validateModel(input) {
+  const nextModel = String(input || "").trim();
+  if (!/^[A-Za-z0-9._-]+$/.test(nextModel)) throw new Error("Invalid model name");
+  return nextModel;
+}
+
+function collectGitWorkspaces(baseDir, maxDepth = 4, seen = new Set()) {
+  const base = path.resolve(baseDir);
+  if (!fs.existsSync(base) || seen.has(base)) return [];
+  seen.add(base);
+
+  const results = [];
+  if (fs.existsSync(path.join(base, ".git"))) results.push(base);
+  if (maxDepth <= 0) return results;
+
+  let entries = [];
+  try {
+    entries = fs.readdirSync(base, { withFileTypes: true });
+  } catch {
+    return results;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name.startsWith(".") || entry.name === "node_modules") continue;
+    results.push(...collectGitWorkspaces(path.join(base, entry.name), maxDepth - 1, seen));
+  }
+  return results;
+}
+
+function workspaceOptions() {
+  const candidates = new Set([
+    root,
+    workdir,
+    path.join(os.homedir(), "WORK_LOCAL"),
+    ...collectGitWorkspaces(path.join(os.homedir(), "WORK_LOCAL", "00_WORKSPACE", "開発"), 5),
+    ...collectGitWorkspaces(path.join(os.homedir(), "WORK_LOCAL", "00_MINI_WORKSPACE"), 3),
+  ]);
+  return Array.from(candidates)
+    .filter((candidate) => candidate && fs.existsSync(candidate) && fs.statSync(candidate).isDirectory())
+    .sort((a, b) => a.localeCompare(b, "ja"))
+    .map((candidate) => ({
+      path: candidate,
+      label: candidate.replace(`${os.homedir()}/`, "~/"),
+    }));
+}
+
+function localSettingsPayload() {
+  const envValues = parseEnvValues(envPath);
+  const savedHistorySyncEnabled = isHistorySyncEnabled({ CODEX_HISTORY_SYNC: envValues.CODEX_HISTORY_SYNC });
+  const savedPort = Number(envValues.PHONE_UI_PORT || uiPort);
+  const savedHost = envValues.PHONE_UI_HOST || uiHost;
+  const savedModel = envValues.CODEX_MODEL || model;
+  const savedWorkdir = envValues.CODEX_WORKDIR || workdir;
+  return {
+    settings: {
+      model: savedModel,
+      workdir: savedWorkdir,
+      historySyncEnabled: savedHistorySyncEnabled,
+      uiPort: savedPort,
+      uiHost: savedHost,
+    },
+    active: {
+      model,
+      workdir,
+      historySyncEnabled,
+      uiPort,
+      uiHost,
+    },
+    options: {
+      models: modelOptions,
+      workspaces: workspaceOptions(),
+    },
+    restartRequired:
+      savedModel !== model ||
+      savedWorkdir !== workdir ||
+      savedHistorySyncEnabled !== historySyncEnabled ||
+      savedPort !== uiPort ||
+      savedHost !== uiHost,
+  };
+}
+
+function readJsonBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = "";
+    req.on("data", (chunk) => {
+      body += chunk;
+      if (body.length > 64 * 1024) {
+        reject(new Error("Request body is too large"));
+        req.destroy();
+      }
+    });
+    req.on("end", () => {
+      if (!body.trim()) {
+        resolve({});
+        return;
+      }
+      try {
+        resolve(JSON.parse(body));
+      } catch {
+        reject(new Error("Invalid JSON body"));
+      }
+    });
+    req.on("error", reject);
+  });
 }
 
 function lanAddresses() {
@@ -255,6 +421,10 @@ function isImagePath(filePath) {
   return imageExtensions.has(path.extname(filePath).toLowerCase());
 }
 
+function isMissingThreadError(error) {
+  return /no rollout found for thread id/i.test(error?.message || "");
+}
+
 function discoverArtifacts() {
   const files = ["README.md", "AGENTS.md"];
   const assetsDir = path.join(root, "docs", "assets");
@@ -320,9 +490,23 @@ function sandboxPolicyForMode(mode) {
   };
 }
 
+function serveIndex(req, res, { includeManifest = true } = {}) {
+  const indexPath = path.join(root, "public", "index.html");
+  let html = fs.readFileSync(indexPath, "utf8");
+  if (!includeManifest) {
+    html = html.replace(/\n\s*<link rel="manifest" href="site\.webmanifest" \/>/, "");
+  }
+  res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+  res.end(html);
+}
+
 function serveStatic(req, res) {
   const requestPath = new URL(req.url, `http://${req.headers.host}`).pathname;
-  const file = requestPath === "/" ? "index.html" : requestPath.slice(1);
+  if (requestPath === "/") {
+    serveIndex(req, res);
+    return;
+  }
+  const file = requestPath.slice(1);
   const target = path.join(root, "public", file);
   if (!target.startsWith(path.join(root, "public")) || !fs.existsSync(target)) {
     res.writeHead(404);
@@ -332,6 +516,22 @@ function serveStatic(req, res) {
   const type = staticMimeTypes.get(path.extname(target).toLowerCase()) || "application/octet-stream";
   res.writeHead(200, { "content-type": `${type}; charset=utf-8`, "cache-control": "no-store" });
   fs.createReadStream(target).pipe(res);
+}
+
+function serveManifest(url, phoneToken, res) {
+  const manifestPath = path.join(root, "public", "site.webmanifest");
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  const basePath = String(url.searchParams.get("base") || "");
+  const safeBasePath = /^\/(?:abs)?proxy\/\d+$/.test(basePath) ? basePath : "";
+  if (safeBasePath) {
+    manifest.id = `${safeBasePath}/codex-remote`;
+    manifest.scope = `${safeBasePath}/`;
+  }
+  if (url.searchParams.get("token") === phoneToken) {
+    manifest.start_url = `${safeBasePath}/?token=${encodeURIComponent(phoneToken)}`;
+  }
+  res.writeHead(200, { "content-type": "application/manifest+json; charset=utf-8", "cache-control": "no-store" });
+  res.end(JSON.stringify(manifest, null, 2));
 }
 
 function stripUiDirectives(text) {
@@ -474,30 +674,46 @@ class SharedBridge {
     bridges.set(this.bridgeKey, this);
   }
 
+  requestNewThread(statusText = "新しいthreadを開始中...") {
+    const id = this.request("thread/start", {
+      model,
+      cwd: workdir,
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
+    });
+    this.pending.set(id, "thread/start");
+    this.emit("status", { text: statusText });
+  }
+
+  fallbackToNewThread(error) {
+    this.emit("status", { text: `既存threadが見つからないため新しいthreadを開始します: ${error.message}` });
+    this.requestedThreadId = null;
+    const previousKey = this.bridgeKey;
+    if (bridges.get(previousKey) === this) bridges.delete(previousKey);
+    this.bridgeKey = `new:${crypto.randomUUID()}`;
+    bridges.set(this.bridgeKey, this);
+    this.requestNewThread("新しいthreadを開始中...");
+  }
+
   bindUpstream() {
     this.upstream.on("open", () => {
       this.request("initialize", {
         clientInfo: { name: "codex-phone-bridge", title: "Codex Phone Bridge", version: "0.1.0" },
       });
       this.upstream.send(JSON.stringify({ method: "initialized", params: {} }));
-      const method = this.requestedThreadId ? "thread/resume" : "thread/start";
-      const params = this.requestedThreadId
-        ? {
-            threadId: this.requestedThreadId,
-            model,
-            cwd: workdir,
-            approvalPolicy: "on-request",
-            sandbox: "workspace-write",
-          }
-        : {
-            model,
-            cwd: workdir,
-            approvalPolicy: "on-request",
-            sandbox: "workspace-write",
-          };
-      const id = this.request(method, params);
-      this.pending.set(id, method);
-      this.emit("status", { text: this.requestedThreadId ? "既存threadを再開中..." : "新しいthreadを開始中..." });
+      if (!this.requestedThreadId) {
+        this.requestNewThread();
+        return;
+      }
+      const id = this.request("thread/resume", {
+        threadId: this.requestedThreadId,
+        model,
+        cwd: workdir,
+        approvalPolicy: "on-request",
+        sandbox: "workspace-write",
+      });
+      this.pending.set(id, "thread/resume");
+      this.emit("status", { text: "既存threadを再開中..." });
     });
 
     this.upstream.on("message", (data) => {
@@ -507,6 +723,11 @@ class SharedBridge {
       if (pendingMethod === "thread/start" || pendingMethod === "thread/resume") {
         this.pending.delete(msg.id);
         if (msg.error) {
+          const error = new Error(msg.error.message || JSON.stringify(msg.error));
+          if (pendingMethod === "thread/resume" && isMissingThreadError(error)) {
+            this.fallbackToNewThread(error);
+            return;
+          }
           this.emit("error", { text: msg.error.message || JSON.stringify(msg.error) });
           return;
         }
@@ -701,6 +922,14 @@ async function main() {
       sendJson(res, 200, { model, workdir, codexUrl, codexSocketPath: codexSocketPath || null, managedCodexServer: shouldStartCodexServer, tokenRequired: true });
       return;
     }
+    if (url.pathname === "/site.webmanifest") {
+      serveManifest(url, phoneToken, res);
+      return;
+    }
+    if (url.pathname === "/bookmark") {
+      serveIndex(req, res, { includeManifest: false });
+      return;
+    }
     if (url.pathname === "/api/threads") {
       if (!requireToken(url, phoneToken, res)) return;
       try {
@@ -754,6 +983,44 @@ async function main() {
       } catch (error) {
         sendJson(res, 500, { error: error.message });
       }
+      return;
+    }
+    if (url.pathname === "/api/local-settings") {
+      if (!requireToken(url, phoneToken, res)) return;
+      if (req.method === "GET") {
+        sendJson(res, 200, localSettingsPayload());
+        return;
+      }
+      if (req.method === "POST") {
+        try {
+          const body = await readJsonBody(req);
+          const updates = {};
+          if (Object.prototype.hasOwnProperty.call(body, "model")) updates.CODEX_MODEL = validateModel(body.model);
+          if (Object.prototype.hasOwnProperty.call(body, "workdir")) updates.CODEX_WORKDIR = validateWorkdir(body.workdir);
+          if (Object.prototype.hasOwnProperty.call(body, "historySyncEnabled")) {
+            updates.CODEX_HISTORY_SYNC = body.historySyncEnabled ? "1" : "0";
+          }
+          writeEnvValues(updates);
+          sendJson(res, 200, { ok: true, ...localSettingsPayload() });
+        } catch (error) {
+          sendJson(res, 400, { error: error.message });
+        }
+        return;
+      }
+      sendJson(res, 405, { error: "method not allowed" });
+      return;
+    }
+    if (url.pathname === "/api/restart") {
+      if (!requireToken(url, phoneToken, res)) return;
+      if (req.method !== "POST") {
+        sendJson(res, 405, { error: "method not allowed" });
+        return;
+      }
+      sendJson(res, 200, { ok: true, message: "Restarting phone bridge" });
+      setTimeout(() => {
+        if (codex) codex.kill("SIGINT");
+        process.exit(42);
+      }, 200);
       return;
     }
     if (url.pathname === "/api/status") {
@@ -822,6 +1089,10 @@ async function main() {
         }
         sendJson(res, 200, { threadId: thread.id || threadId, history: historyFromThread(thread) });
       } catch (error) {
+        if (isMissingThreadError(error)) {
+          sendJson(res, 200, { threadId, history: [] });
+          return;
+        }
         sendJson(res, 500, { error: error.message });
       }
       return;
@@ -900,14 +1171,16 @@ async function main() {
     wss.handleUpgrade(req, socket, head, (ws) => bindBrowser(ws, phoneToken, threadId));
   });
 
-  server.listen(uiPort, "0.0.0.0", () => {
-    const urls = bridgeUrls(lanAddresses(), uiPort, phoneToken);
+  server.listen(uiPort, uiHost, () => {
+    const advertisedAddresses = uiHost === "0.0.0.0" ? lanAddresses() : [uiHost];
+    const urls = bridgeUrls(advertisedAddresses, uiPort, phoneToken);
     console.log("");
     console.log("Codex shared browser bridge is ready.");
     for (const url of urls) console.log(`  ${url}`);
     console.log("");
     console.log(`Workdir: ${workdir}`);
     console.log(`Model:   ${model}`);
+    console.log(`Bridge:  ${uiHost}:${uiPort}`);
     console.log(`Codex:   ${shouldStartCodexServer ? codexUrl : codexSocketPath || codexUrl}`);
     console.log("Open the same URL from PC and phone to share one bridge thread.");
     console.log("Press Ctrl+C to stop.");
