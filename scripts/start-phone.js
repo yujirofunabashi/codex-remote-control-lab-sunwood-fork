@@ -338,9 +338,8 @@ function localSettingsPayload() {
       savedProvider !== agentProvider ||
       savedModel !== model ||
       savedWorkdir !== workdir ||
-      savedHistorySyncEnabled !== historySyncEnabled ||
-      savedPort !== uiPort ||
-      savedHost !== uiHost,
+      savedHistorySyncEnabled !== historySyncEnabled,
+    networkRestartRequired: savedPort !== uiPort || savedHost !== uiHost,
   };
 }
 
@@ -1397,6 +1396,20 @@ function localThreadList() {
   });
 }
 
+async function codexThreadListPayload(requestedProvider) {
+  const result = await appServerRequest("thread/list", {
+    limit: 30,
+    sortKey: "updated_at",
+    sortDirection: "desc",
+    archived: false,
+    useStateDbOnly: false,
+  });
+  const data = Array.isArray(result.data)
+    ? result.data.map((thread) => ({ ...thread, provider: requestedProvider }))
+    : result.data;
+  return { ...result, provider: requestedProvider, activeProvider: agentProvider, data };
+}
+
 function findBridgeByThreadId(threadId) {
   return Array.from(bridges.values()).find((bridge) => bridge.threadId === threadId || bridge.bridgeKey === threadId);
 }
@@ -1447,27 +1460,21 @@ async function main() {
     if (url.pathname === "/api/threads") {
       if (!requireToken(url, phoneToken, res)) return;
       const requestedProvider = normalizeProvider(url.searchParams.get("provider") || agentProvider);
-      if (requestedProvider !== agentProvider) {
-        sendJson(res, 200, { provider: requestedProvider, activeProvider: agentProvider, data: [] });
-        return;
-      }
       if (requestedProvider === "claude") {
-        sendJson(res, 200, { provider: requestedProvider, activeProvider: agentProvider, data: localThreadList() });
+        sendJson(res, 200, {
+          provider: requestedProvider,
+          activeProvider: agentProvider,
+          data: requestedProvider === agentProvider ? localThreadList() : [],
+        });
         return;
       }
       try {
-        const result = await appServerRequest("thread/list", {
-          limit: 30,
-          sortKey: "updated_at",
-          sortDirection: "desc",
-          archived: false,
-          useStateDbOnly: false,
-        });
-        const data = Array.isArray(result.data)
-          ? result.data.map((thread) => ({ ...thread, provider: requestedProvider }))
-          : result.data;
-        sendJson(res, 200, { ...result, provider: requestedProvider, activeProvider: agentProvider, data });
+        sendJson(res, 200, await codexThreadListPayload(requestedProvider));
       } catch (error) {
+        if (requestedProvider !== agentProvider) {
+          sendJson(res, 200, { provider: requestedProvider, activeProvider: agentProvider, data: [], unavailable: error.message });
+          return;
+        }
         sendJson(res, 500, { error: error.message });
       }
       return;
@@ -1505,7 +1512,7 @@ async function main() {
       if (isClaudeProvider) {
         sendJson(res, 200, {
           config: { config: { model, cwd: workdir, provider: agentProvider } },
-          auth: null,
+          auth: { authMethod: "claude-cli" },
           errors: [],
         });
         return;
@@ -1661,13 +1668,14 @@ async function main() {
         sendJson(res, 400, { error: "thread is required" });
         return;
       }
-      if (requestedProvider !== agentProvider) {
-        sendJson(res, 200, { provider: requestedProvider, activeProvider: agentProvider, threadId, history: [] });
-        return;
-      }
       if (requestedProvider === "claude") {
         const bridge = findBridgeByThreadId(threadId);
-        sendJson(res, 200, { provider: requestedProvider, activeProvider: agentProvider, threadId, history: bridge?.history || [] });
+        sendJson(res, 200, {
+          provider: requestedProvider,
+          activeProvider: agentProvider,
+          threadId,
+          history: requestedProvider === agentProvider ? bridge?.history || [] : [],
+        });
         return;
       }
       try {
@@ -1679,6 +1687,7 @@ async function main() {
           });
           thread = result.thread || result;
         } catch (readError) {
+          if (requestedProvider !== agentProvider) throw readError;
           const result = await appServerRequest("thread/resume", {
             threadId,
             model,
@@ -1690,6 +1699,10 @@ async function main() {
         }
         sendJson(res, 200, { provider: requestedProvider, activeProvider: agentProvider, threadId: thread.id || threadId, history: historyFromThread(thread) });
       } catch (error) {
+        if (requestedProvider !== agentProvider) {
+          sendJson(res, 200, { provider: requestedProvider, activeProvider: agentProvider, threadId, history: [], unavailable: error.message });
+          return;
+        }
         if (isMissingThreadError(error)) {
           sendJson(res, 200, { provider: requestedProvider, activeProvider: agentProvider, threadId, history: [] });
           return;

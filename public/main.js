@@ -897,6 +897,8 @@ function switchThreadProvider(provider, { reload = true } = {}) {
     setReady(false);
     meta.textContent = `${providerLabel(nextProvider)} は保存後の再起動で接続`;
     setRunState("disconnected", "Provider再起動待ち");
+  } else {
+    connect();
   }
 
   if (reload) loadThreads({ provider: nextProvider, background: true }).catch(() => {});
@@ -1140,7 +1142,7 @@ function renderLocalSettings(payload) {
   modelLabel.className = "local-settings-current";
   modelLabel.innerHTML = `
     <span>現在</span>
-    <strong>${escapeHtml(active.model || "unknown")}</strong>
+    <strong>${escapeHtml(`${active.provider || "codex"} / ${active.model || "unknown"}`)}</strong>
     <code>${escapeHtml(shortenPath(active.workdir || ""))}</code>
   `;
   group.appendChild(modelLabel);
