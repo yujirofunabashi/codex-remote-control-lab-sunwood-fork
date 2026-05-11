@@ -861,13 +861,13 @@ function serveManifest(url, phoneToken, res) {
   manifest.description = `${phoneAppName} local phone bridge (${agentProvider}:${uiPort}).`;
   manifest.icons = [
     {
-      src: `${safeBasePath}/${bookmarkIconFileName()}?v=${encodeURIComponent(phoneAppId)}`,
+      src: `${safeBasePath}/${staticAssetHref(bookmarkIconFileName())}`,
       sizes: "180x180",
       type: "image/png",
       purpose: "any",
     },
     {
-      src: `${safeBasePath}/${bookmarkIcon512FileName()}?v=${encodeURIComponent(phoneAppId)}`,
+      src: `${safeBasePath}/${staticAssetHref(bookmarkIcon512FileName())}`,
       sizes: "512x512",
       type: "image/png",
       purpose: "any maskable",
