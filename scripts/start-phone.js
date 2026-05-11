@@ -52,7 +52,12 @@ function loadEnvFile(filePath) {
   }
 }
 
+const launchEnvKeys = new Set(Object.keys(process.env));
 loadEnvFile(path.join(root, ".env"));
+
+function hasLaunchEnv(key) {
+  return launchEnvKeys.has(key);
+}
 
 function uploadLimitBytes() {
   const mb = Number(process.env.PHONE_MAX_UPLOAD_MB || 256);
@@ -114,6 +119,10 @@ function modelEnvKeyForProvider(provider) {
 
 function workdirEnvKeyForProvider(provider) {
   return provider === "claude" ? "CLAUDE_WORKDIR" : "CODEX_WORKDIR";
+}
+
+function historySyncEnvKeyForProvider(provider) {
+  return provider === "claude" ? "CLAUDE_HISTORY_SYNC" : "CODEX_HISTORY_SYNC";
 }
 
 function defaultModelForProvider(provider) {
@@ -321,19 +330,31 @@ function workspaceOptions() {
 function localSettingsPayload() {
   const envValues = parseEnvValues(envPath);
   const savedProvider = normalizeProvider(envValues.PHONE_AGENT_PROVIDER || agentProvider);
-  const savedHistorySyncEnabled = savedProvider === "codex" ? isHistorySyncEnabled({ CODEX_HISTORY_SYNC: envValues.CODEX_HISTORY_SYNC }) : false;
+  const providerPinned = ["PHONE_AGENT_PROVIDER", "AGENT_PROVIDER", "PHONE_AGENT_PROVIDER_DEFAULT"].some(hasLaunchEnv);
+  const settingsProvider = providerPinned ? agentProvider : savedProvider;
+  const modelPinned = ["PHONE_MODEL", modelEnvKeyForProvider(settingsProvider), ...(settingsProvider === "codex" ? ["CODEX_MODEL"] : [])].some(hasLaunchEnv);
+  const workdirPinned = ["PHONE_WORKDIR", workdirEnvKeyForProvider(settingsProvider), "CODEX_WORKDIR"].some(hasLaunchEnv);
+  const historyPinned = historySyncEnvKeyForProvider(settingsProvider) ? hasLaunchEnv(historySyncEnvKeyForProvider(settingsProvider)) : false;
+  const portPinned = hasLaunchEnv("PHONE_UI_PORT");
+  const hostPinned = hasLaunchEnv("PHONE_UI_HOST");
+  const savedHistorySyncEnabled = settingsProvider === "codex" ? isHistorySyncEnabled({ CODEX_HISTORY_SYNC: envValues.CODEX_HISTORY_SYNC }) : false;
   const savedPort = Number(envValues.PHONE_UI_PORT || uiPort);
   const savedHost = envValues.PHONE_UI_HOST || uiHost;
-  const savedModel = modelFromEnv(envValues, savedProvider, savedProvider === agentProvider ? model : defaultModelForProvider(savedProvider));
-  const savedWorkdir = workdirFromEnv(envValues, savedProvider, workdir);
+  const savedModel = modelFromEnv(envValues, settingsProvider, settingsProvider === agentProvider ? model : defaultModelForProvider(settingsProvider));
+  const savedWorkdir = workdirFromEnv(envValues, settingsProvider, workdir);
+  const settingsModel = modelPinned && settingsProvider === agentProvider ? model : savedModel;
+  const settingsWorkdir = workdirPinned && settingsProvider === agentProvider ? workdir : savedWorkdir;
+  const settingsHistorySyncEnabled = historyPinned && settingsProvider === agentProvider ? historySyncEnabled : savedHistorySyncEnabled;
+  const settingsPort = portPinned ? uiPort : savedPort;
+  const settingsHost = hostPinned ? uiHost : savedHost;
   return {
     settings: {
-      provider: savedProvider,
-      model: savedModel,
-      workdir: savedWorkdir,
-      historySyncEnabled: savedHistorySyncEnabled,
-      uiPort: savedPort,
-      uiHost: savedHost,
+      provider: settingsProvider,
+      model: settingsModel,
+      workdir: settingsWorkdir,
+      historySyncEnabled: settingsHistorySyncEnabled,
+      uiPort: settingsPort,
+      uiHost: settingsHost,
     },
     active: {
       provider: agentProvider,
@@ -357,11 +378,11 @@ function localSettingsPayload() {
       workspaces: workspaceOptions(),
     },
     restartRequired:
-      savedProvider !== agentProvider ||
-      savedModel !== model ||
-      savedWorkdir !== workdir ||
-      savedHistorySyncEnabled !== historySyncEnabled,
-    networkRestartRequired: savedPort !== uiPort || savedHost !== uiHost,
+      (!providerPinned && savedProvider !== agentProvider) ||
+      (!modelPinned && settingsProvider === agentProvider && savedModel !== model) ||
+      (!workdirPinned && settingsProvider === agentProvider && savedWorkdir !== workdir) ||
+      (!historyPinned && settingsProvider === agentProvider && savedHistorySyncEnabled !== historySyncEnabled),
+    networkRestartRequired: (!portPinned && savedPort !== uiPort) || (!hostPinned && savedHost !== uiHost),
   };
 }
 
