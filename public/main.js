@@ -85,6 +85,10 @@ let lastThreadListError = "";
 let lastThreadRefreshError = "";
 let selectedThreadRefreshActive = false;
 let activeProvider = "codex";
+let threadProvider = normalizeProviderName(params.get("provider") || "");
+let threadProviderExplicit = Boolean(threadProvider);
+const selectedThreadByProvider = new Map();
+if (selectedThread && threadProvider) selectedThreadByProvider.set(threadProvider, selectedThread);
 let selectedModel = localStorage.getItem("codexPhoneModel") || "";
 let selectedModelLabel = localStorage.getItem("codexPhoneModelLabel") || "5.5";
 let selectedReasoning = localStorage.getItem("codexPhoneReasoning") || "中";
@@ -152,8 +156,26 @@ function providerSupportsReasoning() {
   return activeProvider === "codex";
 }
 
+function normalizeProviderName(provider) {
+  const value = String(provider || "").trim().toLowerCase();
+  if (value === "codex" || value === "claude") return value;
+  return "";
+}
+
+function currentThreadProvider() {
+  return normalizeProviderName(threadProvider || activeProvider) || "codex";
+}
+
+function providerLabel(provider) {
+  return provider === "claude" ? "Claude" : "Codex";
+}
+
 function setActiveProvider(provider) {
-  activeProvider = provider || "codex";
+  const previousProvider = activeProvider;
+  activeProvider = normalizeProviderName(provider) || "codex";
+  if (!threadProviderExplicit && (!threadProvider || threadProvider === previousProvider)) {
+    threadProvider = activeProvider;
+  }
   document.documentElement.dataset.provider = activeProvider;
   updateModelButton();
 }
@@ -740,13 +762,24 @@ function renderHistoryIfChanged(history = []) {
   return true;
 }
 
+function normalizeThreadRecord(thread, provider) {
+  const nextProvider = normalizeProviderName(thread.provider) || normalizeProviderName(provider) || currentThreadProvider();
+  return {
+    ...thread,
+    provider: nextProvider,
+    updatedAt: thread.updatedAt || thread.updated_at || thread.updated_at_ms,
+    createdAt: thread.createdAt || thread.created_at || thread.created_at_ms,
+  };
+}
+
 function renderThreadList() {
   threadList.replaceChildren();
   const query = threadSearch.value.trim().toLowerCase();
+  const provider = currentThreadProvider();
   const newProject = document.createElement("button");
   newProject.type = "button";
   newProject.className = selectedThread ? "project-heading new-project" : "project-heading new-project active";
-  newProject.innerHTML = '<span class="project-folder"></span><span>New project</span>';
+  newProject.innerHTML = `<span class="project-folder"></span><span>New ${providerLabel(provider)} thread</span>`;
   newProject.addEventListener("click", () => selectThread(""));
   threadList.appendChild(newProject);
 
@@ -803,6 +836,13 @@ function renderThreadList() {
     }
     threadList.appendChild(group);
   }
+
+  if (!groups.size) {
+    const empty = document.createElement("div");
+    empty.className = "project-empty";
+    empty.textContent = `${providerLabel(provider)}のチャットはありません`;
+    threadList.appendChild(empty);
+  }
 }
 
 function authQuery() {
@@ -829,11 +869,50 @@ async function apiPost(path, body = {}) {
   return result;
 }
 
-async function loadThreads({ background = false } = {}) {
+function switchThreadProvider(provider, { reload = true } = {}) {
+  const nextProvider = normalizeProviderName(provider) || activeProvider;
+  const previousProvider = currentThreadProvider();
+  if (nextProvider === previousProvider) {
+    threadProvider = nextProvider;
+    threadProviderExplicit = true;
+    updateUrlThread();
+    if (reload) loadThreads({ provider: nextProvider, background: true }).catch(() => {});
+    return;
+  }
+  selectedThreadByProvider.set(previousProvider, selectedThread);
+  threadProvider = nextProvider;
+  threadProviderExplicit = true;
+  selectedThread = selectedThreadByProvider.get(nextProvider) || "";
+  threadCache = [];
+  lastHistorySignature = "";
+  renderHistory([]);
+  updateUrlThread();
+  renderThreadList();
+
+  if (nextProvider !== activeProvider) {
+    if (ws) {
+      ws.close();
+      ws = null;
+    }
+    setReady(false);
+    meta.textContent = `${providerLabel(nextProvider)} は保存後の再起動で接続`;
+    setRunState("disconnected", "Provider再起動待ち");
+  }
+
+  if (reload) loadThreads({ provider: nextProvider, background: true }).catch(() => {});
+}
+
+async function loadThreads({ background = false, provider = "" } = {}) {
   if (!token) return;
+  const requestedProvider = normalizeProviderName(provider || threadProvider);
+  const path = requestedProvider ? `/api/threads?provider=${encodeURIComponent(requestedProvider)}` : "/api/threads";
   try {
-    const result = await apiGet("/api/threads");
-    threadCache = result.data || [];
+    const result = await apiGet(path);
+    if (result.activeProvider) setActiveProvider(result.activeProvider);
+    const resultProvider = normalizeProviderName(result.provider || requestedProvider || activeProvider) || currentThreadProvider();
+    if (requestedProvider && requestedProvider !== currentThreadProvider()) return;
+    if (!threadProviderExplicit) threadProvider = resultProvider;
+    threadCache = (result.data || []).map((thread) => normalizeThreadRecord(thread, resultProvider));
     renderThreadList();
     lastThreadListError = "";
   } catch (error) {
@@ -848,9 +927,11 @@ async function loadThreads({ background = false } = {}) {
 
 async function refreshSelectedThread() {
   if (!selectedThread || liveTurnActive || selectedThreadRefreshActive) return;
+  const provider = currentThreadProvider();
+  if (provider !== activeProvider) return;
   selectedThreadRefreshActive = true;
   try {
-    const result = await apiGet(`/api/thread?thread=${encodeURIComponent(selectedThread)}`);
+    const result = await apiGet(`/api/thread?thread=${encodeURIComponent(selectedThread)}&provider=${encodeURIComponent(provider)}`);
     if (result.threadId !== selectedThread) return;
     renderHistoryIfChanged(result.history || []);
     lastThreadRefreshError = "";
@@ -879,10 +960,14 @@ function updateUrlThread() {
   const next = new URL(location.href);
   if (selectedThread) next.searchParams.set("thread", selectedThread);
   else next.searchParams.delete("thread");
+  if (threadProviderExplicit) next.searchParams.set("provider", currentThreadProvider());
+  else next.searchParams.delete("provider");
   history.replaceState(null, "", next);
 }
 
 function syncReadyThread(threadId) {
+  if (!threadProviderExplicit) threadProvider = activeProvider;
+  if (threadId) selectedThreadByProvider.set(currentThreadProvider(), threadId);
   if (!threadId || selectedThread === threadId) return;
   selectedThread = threadId;
   updateUrlThread();
@@ -893,6 +978,7 @@ function syncReadyThread(threadId) {
 
 function selectThread(threadId) {
   selectedThread = threadId;
+  selectedThreadByProvider.set(currentThreadProvider(), selectedThread);
   updateUrlThread();
   renderThreadList();
   document.body.classList.remove("show-sidebar");
@@ -1158,7 +1244,9 @@ function renderLocalSettings(payload) {
   form.appendChild(actions);
 
   providerSelect.addEventListener("change", () => {
+    const nextProvider = providerSelect.value || "codex";
     updateProviderDependentControls();
+    switchThreadProvider(nextProvider);
     setSettingsStatus(status, "Providerを変更しました。保存後、再起動で反映します。", "warning");
   });
   updateProviderDependentControls();
@@ -1200,6 +1288,7 @@ function renderLocalSettings(payload) {
       setSelectedModel(modelSelect.value);
       workspaceItems = result.options?.workspaces || workspaceItems;
       renderWorkspaceOptions(workspaceSelect, workspaceItems, result.settings?.workdir || workspaceSelect.value);
+      switchThreadProvider(providerSelect.value);
       setSettingsStatus(status, result.restartRequired ? "保存しました。再起動で反映します。" : "保存しました。", result.restartRequired ? "warning" : "");
       addStatus("起動設定を保存しました。");
     } catch (error) {
@@ -1485,6 +1574,17 @@ function connect() {
     addEntry("error", "URLに token がありません。Mac側に表示されたURLをそのまま開いてください。");
     return;
   }
+  const provider = currentThreadProvider();
+  if (provider !== activeProvider) {
+    if (ws) {
+      ws.close();
+      ws = null;
+    }
+    setReady(false);
+    meta.textContent = `${providerLabel(provider)} は保存後の再起動で接続`;
+    setRunState("disconnected", "Provider再起動待ち");
+    return;
+  }
   if (ws) ws.close();
   liveTurnActive = false;
   liveOutputGroup = "";
@@ -1510,6 +1610,15 @@ function connect() {
     if (msg.type === "ready") {
       setReady(true);
       setActiveProvider(msg.provider || "codex");
+      if (currentThreadProvider() !== activeProvider) {
+        setReady(false);
+        meta.textContent = `${providerLabel(currentThreadProvider())} は保存後の再起動で接続`;
+        setRunState("disconnected", "Provider再起動待ち");
+        renderHistory([]);
+        loadThreads({ provider: currentThreadProvider(), background: true }).catch(() => {});
+        if (ws) ws.close();
+        return;
+      }
       setSelectedModel(msg.model, { persist: false });
       syncReadyThread(msg.threadId);
       renderHistoryIfChanged(msg.history || []);
@@ -1575,8 +1684,13 @@ function connect() {
   ws.addEventListener("close", () => {
     setReady(false);
     connectButton.disabled = false;
-    meta.textContent = "切断";
-    setRunState("disconnected");
+    if (currentThreadProvider() !== activeProvider) {
+      meta.textContent = `${providerLabel(currentThreadProvider())} は保存後の再起動で接続`;
+      setRunState("disconnected", "Provider再起動待ち");
+    } else {
+      meta.textContent = "切断";
+      setRunState("disconnected");
+    }
   });
 }
 
