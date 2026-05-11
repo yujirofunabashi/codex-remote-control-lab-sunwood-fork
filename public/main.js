@@ -100,7 +100,7 @@ let pendingFiles = [];
 const runStateText = {
   connecting: "接続中",
   ready: "待機中",
-  running: "Codex 処理中",
+  running: "Agent 処理中",
   streaming: "回答生成中",
   approval: "承認待ち",
   syncing: "履歴同期中",
@@ -131,6 +131,21 @@ const accessModes = [
   { label: "確認モード", approvalPolicy: "on-request", sandboxMode: "workspace-write" },
   { label: "読み取り専用", approvalPolicy: "on-request", sandboxMode: "read-only" },
 ];
+
+function labelForModel(model) {
+  const label = String(model || "").replace(/^GPT-/, "").replace(/^gpt-/, "");
+  return label || "model";
+}
+
+function setSelectedModel(model, { persist = true } = {}) {
+  selectedModel = model || "";
+  selectedModelLabel = labelForModel(selectedModel);
+  if (persist) {
+    localStorage.setItem("codexPhoneModel", selectedModel);
+    localStorage.setItem("codexPhoneModelLabel", selectedModelLabel);
+  }
+  updateModelButton();
+}
 
 function updateModelButton() {
   modelButton.textContent = `${selectedModelLabel} ${selectedReasoning}`;
@@ -170,12 +185,7 @@ function selectReasoning(value) {
 }
 
 function selectModel(model) {
-  selectedModel = model;
-  selectedModelLabel = model.replace(/^gpt-/, "").toUpperCase().replace(/^GPT-/, "");
-  if (selectedModelLabel.startsWith("5.")) selectedModelLabel = selectedModelLabel;
-  localStorage.setItem("codexPhoneModel", selectedModel);
-  localStorage.setItem("codexPhoneModelLabel", selectedModelLabel);
-  updateModelButton();
+  setSelectedModel(model);
   closeModelMenu();
   addStatus(`モデルを ${model.toUpperCase()} に設定しました。次の送信から反映します。`);
 }
@@ -1137,11 +1147,7 @@ function renderLocalSettings(payload) {
         workdir: workspaceSelect.value,
         historySyncEnabled: historyInput.checked,
       });
-      selectedModel = modelSelect.value;
-      selectedModelLabel = selectedModel.replace(/^gpt-/, "");
-      localStorage.setItem("codexPhoneModel", selectedModel);
-      localStorage.setItem("codexPhoneModelLabel", selectedModelLabel);
-      updateModelButton();
+      setSelectedModel(modelSelect.value);
       workspaceItems = result.options?.workspaces || workspaceItems;
       renderWorkspaceOptions(workspaceSelect, workspaceItems, result.settings?.workdir || workspaceSelect.value);
       setSettingsStatus(status, result.restartRequired ? "保存しました。再起動で反映します。" : "保存しました。", result.restartRequired ? "warning" : "");
@@ -1261,11 +1267,7 @@ async function showModels() {
     const models = result.data || [];
     for (const candidate of models.slice(0, 24)) {
       addPanelRow(candidate.displayName || candidate.model || candidate.id, candidate.defaultReasoningEffort || "", () => {
-        selectedModel = candidate.model || candidate.id;
-        selectedModelLabel = (candidate.displayName || selectedModel).replace(/^GPT-/, "").replace(/^gpt-/, "");
-        localStorage.setItem("codexPhoneModel", selectedModel);
-        localStorage.setItem("codexPhoneModelLabel", selectedModelLabel);
-        updateModelButton();
+        setSelectedModel(candidate.model || candidate.id);
         addStatus(`モデルを ${selectedModel} に設定しました。次の送信から反映します。`);
       });
     }
@@ -1457,6 +1459,7 @@ function connect() {
     const msg = JSON.parse(event.data);
     if (msg.type === "ready") {
       setReady(true);
+      setSelectedModel(msg.model, { persist: false });
       syncReadyThread(msg.threadId);
       renderHistoryIfChanged(msg.history || []);
       meta.textContent = `${msg.model}  •  ${msg.clients}端末  •  ${msg.workdir}`;
