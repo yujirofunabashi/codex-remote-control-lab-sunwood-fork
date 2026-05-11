@@ -42,6 +42,7 @@ const workdir = process.env.CODEX_WORKDIR || root;
 const model = process.env.CODEX_MODEL || "gpt-5.4";
 const historySyncEnabled = isHistorySyncEnabled(process.env);
 const tokenPath = path.join(root, ".phone-token");
+const workspacePrefsPath = path.join(root, ".phone-workspaces.json");
 const uploadDir = path.join(root, ".uploads");
 const modelOptions = ["gpt-5.5", "gpt-5.4", "gpt-5.3-codex", "gpt-5.3-codex-spark", "gpt-5.2"];
 const bridges = new Map();
@@ -124,7 +125,9 @@ function isUnderHome(target) {
 }
 
 function validateWorkdir(input) {
-  const target = path.resolve(String(input || ""));
+  const raw = String(input || "").trim();
+  if (!raw) throw new Error("Workdir is required");
+  const target = path.resolve(raw);
   if (!path.isAbsolute(target) || !isUnderHome(target)) throw new Error("Workdir must be an absolute path under the home folder");
   if (!fs.existsSync(target) || !fs.statSync(target).isDirectory()) throw new Error("Workdir does not exist");
   return target;
@@ -134,6 +137,46 @@ function validateModel(input) {
   const nextModel = String(input || "").trim();
   if (!/^[A-Za-z0-9._-]+$/.test(nextModel)) throw new Error("Invalid model name");
   return nextModel;
+}
+
+function readWorkspacePrefs() {
+  if (!fs.existsSync(workspacePrefsPath)) return { recent: [] };
+  try {
+    const prefs = JSON.parse(fs.readFileSync(workspacePrefsPath, "utf8"));
+    return { recent: Array.isArray(prefs.recent) ? prefs.recent : [] };
+  } catch {
+    return { recent: [] };
+  }
+}
+
+function writeWorkspacePrefs(prefs) {
+  fs.writeFileSync(workspacePrefsPath, `${JSON.stringify(prefs, null, 2)}\n`, { mode: 0o600 });
+  try {
+    fs.chmodSync(workspacePrefsPath, 0o600);
+  } catch {
+    // Best effort only.
+  }
+}
+
+function rememberWorkspace(workspacePath) {
+  const target = validateWorkdir(workspacePath);
+  const prefs = readWorkspacePrefs();
+  const recent = [target, ...prefs.recent.filter((item) => path.resolve(item) !== target)]
+    .filter((item) => fs.existsSync(item) && fs.statSync(item).isDirectory())
+    .slice(0, 12);
+  writeWorkspacePrefs({ recent });
+  return target;
+}
+
+function workspaceOptionFor(workspacePath, group) {
+  const target = path.resolve(workspacePath);
+  return {
+    path: target,
+    label: target.replace(`${os.homedir()}/`, "~/"),
+    name: path.basename(target) || target,
+    group,
+    git: fs.existsSync(path.join(target, ".git")),
+  };
 }
 
 function collectGitWorkspaces(baseDir, maxDepth = 4, seen = new Set()) {
@@ -158,21 +201,54 @@ function collectGitWorkspaces(baseDir, maxDepth = 4, seen = new Set()) {
   return results;
 }
 
+function collectProjectFolders(baseDir, maxDepth = 3, seen = new Set()) {
+  const base = path.resolve(baseDir);
+  if (!fs.existsSync(base) || seen.has(base)) return [];
+  seen.add(base);
+  if (maxDepth <= 0) return [];
+
+  let entries = [];
+  try {
+    entries = fs.readdirSync(base, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const results = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name.startsWith(".") || entry.name === "node_modules") continue;
+    const target = path.join(base, entry.name);
+    const hasProjectMarker = [".git", "package.json", "pyproject.toml", "Cargo.toml", "go.mod", "README.md", "AGENTS.md"].some((name) =>
+      fs.existsSync(path.join(target, name)),
+    );
+    if (hasProjectMarker) results.push(target);
+    results.push(...collectProjectFolders(target, maxDepth - 1, seen));
+  }
+  return results;
+}
+
 function workspaceOptions() {
-  const candidates = new Set([
-    root,
-    workdir,
-    path.join(os.homedir(), "WORK_LOCAL"),
-    ...collectGitWorkspaces(path.join(os.homedir(), "WORK_LOCAL", "00_WORKSPACE", "開発"), 5),
-    ...collectGitWorkspaces(path.join(os.homedir(), "WORK_LOCAL", "00_MINI_WORKSPACE"), 3),
-  ]);
-  return Array.from(candidates)
-    .filter((candidate) => candidate && fs.existsSync(candidate) && fs.statSync(candidate).isDirectory())
-    .sort((a, b) => a.localeCompare(b, "ja"))
-    .map((candidate) => ({
-      path: candidate,
-      label: candidate.replace(`${os.homedir()}/`, "~/"),
-    }));
+  const home = os.homedir();
+  const devRoot = path.join(home, "WORK_LOCAL", "00_WORKSPACE", "開発");
+  const miniRoot = path.join(home, "WORK_LOCAL", "00_MINI_WORKSPACE");
+  const groups = [
+    { group: "最近使ったフォルダ", items: readWorkspacePrefs().recent, preserveOrder: true },
+    { group: "Gitリポ", items: [...collectGitWorkspaces(devRoot, 5), ...collectGitWorkspaces(miniRoot, 3)] },
+    { group: "プロジェクト候補", items: [...collectProjectFolders(devRoot, 5), ...collectProjectFolders(miniRoot, 3)] },
+    { group: "基本フォルダ", items: [workdir, root, path.join(home, "WORK_LOCAL"), devRoot, miniRoot] },
+  ];
+  const seen = new Set();
+  const options = [];
+  for (const group of groups) {
+    const items = group.preserveOrder ? group.items : Array.from(new Set(group.items)).sort((a, b) => a.localeCompare(b, "ja"));
+    for (const candidate of items) {
+      const target = path.resolve(candidate);
+      if (seen.has(target) || !fs.existsSync(target) || !fs.statSync(target).isDirectory()) continue;
+      seen.add(target);
+      options.push(workspaceOptionFor(target, group.group));
+    }
+  }
+  return options;
 }
 
 function localSettingsPayload() {
@@ -462,19 +538,31 @@ function saveDataUrlAttachment(attachment) {
   const match = String(attachment.dataUrl || "").match(/^data:([^;]+);base64,(.+)$/);
   if (!match) return null;
   const mime = match[1];
-  if (!mime.startsWith("image/")) return null;
+  const originalName = String(attachment.name || "upload");
+  const originalExtension = path.extname(originalName).replace(/[^a-z0-9.]/gi, "").slice(0, 12);
+  const isImage = mime.startsWith("image/");
+  const isAudio = mime.startsWith("audio/") || /\.(m4a|mp3|wav|aac|flac|ogg|webm|mp4)$/i.test(originalName);
+  if (!isImage && !isAudio) return null;
   fs.mkdirSync(uploadDir, { recursive: true });
-  const extension = mime.split("/")[1]?.replace(/[^a-z0-9]/gi, "") || "png";
-  const safeName = String(attachment.name || "upload")
+  const extension = originalExtension || `.${mime.split("/")[1]?.replace(/[^a-z0-9]/gi, "") || (isImage ? "png" : "dat")}`;
+  const safeName = originalName
     .replace(/[^a-z0-9._-]/gi, "-")
     .replace(/-+/g, "-")
     .slice(0, 64);
-  const fileName = `${Date.now()}-${crypto.randomBytes(4).toString("hex")}-${safeName || "image"}.${extension}`;
+  const nameWithExtension = path.extname(safeName) ? safeName : `${safeName || (isImage ? "image" : "audio")}${extension}`;
+  const fileName = `${Date.now()}-${crypto.randomBytes(4).toString("hex")}-${nameWithExtension}`;
   const target = path.join(uploadDir, fileName);
   fs.writeFileSync(target, Buffer.from(match[2], "base64"), { mode: 0o600 });
   return {
-    input: { type: "localImage", path: target },
-    preview: { name: attachment.name || fileName, path: fileName, url: `/api/uploaded?name=${encodeURIComponent(fileName)}` },
+    input: isImage ? { type: "localImage", path: target } : null,
+    preview: {
+      name: attachment.name || fileName,
+      path: fileName,
+      absolutePath: target,
+      kind: isImage ? "image" : "audio",
+      mimeType: mime,
+      url: isImage ? `/api/uploaded?name=${encodeURIComponent(fileName)}` : null,
+    },
   };
 }
 
@@ -588,10 +676,11 @@ function summarizeLiveItem(item, phase = "completed") {
 
 function historyFromThread(thread) {
   const history = [];
-  for (const turn of thread.turns || []) {
+  for (const [turnIndex, turn] of (thread.turns || []).entries()) {
+    const outputGroup = turn.id || `turn-${turnIndex}`;
     for (const item of turn.items || []) {
       const entry = summarizeItem(item);
-      if (entry && entry.text) history.push(entry);
+      if (entry && entry.text) history.push({ ...entry, outputGroup });
     }
   }
   return capHistory(history);
@@ -765,7 +854,7 @@ class SharedBridge {
 
       if (msg.method === "item/completed") {
         const entry = summarizeItem(msg.params.item);
-        if (entry && entry.type !== "user") this.appendHistory(entry);
+        if (entry && entry.type !== "user") this.appendHistory({ ...entry, outputGroup: this.activeTurnId || null });
         const text = summarizeLiveItem(msg.params.item, "completed");
         if (text) this.emit("status", { text });
         this.emit("event", { event: msg });
@@ -836,12 +925,22 @@ class SharedBridge {
   startPrompt(text, attachments = [], options = {}) {
     const input = [{ type: "text", text, text_elements: [] }];
     const savedImages = [];
+    const savedFiles = [];
     for (const attachment of attachments || []) {
       const saved = saveDataUrlAttachment(attachment);
       if (saved) {
-        input.push(saved.input);
-        savedImages.push(saved.preview);
+        if (saved.input) {
+          input.push(saved.input);
+          savedImages.push(saved.preview);
+        } else {
+          savedFiles.push(saved.preview);
+        }
       }
+    }
+    if (savedFiles.length) {
+      input[0].text = `${text}\n\n添付ファイルはMac側に保存済みです。必要ならこのパスを読み取って処理してください:\n${savedFiles
+        .map((file) => `- ${file.name}: ${file.absolutePath}`)
+        .join("\n")}`;
     }
     const params = {
       threadId: this.threadId,
@@ -854,7 +953,8 @@ class SharedBridge {
       ...params,
     });
     this.pending.set(id, "turn/start");
-    const displayText = savedImages.length ? `${text}\n\n添付: ${savedImages.map((image) => image.name).join(", ")}` : text;
+    const savedAttachments = [...savedImages, ...savedFiles];
+    const displayText = savedAttachments.length ? `${text}\n\n添付: ${savedAttachments.map((file) => file.name).join(", ")}` : text;
     this.appendHistory({ type: "user", text: displayText, attachments: savedImages });
     this.emit("user", { text: displayText, attachments: savedImages });
   }
@@ -985,6 +1085,29 @@ async function main() {
       }
       return;
     }
+    if (url.pathname === "/api/workspaces") {
+      if (!requireToken(url, phoneToken, res)) return;
+      if (req.method === "GET") {
+        sendJson(res, 200, { data: workspaceOptions() });
+        return;
+      }
+      if (req.method === "POST") {
+        try {
+          const body = await readJsonBody(req);
+          const target = rememberWorkspace(body.path || body.workdir);
+          sendJson(res, 200, {
+            ok: true,
+            workspace: workspaceOptionFor(target, "最近使ったフォルダ"),
+            options: workspaceOptions(),
+          });
+        } catch (error) {
+          sendJson(res, 400, { error: error.message });
+        }
+        return;
+      }
+      sendJson(res, 405, { error: "method not allowed" });
+      return;
+    }
     if (url.pathname === "/api/local-settings") {
       if (!requireToken(url, phoneToken, res)) return;
       if (req.method === "GET") {
@@ -996,7 +1119,7 @@ async function main() {
           const body = await readJsonBody(req);
           const updates = {};
           if (Object.prototype.hasOwnProperty.call(body, "model")) updates.CODEX_MODEL = validateModel(body.model);
-          if (Object.prototype.hasOwnProperty.call(body, "workdir")) updates.CODEX_WORKDIR = validateWorkdir(body.workdir);
+          if (Object.prototype.hasOwnProperty.call(body, "workdir")) updates.CODEX_WORKDIR = rememberWorkspace(body.workdir);
           if (Object.prototype.hasOwnProperty.call(body, "historySyncEnabled")) {
             updates.CODEX_HISTORY_SYNC = body.historySyncEnabled ? "1" : "0";
           }

@@ -123,15 +123,22 @@
   box-sizing: border-box;
 }
 
+html,
+body {
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+}
+
 body {
   margin: 0;
   background: var(--bg);
-  overflow: hidden;
 }
 
 button,
 textarea,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -142,6 +149,8 @@ button {
 .app-shell {
   display: grid;
   grid-template-columns: 292px minmax(0, 1fr);
+  width: 100%;
+  max-width: 100%;
   height: 100vh;
   height: 100svh;
   overflow: hidden;
@@ -328,6 +337,8 @@ button.project-heading.active {
 .workspace {
   display: grid;
   grid-template-rows: 52px minmax(0, 1fr);
+  width: 100%;
+  max-width: 100%;
   height: 100vh;
   height: 100svh;
   min-height: 0;
@@ -341,8 +352,12 @@ button.project-heading.active {
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 12px;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   padding: 0 18px;
   border-bottom: 1px solid var(--line);
+  overflow: hidden;
 }
 
 .mobile-toggle {
@@ -378,23 +393,38 @@ p {
 
 .title-actions {
   display: flex;
+  min-width: 0;
   gap: 8px;
 }
 
 .icon-button {
+  display: grid;
+  place-items: center;
   min-width: 34px;
   height: 34px;
   border: 1px solid var(--line);
   border-radius: 10px;
+  padding: 0;
   background: var(--card);
   color: var(--muted);
+  line-height: 1;
+}
+
+.mobile-settings-button {
+  display: none;
+  font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+  font-size: 17px;
+  font-weight: 600;
 }
 
 .content-grid {
   display: grid;
   grid-template-columns: minmax(420px, 1fr) 320px;
+  width: 100%;
+  max-width: 100%;
   height: 100%;
   min-height: 0;
+  min-width: 0;
   overflow: hidden;
 }
 
@@ -410,6 +440,8 @@ body.hide-artifacts .artifact-panel {
   position: relative;
   display: flex;
   flex-direction: column;
+  width: 100%;
+  max-width: 100%;
   height: 100%;
   min-height: 0;
   min-width: 0;
@@ -418,8 +450,12 @@ body.hide-artifacts .artifact-panel {
 
 .log {
   flex: 1 1 auto;
+  width: 100%;
+  max-width: 100%;
   min-height: 0;
+  min-width: 0;
   overflow-y: auto;
+  overflow-x: hidden;
   overscroll-behavior: contain;
   padding: 34px clamp(22px, 8vw, 160px) 24px;
   touch-action: pan-y;
@@ -430,7 +466,9 @@ body.hide-artifacts .artifact-panel {
   display: grid;
   grid-template-columns: 30px minmax(0, 1fr) auto;
   gap: 12px;
+  width: 100%;
   max-width: 960px;
+  min-width: 0;
   margin: 0 auto 24px;
   color: var(--entry);
 }
@@ -462,7 +500,9 @@ body.hide-artifacts .artifact-panel {
 
 .entry-body {
   min-width: 0;
+  max-width: 100%;
   overflow-wrap: anywhere;
+  word-break: normal;
   font-size: 14px;
   line-height: 1.62;
 }
@@ -517,6 +557,8 @@ body.hide-artifacts .artifact-panel {
   color: var(--code-text);
   font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
   font-size: 0.91em;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .entry-body pre {
@@ -659,9 +701,46 @@ body.hide-artifacts .artifact-panel {
 }
 
 .entry-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: start;
+  justify-content: end;
+  gap: 6px;
   min-width: 42px;
   color: var(--muted);
   font-size: 14px;
+}
+
+.copy-output-button {
+  min-height: 30px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 9px;
+  background: var(--soft);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1;
+}
+
+.copy-output-button:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  color: var(--text);
+}
+
+.copy-output-button:disabled {
+  cursor: default;
+  opacity: 0.72;
+}
+
+.copy-output-button.bulk {
+  border-color: color-mix(in srgb, var(--button) 24%, var(--line));
+  background: var(--button);
+  color: var(--button-text);
+}
+
+.copy-output-button.bulk:hover {
+  border-color: var(--button);
+  color: var(--button-text);
 }
 
 .approval {
@@ -794,7 +873,9 @@ body.hide-artifacts .artifact-panel {
   position: relative;
   flex: 0 0 auto;
   width: min(860px, calc(100% - 48px));
+  max-width: 100%;
   min-height: 116px;
+  min-width: 0;
   margin: 0 auto 20px;
   border: 1px solid var(--composer-border);
   border-radius: 22px;
@@ -837,6 +918,19 @@ body.hide-artifacts .artifact-panel {
   background: var(--soft);
 }
 
+.attachment-file-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--button);
+  color: var(--button-text);
+  font-size: 11px;
+  font-weight: 700;
+}
+
 .attachment-chip span {
   min-width: 0;
   overflow: hidden;
@@ -867,6 +961,7 @@ textarea::placeholder {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  min-width: 0;
   padding: 4px 12px 12px;
 }
 
@@ -1340,36 +1435,96 @@ textarea::placeholder {
 
 .theme-settings-title {
   margin: 0 0 10px;
-  color: var(--muted);
+  color: var(--text);
   font-size: 13px;
+  font-weight: 650;
 }
 
 .local-settings-current {
-  margin-bottom: 10px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 8px;
+  margin-bottom: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 9px 10px;
+  background: var(--soft);
   color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.local-settings-current strong {
+  min-width: 0;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 620;
+}
+
+.local-settings-current code {
+  grid-column: 1 / -1;
+  min-width: 0;
+  border-radius: 6px;
+  padding: 3px 0 0;
+  background: transparent;
+  color: var(--muted);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
   font-size: 12px;
   overflow-wrap: anywhere;
 }
 
 .settings-form {
   display: grid;
-  gap: 10px;
+  gap: 11px;
 }
 
 .settings-field {
   display: grid;
-  gap: 5px;
+  gap: 6px;
   color: var(--muted);
   font-size: 12px;
 }
 
-.settings-select {
+.settings-field > span {
+  padding-left: 1px;
+}
+
+.settings-select,
+.settings-input {
   width: 100%;
   min-height: 38px;
   border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 0 10px;
-  background: var(--field);
+  border-radius: 8px;
+  padding: 0 9px;
+  background: var(--card);
+  color: var(--text);
+  font-size: 16px;
+  outline: none;
+}
+
+.settings-input {
+  min-width: 0;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+
+.settings-select:focus,
+.settings-input:focus {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.settings-inline-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.settings-inline-button {
+  min-width: 58px;
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--soft);
   color: var(--text);
 }
 
@@ -1378,6 +1533,7 @@ textarea::placeholder {
   align-items: center;
   gap: 8px;
   min-height: 32px;
+  width: fit-content;
   color: var(--text);
   font-size: 13px;
 }
@@ -1389,7 +1545,7 @@ textarea::placeholder {
 
 .settings-status {
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 8px;
   padding: 8px 10px;
   background: var(--soft);
   color: var(--muted);
@@ -1417,7 +1573,7 @@ textarea::placeholder {
 .settings-actions button {
   min-height: 38px;
   border: 1px solid var(--button);
-  border-radius: 10px;
+  border-radius: 8px;
   background: var(--button);
   color: var(--button-text);
 }
@@ -1577,6 +1733,8 @@ textarea::placeholder {
 
 @media (max-width: 820px) {
   .app-shell {
+    width: 100vw;
+    max-width: 100vw;
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -1616,9 +1774,16 @@ textarea::placeholder {
     display: inline-block;
   }
 
+  .mobile-settings-button {
+    display: grid;
+  }
+
   .titlebar {
     display: flex;
     align-items: center;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
     padding: 0 10px;
   }
 
@@ -1631,6 +1796,7 @@ textarea::placeholder {
   .title-stack {
     flex: 1 1 auto;
     min-width: 0;
+    max-width: 100%;
   }
 
   .mobile-toggle {
@@ -1645,24 +1811,59 @@ textarea::placeholder {
     max-width: 100%;
   }
 
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+
   .log {
+    width: 100%;
+    max-width: 100%;
     padding: 22px 14px 28px;
   }
 
   .entry {
+    width: 100%;
+    max-width: 100%;
     grid-template-columns: minmax(0, 1fr);
     gap: 6px;
     margin-bottom: 22px;
   }
 
-  .entry-avatar,
-  .entry-tools {
+  .entry-avatar {
     display: none;
   }
 
+  .entry-tools {
+    min-width: 0;
+    justify-content: flex-start;
+  }
+
+  .entry.user .entry-tools,
+  .entry.status .entry-tools,
+  .entry.error .entry-tools {
+    display: none;
+  }
+
+  .copy-output-button {
+    min-height: 32px;
+    padding: 0 10px;
+  }
+
   .entry-body {
+    width: 100%;
+    max-width: 100%;
     font-size: 14px;
     line-height: 1.58;
+  }
+
+  .entry-body > * {
+    max-width: 100%;
+  }
+
+  .entry-body a {
+    overflow-wrap: anywhere;
   }
 
   .entry.user .entry-body {
@@ -1728,6 +1929,8 @@ textarea::placeholder {
 
   .composer {
     width: calc(100% - 18px);
+    max-width: calc(100% - 18px);
+    min-width: 0;
     min-height: 84px;
     margin-bottom: max(7px, env(safe-area-inset-bottom));
     border-radius: 17px;
@@ -1735,6 +1938,8 @@ textarea::placeholder {
 
   .run-state {
     width: calc(100% - 18px);
+    max-width: calc(100% - 18px);
+    min-width: 0;
     min-height: 30px;
     margin-bottom: 7px;
     padding: 0 11px;
@@ -1758,6 +1963,12 @@ textarea::placeholder {
     height: 24px;
   }
 
+  .attachment-file-icon {
+    width: 24px;
+    height: 24px;
+    font-size: 10px;
+  }
+
   textarea {
     height: 44px;
     min-height: 44px;
@@ -1765,7 +1976,7 @@ textarea::placeholder {
     resize: none;
     padding: 11px 14px 4px;
     color: var(--text);
-    font-size: 15px;
+    font-size: 16px;
     line-height: 1.42;
   }
 
@@ -1835,20 +2046,34 @@ textarea::placeholder {
 
 @media (max-width: 520px) {
   .titlebar {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
     gap: 6px;
-    position: relative;
-    padding-right: 48px;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    padding: 0 10px;
   }
 
   .mobile-toggle {
-    min-width: 62px;
+    min-width: 56px;
     padding: 0 7px;
   }
 
   .icon-button {
-    min-width: 32px;
+    min-width: 30px;
+    width: 30px;
     height: 32px;
     border-radius: 9px;
+  }
+
+  .title-actions {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: 30px;
+    gap: 5px;
+    justify-content: end;
+    min-width: 0;
   }
 
   h1 {
@@ -1864,13 +2089,13 @@ textarea::placeholder {
   }
 
   #menuButton {
-    position: absolute;
-    top: 50%;
-    right: 10px;
-    transform: translateY(-50%);
+    position: static;
+    transform: none;
   }
 
   .log {
+    width: 100%;
+    max-width: 100%;
     padding: 18px 14px 14px;
   }
 
@@ -1883,6 +2108,7 @@ textarea::placeholder {
     min-height: 40px;
     max-height: 104px;
     padding: 9px 13px 3px;
+    font-size: 16px;
   }
 
   textarea::placeholder {

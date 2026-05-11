@@ -7,6 +7,7 @@ const pluginsButton = document.querySelector("#pluginsButton");
 const automationsButton = document.querySelector("#automationsButton");
 const settingsButton = document.querySelector("#settingsButton");
 const menuButton = document.querySelector("#menuButton");
+const mobileSettingsButton = document.querySelector("#mobileSettingsButton");
 const closePanelButton = document.querySelector("#closePanelButton");
 const addButton = document.querySelector("#addButton");
 const accessButton = document.querySelector("#accessButton");
@@ -75,6 +76,7 @@ let selectedTheme = localStorage.getItem("codexPhoneTheme") || "simple";
 let ws = null;
 let pendingApproval = null;
 let assistantEntry = null;
+let liveOutputGroup = "";
 let statusGroup = null;
 let threadCache = [];
 let liveTurnActive = false;
@@ -566,7 +568,7 @@ function addStatusGroupItem(text) {
   log.scrollTop = log.scrollHeight;
 }
 
-function addEntry(kind, text, images = []) {
+function addEntry(kind, text, images = [], options = {}) {
   if (kind === "status") {
     addStatusGroupItem(text);
     return null;
@@ -582,18 +584,84 @@ function addEntry(kind, text, images = []) {
 
   const body = document.createElement("div");
   body.className = "entry-body";
+  if (options.outputGroup) body.dataset.outputGroup = options.outputGroup;
   setEntryText(body, kind, text);
   const gallery = kind === "user" ? renderImageGallery(images) : null;
   if (gallery) body.appendChild(gallery);
 
   const tools = document.createElement("div");
   tools.className = "entry-tools";
-  tools.textContent = kind === "assistant" ? "□  ↗" : "";
+  if (kind === "assistant") {
+    tools.appendChild(createCopyOutputButton(body));
+    if (options.showBulkCopy) tools.appendChild(createCopyOutputButton(body, { mode: "group" }));
+  }
 
   el.append(avatar, body, tools);
   log.appendChild(el);
   log.scrollTop = log.scrollHeight;
   return body;
+}
+
+function createCopyOutputButton(body, options = {}) {
+  const isGroupCopy = options.mode === "group";
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = isGroupCopy ? "copy-output-button bulk" : "copy-output-button";
+  button.title = isGroupCopy ? "このターンの出力を一括コピー" : "この出力をコピー";
+  button.textContent = isGroupCopy ? "一括コピー" : "コピー";
+  button.addEventListener("click", async () => {
+    const originalText = button.textContent;
+    button.disabled = true;
+    try {
+      const copyText = isGroupCopy ? textForOutputGroup(body) : body.markdownSource || body.innerText || "";
+      await copyTextToClipboard(copyText);
+      button.textContent = "コピー済み";
+    } catch (error) {
+      button.textContent = "失敗";
+      addStatus(`コピーできませんでした: ${error.message}`);
+    } finally {
+      setTimeout(() => {
+        button.disabled = false;
+        button.textContent = originalText;
+      }, 1400);
+    }
+  });
+  return button;
+}
+
+function textForOutputGroup(body) {
+  const outputGroup = body.dataset.outputGroup;
+  if (!outputGroup) return body.markdownSource || body.innerText || "";
+  const bodies = Array.from(log.querySelectorAll(".entry.assistant .entry-body")).filter(
+    (candidate) => candidate.dataset.outputGroup === outputGroup,
+  );
+  return bodies.map((candidate) => candidate.markdownSource || candidate.innerText || "").filter(Boolean).join("\n\n");
+}
+
+async function copyTextToClipboard(text) {
+  const value = String(text || "").trimEnd();
+  if (!value) throw new Error("コピーする出力がありません");
+  if (navigator.clipboard?.writeText && window.isSecureContext) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.readOnly = true;
+  textarea.style.position = "fixed";
+  textarea.style.top = "0";
+  textarea.style.left = "-9999px";
+  textarea.style.width = "1px";
+  textarea.style.height = "1px";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.focus({ preventScroll: true });
+  textarea.select();
+  textarea.setSelectionRange(0, value.length);
+  const copied = document.execCommand("copy");
+  textarea.remove();
+  if (!copied) throw new Error("ブラウザがコピーを許可しませんでした");
 }
 
 function addStatus(text) {
@@ -608,7 +676,19 @@ function setReady(ready) {
 function renderHistory(history) {
   log.replaceChildren();
   statusGroup = null;
-  for (const entry of history || []) addEntry(entry.type, entry.text, entry.attachments || []);
+  const outputGroupLastIndex = new Map();
+  for (const [index, entry] of (history || []).entries()) {
+    if (entry.type !== "assistant" || !entry.outputGroup) continue;
+    outputGroupLastIndex.set(entry.outputGroup, index);
+  }
+  for (const [index, entry] of (history || []).entries()) {
+    const outputGroup = entry.outputGroup || "";
+    const showBulkCopy = entry.type === "assistant" && outputGroup && outputGroupLastIndex.get(outputGroup) === index;
+    addEntry(entry.type, entry.text, entry.attachments || [], {
+      outputGroup,
+      showBulkCopy,
+    });
+  }
 }
 
 function historySignature(history = []) {
@@ -616,6 +696,7 @@ function historySignature(history = []) {
     history.map((entry) => ({
       type: entry.type,
       text: entry.text || "",
+      outputGroup: entry.outputGroup || "",
       attachments: (entry.attachments || []).map((attachment) => attachment.name || attachment.url || ""),
     })),
   );
@@ -935,10 +1016,15 @@ function renderLocalSettings(payload) {
   const active = payload.active || {};
   const settings = payload.settings || {};
   const options = payload.options || {};
+  let workspaceItems = options.workspaces || [];
 
   const modelLabel = document.createElement("div");
   modelLabel.className = "local-settings-current";
-  modelLabel.textContent = `現在: ${active.model || "unknown"} / ${shortenPath(active.workdir || "")}`;
+  modelLabel.innerHTML = `
+    <span>現在</span>
+    <strong>${escapeHtml(active.model || "unknown")}</strong>
+    <code>${escapeHtml(shortenPath(active.workdir || ""))}</code>
+  `;
   group.appendChild(modelLabel);
 
   const modelSelect = document.createElement("select");
@@ -954,17 +1040,23 @@ function renderLocalSettings(payload) {
 
   const workspaceSelect = document.createElement("select");
   workspaceSelect.className = "settings-select";
-  const workspaceValues = new Map();
-  for (const item of options.workspaces || []) workspaceValues.set(item.path, item.label || item.path);
-  if (settings.workdir && !workspaceValues.has(settings.workdir)) workspaceValues.set(settings.workdir, shortenPath(settings.workdir));
-  if (active.workdir && !workspaceValues.has(active.workdir)) workspaceValues.set(active.workdir, shortenPath(active.workdir));
-  for (const [workspacePath, label] of workspaceValues) {
-    const option = document.createElement("option");
-    option.value = workspacePath;
-    option.textContent = label;
-    workspaceSelect.appendChild(option);
-  }
-  workspaceSelect.value = settings.workdir || active.workdir || "";
+  renderWorkspaceOptions(workspaceSelect, workspaceItems, settings.workdir || active.workdir || "");
+
+  const manualInput = document.createElement("input");
+  manualInput.className = "settings-input";
+  manualInput.type = "text";
+  manualInput.inputMode = "text";
+  manualInput.autocomplete = "off";
+  manualInput.placeholder = "/Users/minijiro/WORK_LOCAL/...";
+
+  const addWorkspaceButton = document.createElement("button");
+  addWorkspaceButton.type = "button";
+  addWorkspaceButton.className = "settings-inline-button";
+  addWorkspaceButton.textContent = "追加";
+
+  const manualRow = document.createElement("div");
+  manualRow.className = "settings-inline-row";
+  manualRow.append(manualInput, addWorkspaceButton);
 
   const historyLabel = document.createElement("label");
   historyLabel.className = "settings-check";
@@ -982,6 +1074,7 @@ function renderLocalSettings(payload) {
   form.append(
     settingField("モデル", modelSelect),
     settingField("作業ディレクトリ", workspaceSelect),
+    settingField("候補にないフォルダを追加", manualRow),
     historyLabel,
     status,
   );
@@ -998,10 +1091,33 @@ function renderLocalSettings(payload) {
   actions.append(saveButton, restartButton);
   form.appendChild(actions);
 
+  addWorkspaceButton.addEventListener("click", async () => {
+    const nextPath = manualInput.value.trim();
+    if (!nextPath) {
+      setSettingsStatus(status, "追加したいフォルダの絶対パスを入力してください。", "error");
+      manualInput.focus();
+      return;
+    }
+    addWorkspaceButton.disabled = true;
+    setSettingsStatus(status, "フォルダを確認中...");
+    try {
+      const result = await apiPost("/api/workspaces", { path: nextPath });
+      workspaceItems = result.options || workspaceItems;
+      renderWorkspaceOptions(workspaceSelect, workspaceItems, result.workspace?.path || nextPath);
+      manualInput.value = "";
+      setSettingsStatus(status, "候補に追加しました。保存すると次回起動の作業ディレクトリになります。");
+      addStatus("作業ディレクトリ候補を追加しました。");
+    } catch (error) {
+      setSettingsStatus(status, error.message, "error");
+    } finally {
+      addWorkspaceButton.disabled = false;
+    }
+  });
+
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     saveButton.disabled = true;
-    status.textContent = "保存中...";
+    setSettingsStatus(status, "保存中...");
     try {
       const result = await apiPost("/api/local-settings", {
         model: modelSelect.value,
@@ -1013,12 +1129,12 @@ function renderLocalSettings(payload) {
       localStorage.setItem("codexPhoneModel", selectedModel);
       localStorage.setItem("codexPhoneModelLabel", selectedModelLabel);
       updateModelButton();
-      status.className = result.restartRequired ? "settings-status warning" : "settings-status";
-      status.textContent = result.restartRequired ? "保存しました。再起動で反映します。" : "保存しました。";
+      workspaceItems = result.options?.workspaces || workspaceItems;
+      renderWorkspaceOptions(workspaceSelect, workspaceItems, result.settings?.workdir || workspaceSelect.value);
+      setSettingsStatus(status, result.restartRequired ? "保存しました。再起動で反映します。" : "保存しました。", result.restartRequired ? "warning" : "");
       addStatus("起動設定を保存しました。");
     } catch (error) {
-      status.className = "settings-status error";
-      status.textContent = error.message;
+      setSettingsStatus(status, error.message, "error");
     } finally {
       saveButton.disabled = false;
     }
@@ -1026,13 +1142,12 @@ function renderLocalSettings(payload) {
 
   restartButton.addEventListener("click", async () => {
     restartButton.disabled = true;
-    status.textContent = "再起動中...";
+    setSettingsStatus(status, "再起動中...");
     addStatus("phone bridgeを再起動しています。");
     try {
       await apiPost("/api/restart", {});
     } catch (error) {
-      status.className = "settings-status error";
-      status.textContent = error.message;
+      setSettingsStatus(status, error.message, "error");
       restartButton.disabled = false;
       return;
     }
@@ -1041,6 +1156,42 @@ function renderLocalSettings(payload) {
 
   group.appendChild(form);
   artifactList.appendChild(group);
+}
+
+function renderWorkspaceOptions(select, items, selectedValue) {
+  const selectedPath = selectedValue || "";
+  const groups = new Map();
+  const seen = new Set();
+  for (const item of items || []) {
+    if (!item?.path || seen.has(item.path)) continue;
+    seen.add(item.path);
+    const groupName = item.group || "フォルダ";
+    if (!groups.has(groupName)) groups.set(groupName, []);
+    groups.get(groupName).push(item);
+  }
+  if (selectedPath && !seen.has(selectedPath)) {
+    groups.set("選択中", [{ path: selectedPath, label: shortenPath(selectedPath), group: "選択中" }]);
+  }
+
+  select.replaceChildren();
+  for (const [groupName, groupItems] of groups) {
+    const optgroup = document.createElement("optgroup");
+    optgroup.label = groupName;
+    for (const item of groupItems) {
+      const option = document.createElement("option");
+      option.value = item.path;
+      const displayName = item.name || item.label || shortenPath(item.path);
+      option.textContent = item.git ? `${displayName} · Git` : displayName;
+      optgroup.appendChild(option);
+    }
+    select.appendChild(optgroup);
+  }
+  select.value = selectedPath;
+}
+
+function setSettingsStatus(element, text, tone = "") {
+  element.className = tone ? `settings-status ${tone}` : "settings-status";
+  element.textContent = text;
 }
 
 function settingField(labelText, control) {
@@ -1214,9 +1365,14 @@ function renderAttachments() {
     const chip = document.createElement("button");
     chip.type = "button";
     chip.className = "attachment-chip";
-    const thumb = document.createElement("img");
-    thumb.src = file.dataUrl;
-    thumb.alt = "";
+    const thumb = file.type.startsWith("image/") ? document.createElement("img") : document.createElement("span");
+    if (file.type.startsWith("image/")) {
+      thumb.src = file.dataUrl;
+      thumb.alt = "";
+    } else {
+      thumb.className = "attachment-file-icon";
+      thumb.textContent = file.type.startsWith("audio/") ? "音" : "FILE";
+    }
     const label = document.createElement("span");
     label.textContent = file.name;
     const close = document.createElement("span");
@@ -1246,6 +1402,7 @@ function connect() {
   }
   if (ws) ws.close();
   liveTurnActive = false;
+  liveOutputGroup = "";
   setRunState("connecting");
   lastHistorySignature = "";
   renderHistory([]);
@@ -1277,13 +1434,19 @@ function connect() {
     if (msg.type === "user") {
       liveTurnActive = true;
       assistantEntry = null;
+      liveOutputGroup = `live-${Date.now()}`;
       setRunState("running");
       addEntry("user", msg.text, msg.attachments || []);
       return;
     }
     if (msg.type === "assistantDelta") {
       setRunState("streaming");
-      if (!assistantEntry) assistantEntry = addEntry("assistant", "");
+      if (!assistantEntry) {
+        assistantEntry = addEntry("assistant", "", [], {
+          outputGroup: liveOutputGroup || `live-${Date.now()}`,
+          showBulkCopy: true,
+        });
+      }
       setEntryText(assistantEntry, "assistant", `${assistantEntry.markdownSource || ""}${msg.text}`);
       log.scrollTop = log.scrollHeight;
       return;
@@ -1295,10 +1458,15 @@ function connect() {
       approval.classList.remove("hidden");
       return;
     }
+    if (msg.type === "turn" && msg.status === "started") {
+      if (msg.turnId && !assistantEntry) liveOutputGroup = msg.turnId;
+      return;
+    }
     if (msg.type === "turn" && msg.status === "completed") {
       liveTurnActive = false;
       lastHistorySignature = "";
       assistantEntry = null;
+      liveOutputGroup = "";
       setRunState("done", "完了しました");
       loadThreads();
       refreshSelectedThread();
@@ -1333,7 +1501,7 @@ composer.addEventListener("submit", (event) => {
     JSON.stringify({
       type: "prompt",
       token,
-      text: text || "添付画像を確認してください。",
+      text: text || "添付ファイルを確認してください。",
       attachments: pendingFiles,
       options: {
         model: selectedModel || undefined,
@@ -1374,6 +1542,7 @@ threadSearch.addEventListener("input", renderThreadList);
 pluginsButton.addEventListener("click", showPlugins);
 automationsButton.addEventListener("click", showAutomations);
 settingsButton.addEventListener("click", showSettings);
+mobileSettingsButton.addEventListener("click", showSettings);
 mobileThreadsButton.addEventListener("click", () => document.body.classList.toggle("show-sidebar"));
 sidebarScrim.addEventListener("click", () => document.body.classList.remove("show-sidebar"));
 connectButton.addEventListener("click", connect);
@@ -1393,13 +1562,24 @@ closePanelButton.addEventListener("click", closeRightPanel);
 artifactPreview.addEventListener("click", (event) => {
   if (event.target.closest("[data-preview-close]")) hideArtifactPreview();
 });
+function isSupportedUpload(file) {
+  const name = String(file.name || "").toLowerCase();
+  return (
+    file.type.startsWith("image/") ||
+    file.type.startsWith("audio/") ||
+    /\.(m4a|mp3|wav|aac|flac|ogg|webm|mp4)$/.test(name)
+  );
+}
+
 addButton.addEventListener("click", () => fileInput.click());
 fileInput.addEventListener("change", async () => {
-  const files = Array.from(fileInput.files || []).filter((file) => file.type.startsWith("image/"));
+  const selectedFiles = Array.from(fileInput.files || []);
+  const files = selectedFiles.filter(isSupportedUpload);
   try {
     pendingFiles = pendingFiles.concat(await Promise.all(files.map(readFileAsDataUrl)));
     renderAttachments();
-    if (files.length) addStatus(`${files.length}件の画像を添付しました。送信時にCodexへ渡します。`);
+    if (files.length) addStatus(`${files.length}件のファイルを添付しました。送信時にMacへアップロードします。`);
+    if (selectedFiles.length > files.length) addStatus(`${selectedFiles.length - files.length}件の未対応ファイルをスキップしました。`);
   } catch (error) {
     addEntry("error", `添付に失敗しました: ${error.message}`);
   } finally {
