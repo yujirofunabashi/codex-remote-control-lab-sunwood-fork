@@ -962,7 +962,6 @@ async function loadThreads({ background = false, provider = "" } = {}) {
 async function refreshSelectedThread() {
   if (!selectedThread || liveTurnActive || selectedThreadRefreshActive) return;
   const provider = currentThreadProvider();
-  if (provider !== activeProvider) return;
   selectedThreadRefreshActive = true;
   try {
     const result = await apiGet(`/api/thread?thread=${encodeURIComponent(selectedThread)}&provider=${encodeURIComponent(provider)}`);
@@ -1017,6 +1016,7 @@ function selectThread(threadId) {
   renderThreadList();
   document.body.classList.remove("show-sidebar");
   connect();
+  if (selectedThread) refreshSelectedThread();
 }
 
 function showRightPanel() {
@@ -1778,7 +1778,11 @@ pluginsButton.addEventListener("click", showPlugins);
 automationsButton.addEventListener("click", showAutomations);
 settingsButton.addEventListener("click", showSettings);
 mobileSettingsButton.addEventListener("click", showSettings);
-mobileThreadsButton.addEventListener("click", () => document.body.classList.toggle("show-sidebar"));
+mobileThreadsButton.addEventListener("click", () => {
+  const nextVisible = !document.body.classList.contains("show-sidebar");
+  document.body.classList.toggle("show-sidebar", nextVisible);
+  if (nextVisible) closeRightPanel();
+});
 sidebarScrim.addEventListener("click", () => document.body.classList.remove("show-sidebar"));
 connectButton.addEventListener("click", connect);
 menuButton.addEventListener("click", () => {
