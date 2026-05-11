@@ -82,6 +82,7 @@ Useful environment variables:
 ```bash
 PHONE_UI_PORT=45214 npm run phone
 PHONE_AGENT_PROVIDER=claude npm run phone
+PHONE_UI_PORT=45224 PHONE_AGENT_PROVIDER=claude PHONE_APP_NAME="Claude Remote 45224" PHONE_APP_ID=claude-45224 npm run phone
 CODEX_WORKDIR=/Users/admin/Prj/some-project npm run phone
 CODEX_MODEL=gpt-5.4 npm run phone
 CLAUDE_WORKDIR=/Users/admin/Prj/some-project npm run phone:claude
@@ -95,6 +96,8 @@ PHONE_PUSHOVER_TOKEN=app-token PHONE_PUSHOVER_USER=user-key npm run phone
 PHONE_DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/... npm run phone
 PHONE_NOTIFY_TIMEOUT_MS=5000 npm run phone
 ```
+
+To run two phone bridges in parallel, start them on different `PHONE_UI_PORT` values and open both tokenized URLs on the phone. Each bridge has its own active queue and PWA identity, so both URLs can be added to the iPhone Home Screen as separate icons. By default the Home Screen name includes the provider and port, such as `Codex 45214` or `Claude 45224`; set `PHONE_APP_NAME`, `PHONE_APP_SHORT_NAME`, and `PHONE_APP_ID` when you want a custom label or stable identity. If iOS already cached an older icon, delete that Home Screen icon and add the URL again.
 
 `CODEX_APP_SERVER_SOCK` or `CODEX_APP_SERVER_URL` makes the bridge attach to an existing headless app-server instead of starting a new one. For live sync with Codex Desktop, use this with a Desktop Remote Connection that points at the same headless app-server. The normal local conversation view in Codex Desktop uses a private `stdio` app-server, so there is no public external route for a bridge to inject live UI updates into that local view.
 

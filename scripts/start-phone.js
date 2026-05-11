@@ -18,6 +18,23 @@ function normalizeProvider(input) {
   throw new Error(`Unsupported PHONE_AGENT_PROVIDER: ${value}`);
 }
 
+function appIdSlug(input, fallback) {
+  const value = String(input || fallback || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return value || "phone-bridge";
+}
+
+function defaultAppNameForProvider(provider) {
+  return provider === "claude" ? "Claude Remote" : "Codex Remote";
+}
+
+function defaultAppShortNameForProvider(provider) {
+  return provider === "claude" ? "Claude" : "Codex";
+}
+
 function loadEnvFile(filePath) {
   if (!fs.existsSync(filePath)) return;
   const lines = fs.readFileSync(filePath, "utf8").split(/\r?\n/);
@@ -50,6 +67,9 @@ const uiHost = process.env.PHONE_UI_HOST || "0.0.0.0";
 const agentProvider = normalizeProvider(process.env.PHONE_AGENT_PROVIDER || process.env.AGENT_PROVIDER || process.env.PHONE_AGENT_PROVIDER_DEFAULT || "codex");
 const isCodexProvider = agentProvider === "codex";
 const isClaudeProvider = agentProvider === "claude";
+const phoneAppId = appIdSlug(process.env.PHONE_APP_ID, `${agentProvider}-${uiPort}`);
+const phoneAppName = process.env.PHONE_APP_NAME || `${defaultAppNameForProvider(agentProvider)} ${uiPort}`;
+const phoneAppShortName = process.env.PHONE_APP_SHORT_NAME || `${defaultAppShortNameForProvider(agentProvider)} ${uiPort}`;
 const codexPort = Number(process.env.CODEX_APP_SERVER_PORT || 45213);
 const codexSocketPath = process.env.CODEX_APP_SERVER_SOCK || "";
 const codexUrl = process.env.CODEX_APP_SERVER_URL || (codexSocketPath ? "ws://codex-app-server/rpc" : `ws://127.0.0.1:${codexPort}`);
@@ -707,20 +727,58 @@ function sandboxPolicyForMode(mode) {
   };
 }
 
-function serveIndex(req, res, { includeManifest = true } = {}) {
+function escapeHtml(value) {
+  return String(value).replace(/[&<>]/g, (char) => {
+    if (char === "&") return "&amp;";
+    if (char === "<") return "&lt;";
+    return "&gt;";
+  });
+}
+
+function escapeHtmlAttribute(value) {
+  return escapeHtml(value).replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+function safeProxyBasePath(basePath) {
+  const value = String(basePath || "");
+  return /^\/(?:abs)?proxy\/\d+$/.test(value) ? value : "";
+}
+
+function manifestHrefForRequest(req, phoneToken) {
+  const url = new URL(req.url, `http://${req.headers.host}`);
+  const safeBasePath = safeProxyBasePath(url.searchParams.get("base"));
+  const params = new URLSearchParams();
+  if (phoneToken) params.set("token", phoneToken);
+  if (safeBasePath) params.set("base", safeBasePath);
+  const query = params.toString();
+  return `site.webmanifest${query ? `?${query}` : ""}`;
+}
+
+function serveIndex(req, res, { includeManifest = true, phoneToken = "" } = {}) {
   const indexPath = path.join(root, "public", "index.html");
   let html = fs.readFileSync(indexPath, "utf8");
+  html = html
+    .replace(/<title>[^<]*<\/title>/, `<title>${escapeHtml(phoneAppName)}</title>`)
+    .replace(
+      /<meta name="apple-mobile-web-app-title" content="[^"]*" \/>/,
+      `<meta name="apple-mobile-web-app-title" content="${escapeHtmlAttribute(phoneAppShortName)}" />`,
+    );
   if (!includeManifest) {
     html = html.replace(/\n\s*<link rel="manifest" href="site\.webmanifest" \/>/, "");
+  } else {
+    html = html.replace(
+      /<link rel="manifest" href="site\.webmanifest" \/>/,
+      `<link rel="manifest" href="${escapeHtmlAttribute(manifestHrefForRequest(req, phoneToken))}" />`,
+    );
   }
   res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
   res.end(html);
 }
 
-function serveStatic(req, res) {
+function serveStatic(req, res, phoneToken) {
   const requestPath = new URL(req.url, `http://${req.headers.host}`).pathname;
   if (requestPath === "/") {
-    serveIndex(req, res);
+    serveIndex(req, res, { phoneToken });
     return;
   }
   const file = requestPath.slice(1);
@@ -738,14 +796,16 @@ function serveStatic(req, res) {
 function serveManifest(url, phoneToken, res) {
   const manifestPath = path.join(root, "public", "site.webmanifest");
   const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-  const basePath = String(url.searchParams.get("base") || "");
-  const safeBasePath = /^\/(?:abs)?proxy\/\d+$/.test(basePath) ? basePath : "";
-  if (safeBasePath) {
-    manifest.id = `${safeBasePath}/codex-remote`;
-    manifest.scope = `${safeBasePath}/`;
-  }
+  const safeBasePath = safeProxyBasePath(url.searchParams.get("base"));
+  manifest.name = phoneAppName;
+  manifest.short_name = phoneAppShortName;
+  manifest.id = `${safeBasePath}/codex-remote-${phoneAppId}`;
+  manifest.scope = `${safeBasePath}/`;
+  manifest.description = `${phoneAppName} local phone bridge (${agentProvider}:${uiPort}).`;
   if (url.searchParams.get("token") === phoneToken) {
     manifest.start_url = `${safeBasePath}/?token=${encodeURIComponent(phoneToken)}`;
+  } else {
+    manifest.start_url = `${safeBasePath}/`;
   }
   res.writeHead(200, { "content-type": "application/manifest+json; charset=utf-8", "cache-control": "no-store" });
   res.end(JSON.stringify(manifest, null, 2));
@@ -1560,6 +1620,7 @@ async function main() {
         provider: agentProvider,
         model,
         workdir,
+        app: { id: phoneAppId, name: phoneAppName, shortName: phoneAppShortName },
         codexUrl: isCodexProvider ? codexUrl : null,
         codexSocketPath: isCodexProvider ? codexSocketPath || null : null,
         managedCodexServer: shouldStartCodexServer,
@@ -1572,7 +1633,7 @@ async function main() {
       return;
     }
     if (url.pathname === "/bookmark") {
-      serveIndex(req, res, { includeManifest: false });
+      serveIndex(req, res, { includeManifest: false, phoneToken });
       return;
     }
     if (url.pathname === "/api/threads") {
@@ -1740,6 +1801,7 @@ async function main() {
         provider: agentProvider,
         workdir,
         model,
+        app: { id: phoneAppId, name: phoneAppName, shortName: phoneAppShortName },
         codexUrl: isCodexProvider ? codexUrl : null,
         codexSocketPath: isCodexProvider ? codexSocketPath || null : null,
         managedCodexServer: shouldStartCodexServer,
@@ -1880,7 +1942,7 @@ async function main() {
       });
       return;
     }
-    serveStatic(req, res);
+    serveStatic(req, res, phoneToken);
   });
 
   const wss = new WebSocket.Server({ noServer: true });
@@ -1909,6 +1971,7 @@ async function main() {
     console.log(`Workdir: ${workdir}`);
     console.log(`Provider: ${agentProvider}`);
     console.log(`Model:   ${model}`);
+    console.log(`App:     ${phoneAppName} (${phoneAppId})`);
     console.log(`Bridge:  ${uiHost}:${uiPort}`);
     if (isCodexProvider) console.log(`Codex:   ${shouldStartCodexServer ? codexUrl : codexSocketPath || codexUrl}`);
     else console.log(`Claude:  ${claudeBin}`);
