@@ -39,6 +39,7 @@
   --state-ready: #266b42;
   --state-running: #0b65c2;
   --state-approval: #8f4c00;
+  --keyboard-inset: 0px;
 }
 
 :root[data-theme="cyberpunk"] {
@@ -153,6 +154,7 @@ button {
   max-width: 100%;
   height: 100vh;
   height: 100svh;
+  height: 100dvh;
   overflow: hidden;
 }
 
@@ -341,6 +343,7 @@ button.project-heading.active {
   max-width: 100%;
   height: 100vh;
   height: 100svh;
+  height: 100dvh;
   min-height: 0;
   min-width: 0;
   overflow: hidden;
@@ -1973,6 +1976,14 @@ html[data-provider="claude"] .model-button {
     min-height: 84px;
     margin-bottom: max(7px, env(safe-area-inset-bottom));
     border-radius: 17px;
+  }
+
+  body.keyboard-open .conversation {
+    padding-bottom: min(var(--keyboard-inset), 42vh);
+  }
+
+  body.keyboard-open .composer {
+    margin-bottom: max(10px, env(safe-area-inset-bottom));
   }
 
   .run-state {

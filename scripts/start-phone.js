@@ -776,11 +776,19 @@ function manifestHrefForRequest(req, phoneToken) {
   return `site.webmanifest${query ? `?${query}` : ""}`;
 }
 
+function staticAssetHref(fileName) {
+  const assetPath = path.join(root, "public", fileName);
+  const version = fs.existsSync(assetPath) ? `${Math.round(fs.statSync(assetPath).mtimeMs).toString(36)}-${phoneAppId}` : phoneAppId;
+  return `${fileName}?v=${encodeURIComponent(version)}`;
+}
+
 function serveIndex(req, res, { includeManifest = true, phoneToken = "" } = {}) {
   const indexPath = path.join(root, "public", "index.html");
   let html = fs.readFileSync(indexPath, "utf8");
   html = html
     .replace(/<title>[^<]*<\/title>/, `<title>${escapeHtml(phoneAppName)}</title>`)
+    .replace(/<link rel="stylesheet" href="style\.css" \/>/, `<link rel="stylesheet" href="${escapeHtmlAttribute(staticAssetHref("style.css"))}" />`)
+    .replace(/<script src="main\.js"><\/script>/, `<script src="${escapeHtmlAttribute(staticAssetHref("main.js"))}"></script>`)
     .replace(
       /<meta name="apple-mobile-web-app-title" content="[^"]*" \/>/,
       `<meta name="apple-mobile-web-app-title" content="${escapeHtmlAttribute(phoneAppShortName)}" />`,

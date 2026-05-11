@@ -44,6 +44,11 @@ const params = new URLSearchParams(location.search);
 const token = params.get("token") || localStorage.getItem("codexPhoneToken") || "";
 let selectedThread = params.get("thread") || "";
 if (token) localStorage.setItem("codexPhoneToken", token);
+if (token && !params.get("token") && window.history?.replaceState) {
+  const nextUrl = new URL(location.href);
+  nextUrl.searchParams.set("token", token);
+  window.history.replaceState(null, "", nextUrl);
+}
 const manifestLink = document.querySelector('link[rel="manifest"]');
 
 function proxyBasePath() {
@@ -754,7 +759,9 @@ function addStatus(text) {
 
 function setReady(ready) {
   sendButton.disabled = !ready;
-  promptInput.disabled = !ready;
+  promptInput.disabled = false;
+  composer.dataset.ready = ready ? "true" : "false";
+  sendButton.title = ready ? "送信" : "接続後に送信できます";
 }
 
 function renderHistory(history) {
@@ -1028,6 +1035,14 @@ function showRightPanel() {
 function closeRightPanel() {
   document.body.classList.add("hide-artifacts");
   document.body.classList.remove("show-panel");
+}
+
+function keepComposerVisible() {
+  if (!window.matchMedia("(max-width: 820px)").matches) return;
+  document.body.classList.remove("show-sidebar");
+  closeRightPanel();
+  requestAnimationFrame(() => composer.scrollIntoView({ block: "nearest", inline: "nearest" }));
+  window.setTimeout(() => composer.scrollIntoView({ block: "nearest", inline: "nearest" }), 250);
 }
 
 function clearPanel(title) {
@@ -1785,6 +1800,19 @@ mobileThreadsButton.addEventListener("click", () => {
 });
 sidebarScrim.addEventListener("click", () => document.body.classList.remove("show-sidebar"));
 connectButton.addEventListener("click", connect);
+promptInput.addEventListener("focus", keepComposerVisible);
+promptInput.addEventListener("click", keepComposerVisible);
+if (window.visualViewport) {
+  const updateKeyboardState = () => {
+    const inset = Math.max(0, window.innerHeight - window.visualViewport.height - window.visualViewport.offsetTop);
+    document.documentElement.style.setProperty("--keyboard-inset", `${Math.round(inset)}px`);
+    document.body.classList.toggle("keyboard-open", inset > 80);
+    if (document.activeElement === promptInput) keepComposerVisible();
+  };
+  window.visualViewport.addEventListener("resize", updateKeyboardState);
+  window.visualViewport.addEventListener("scroll", updateKeyboardState);
+  updateKeyboardState();
+}
 menuButton.addEventListener("click", () => {
   const desktopPanelVisible =
     window.matchMedia("(min-width: 1101px)").matches && !document.body.classList.contains("hide-artifacts");
