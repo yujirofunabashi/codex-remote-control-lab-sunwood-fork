@@ -84,6 +84,7 @@ let lastHistorySignature = "";
 let lastThreadListError = "";
 let lastThreadRefreshError = "";
 let selectedThreadRefreshActive = false;
+let activeProvider = "codex";
 let selectedModel = localStorage.getItem("codexPhoneModel") || "";
 let selectedModelLabel = localStorage.getItem("codexPhoneModelLabel") || "5.5";
 let selectedReasoning = localStorage.getItem("codexPhoneReasoning") || "中";
@@ -147,8 +148,26 @@ function setSelectedModel(model, { persist = true } = {}) {
   updateModelButton();
 }
 
+function providerSupportsReasoning() {
+  return activeProvider === "codex";
+}
+
+function setActiveProvider(provider) {
+  activeProvider = provider || "codex";
+  document.documentElement.dataset.provider = activeProvider;
+  updateModelButton();
+}
+
 function updateModelButton() {
-  modelButton.textContent = `${selectedModelLabel} ${selectedReasoning}`;
+  const showReasoning = providerSupportsReasoning();
+  modelButton.textContent = showReasoning ? `${selectedModelLabel} ${selectedReasoning}` : selectedModelLabel;
+  thinkingButton.hidden = !showReasoning;
+  modelMenu.classList.toggle("no-reasoning", !showReasoning);
+  for (const row of modelMenu.querySelectorAll(".model-menu-label, [data-reasoning]")) {
+    row.hidden = !showReasoning;
+  }
+  const separator = modelMenu.querySelector(".model-menu-separator");
+  if (separator) separator.hidden = !showReasoning;
   for (const row of modelMenu.querySelectorAll("[data-reasoning]")) {
     const active = row.dataset.reasoning === selectedReasoning;
     row.classList.toggle("active", active);
@@ -177,6 +196,7 @@ function toggleModelMenu() {
 }
 
 function selectReasoning(value) {
+  if (!providerSupportsReasoning()) return;
   selectedReasoning = value;
   localStorage.setItem("codexPhoneReasoning", value);
   updateModelButton();
@@ -1459,6 +1479,7 @@ function connect() {
     const msg = JSON.parse(event.data);
     if (msg.type === "ready") {
       setReady(true);
+      setActiveProvider(msg.provider || "codex");
       setSelectedModel(msg.model, { persist: false });
       syncReadyThread(msg.threadId);
       renderHistoryIfChanged(msg.history || []);

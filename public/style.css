@@ -973,6 +973,16 @@ textarea::placeholder {
   min-width: 0;
 }
 
+.composer-left {
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.composer-right {
+  flex: 0 0 auto;
+  justify-content: flex-end;
+}
+
 .ghost-button,
 .access-button,
 .model-button,
@@ -985,10 +995,16 @@ textarea::placeholder {
 }
 
 .access-button {
+  min-width: 0;
   color: var(--accent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .model-button {
+  flex: 0 1 auto;
+  min-width: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1068,6 +1084,14 @@ textarea::placeholder {
     linear-gradient(var(--accent), var(--accent)) center 15px / 14px 2px no-repeat;
 }
 
+html[data-provider="claude"] .thinking-button {
+  display: none;
+}
+
+html[data-provider="claude"] .model-button {
+  max-width: 96px;
+}
+
 .model-menu {
   position: absolute;
   right: 52px;
@@ -1080,6 +1104,10 @@ textarea::placeholder {
   background: var(--card);
   color: var(--text);
   box-shadow: 0 20px 44px color-mix(in srgb, var(--text) 12%, transparent);
+}
+
+.model-menu.no-reasoning {
+  padding-top: 8px;
 }
 
 .model-menu-label {
@@ -1981,6 +2009,8 @@ textarea::placeholder {
   }
 
   .composer-footer {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
     gap: 8px;
     padding: 0 9px 8px;
   }
@@ -2038,9 +2068,6 @@ textarea::placeholder {
 
   .access-button {
     max-width: 110px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 }
 
@@ -2135,7 +2162,11 @@ textarea::placeholder {
   }
 
   .model-button {
-    max-width: 66px;
+    max-width: 72px;
+  }
+
+  html[data-provider="claude"] .model-button {
+    max-width: 84px;
   }
 
   .model-menu {
@@ -2183,9 +2214,13 @@ textarea::placeholder {
   }
 
   .model-button {
-    max-width: 52px;
+    max-width: 58px;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  html[data-provider="claude"] .model-button {
+    max-width: 74px;
   }
 
   .ghost-button,
