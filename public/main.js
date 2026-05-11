@@ -1046,6 +1046,8 @@ function renderLocalSettings(payload) {
   const active = payload.active || {};
   const settings = payload.settings || {};
   const options = payload.options || {};
+  const modelsByProvider = options.modelsByProvider || { [active.provider || "codex"]: options.models || [] };
+  const defaultModels = options.defaultModels || {};
   let workspaceItems = options.workspaces || [];
 
   const modelLabel = document.createElement("div");
@@ -1059,14 +1061,28 @@ function renderLocalSettings(payload) {
 
   const modelSelect = document.createElement("select");
   modelSelect.className = "settings-select";
-  const modelValues = new Set([settings.model, active.model, selectedModel, ...(options.models || [])].filter(Boolean));
-  for (const modelValue of modelValues) {
-    const option = document.createElement("option");
-    option.value = modelValue;
-    option.textContent = modelValue;
-    modelSelect.appendChild(option);
+
+  function modelChoicesForProvider(provider) {
+    return modelsByProvider[provider] || options.models || [];
   }
-  modelSelect.value = settings.model || active.model || selectedModel || "";
+
+  function preferredModelForProvider(provider) {
+    if (settings.provider === provider && settings.model) return settings.model;
+    if (active.provider === provider && active.model) return active.model;
+    return defaultModels[provider] || modelChoicesForProvider(provider)[0] || selectedModel || "";
+  }
+
+  function renderModelSelectForProvider(provider, selectedValue = preferredModelForProvider(provider)) {
+    const modelValues = new Set([selectedValue, defaultModels[provider], ...(modelChoicesForProvider(provider) || [])].filter(Boolean));
+    modelSelect.replaceChildren();
+    for (const modelValue of modelValues) {
+      const option = document.createElement("option");
+      option.value = modelValue;
+      option.textContent = modelValue;
+      modelSelect.appendChild(option);
+    }
+    modelSelect.value = selectedValue || modelSelect.options[0]?.value || "";
+  }
 
   const providerSelect = document.createElement("select");
   providerSelect.className = "settings-select";
@@ -1078,6 +1094,7 @@ function renderLocalSettings(payload) {
     providerSelect.appendChild(option);
   }
   providerSelect.value = settings.provider || active.provider || "codex";
+  renderModelSelectForProvider(providerSelect.value);
 
   const workspaceSelect = document.createElement("select");
   workspaceSelect.className = "settings-select";
@@ -1106,6 +1123,13 @@ function renderLocalSettings(payload) {
   historyInput.checked = settings.historySyncEnabled !== false;
   historyLabel.append(historyInput, document.createTextNode("履歴同期"));
 
+  function updateProviderDependentControls() {
+    const nextProvider = providerSelect.value || "codex";
+    renderModelSelectForProvider(nextProvider);
+    historyInput.disabled = nextProvider !== "codex";
+    historyLabel.classList.toggle("disabled", historyInput.disabled);
+  }
+
   const status = document.createElement("div");
   status.className = payload.restartRequired ? "settings-status warning" : "settings-status";
   status.textContent = payload.restartRequired ? "保存済み設定があります。再起動で反映します。" : "起動中の設定と一致しています。";
@@ -1132,6 +1156,12 @@ function renderLocalSettings(payload) {
   restartButton.textContent = "再起動";
   actions.append(saveButton, restartButton);
   form.appendChild(actions);
+
+  providerSelect.addEventListener("change", () => {
+    updateProviderDependentControls();
+    setSettingsStatus(status, "Providerを変更しました。保存後、再起動で反映します。", "warning");
+  });
+  updateProviderDependentControls();
 
   addWorkspaceButton.addEventListener("click", async () => {
     const nextPath = manualInput.value.trim();

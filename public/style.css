@@ -1571,6 +1571,11 @@ html[data-provider="claude"] .model-button {
   height: 18px;
 }
 
+.settings-check.disabled {
+  color: var(--muted);
+  opacity: 0.62;
+}
+
 .settings-status {
   border: 1px solid var(--line);
   border-radius: 8px;

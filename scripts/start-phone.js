@@ -86,6 +86,30 @@ const staticMimeTypes = new Map([
   [".webmanifest", "application/manifest+json"],
 ]);
 
+function modelEnvKeyForProvider(provider) {
+  return provider === "claude" ? "CLAUDE_MODEL" : "CODEX_MODEL";
+}
+
+function workdirEnvKeyForProvider(provider) {
+  return provider === "claude" ? "CLAUDE_WORKDIR" : "CODEX_WORKDIR";
+}
+
+function defaultModelForProvider(provider) {
+  return provider === "claude" ? "sonnet" : "gpt-5.4";
+}
+
+function modelOptionsForProvider(provider) {
+  return provider === "claude" ? claudeModelOptions : codexModelOptions;
+}
+
+function modelFromEnv(env, provider, fallback = defaultModelForProvider(provider)) {
+  return env.PHONE_MODEL || env[modelEnvKeyForProvider(provider)] || (provider === "codex" ? env.CODEX_MODEL : undefined) || fallback;
+}
+
+function workdirFromEnv(env, provider, fallback = workdir) {
+  return env.PHONE_WORKDIR || env[workdirEnvKeyForProvider(provider)] || env.CODEX_WORKDIR || fallback;
+}
+
 function getToken() {
   if (process.env.PHONE_TOKEN) return process.env.PHONE_TOKEN;
   if (fs.existsSync(tokenPath)) return fs.readFileSync(tokenPath, "utf8").trim();
@@ -275,11 +299,11 @@ function workspaceOptions() {
 function localSettingsPayload() {
   const envValues = parseEnvValues(envPath);
   const savedProvider = normalizeProvider(envValues.PHONE_AGENT_PROVIDER || agentProvider);
-  const savedHistorySyncEnabled = isCodexProvider ? isHistorySyncEnabled({ CODEX_HISTORY_SYNC: envValues.CODEX_HISTORY_SYNC }) : false;
+  const savedHistorySyncEnabled = savedProvider === "codex" ? isHistorySyncEnabled({ CODEX_HISTORY_SYNC: envValues.CODEX_HISTORY_SYNC }) : false;
   const savedPort = Number(envValues.PHONE_UI_PORT || uiPort);
   const savedHost = envValues.PHONE_UI_HOST || uiHost;
-  const savedModel = envValues.PHONE_MODEL || envValues[modelEnvKey] || (isClaudeProvider ? model : envValues.CODEX_MODEL || model);
-  const savedWorkdir = envValues.PHONE_WORKDIR || envValues[workdirEnvKey] || envValues.CODEX_WORKDIR || workdir;
+  const savedModel = modelFromEnv(envValues, savedProvider, savedProvider === agentProvider ? model : defaultModelForProvider(savedProvider));
+  const savedWorkdir = workdirFromEnv(envValues, savedProvider, workdir);
   return {
     settings: {
       provider: savedProvider,
@@ -300,6 +324,14 @@ function localSettingsPayload() {
     options: {
       providers: ["codex", "claude"],
       models: modelOptions,
+      modelsByProvider: {
+        codex: codexModelOptions,
+        claude: claudeModelOptions,
+      },
+      defaultModels: {
+        codex: modelFromEnv(envValues, "codex", defaultModelForProvider("codex")),
+        claude: modelFromEnv(envValues, "claude", defaultModelForProvider("claude")),
+      },
       workspaces: workspaceOptions(),
     },
     restartRequired:
@@ -1517,10 +1549,11 @@ async function main() {
         try {
           const body = await readJsonBody(req);
           const updates = {};
-          if (Object.prototype.hasOwnProperty.call(body, "provider")) updates.PHONE_AGENT_PROVIDER = normalizeProvider(body.provider);
-          if (Object.prototype.hasOwnProperty.call(body, "model")) updates[modelEnvKey] = validateModel(body.model);
-          if (Object.prototype.hasOwnProperty.call(body, "workdir")) updates[workdirEnvKey] = rememberWorkspace(body.workdir);
-          if (isCodexProvider && Object.prototype.hasOwnProperty.call(body, "historySyncEnabled")) {
+          const requestedProvider = Object.prototype.hasOwnProperty.call(body, "provider") ? normalizeProvider(body.provider) : agentProvider;
+          if (Object.prototype.hasOwnProperty.call(body, "provider")) updates.PHONE_AGENT_PROVIDER = requestedProvider;
+          if (Object.prototype.hasOwnProperty.call(body, "model")) updates[modelEnvKeyForProvider(requestedProvider)] = validateModel(body.model);
+          if (Object.prototype.hasOwnProperty.call(body, "workdir")) updates[workdirEnvKeyForProvider(requestedProvider)] = rememberWorkspace(body.workdir);
+          if (requestedProvider === "codex" && Object.prototype.hasOwnProperty.call(body, "historySyncEnabled")) {
             updates.CODEX_HISTORY_SYNC = body.historySyncEnabled ? "1" : "0";
           }
           writeEnvValues(updates);
