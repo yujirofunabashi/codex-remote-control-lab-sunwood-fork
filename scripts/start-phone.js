@@ -782,7 +782,7 @@ function staticAssetHref(fileName) {
   return `${fileName}?v=${encodeURIComponent(version)}`;
 }
 
-function serveIndex(req, res, { includeManifest = true, phoneToken = "" } = {}) {
+function serveIndex(req, res, { includeManifest = true, standalone = true, phoneToken = "" } = {}) {
   const indexPath = path.join(root, "public", "index.html");
   let html = fs.readFileSync(indexPath, "utf8");
   html = html
@@ -793,6 +793,12 @@ function serveIndex(req, res, { includeManifest = true, phoneToken = "" } = {}) 
       /<meta name="apple-mobile-web-app-title" content="[^"]*" \/>/,
       `<meta name="apple-mobile-web-app-title" content="${escapeHtmlAttribute(phoneAppShortName)}" />`,
     );
+  if (!standalone) {
+    html = html
+      .replace(/\n\s*<meta name="apple-mobile-web-app-capable" content="yes" \/>/, "")
+      .replace(/\n\s*<meta name="apple-mobile-web-app-title" content="[^"]*" \/>/, "")
+      .replace(/\n\s*<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" \/>/, "");
+  }
   if (!includeManifest) {
     html = html.replace(/\n\s*<link rel="manifest" href="site\.webmanifest" \/>/, "");
   } else {
@@ -1672,7 +1678,7 @@ async function main() {
       return;
     }
     if (url.pathname === "/bookmark") {
-      serveIndex(req, res, { includeManifest: false, phoneToken });
+      serveIndex(req, res, { includeManifest: false, standalone: false, phoneToken });
       return;
     }
     if (url.pathname === "/api/threads") {
