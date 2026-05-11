@@ -782,11 +782,32 @@ function staticAssetHref(fileName) {
   return `${fileName}?v=${encodeURIComponent(version)}`;
 }
 
+function bookmarkIconFileName() {
+  return agentProvider === "claude" ? "bookmark-claude.png" : "bookmark-codex.png";
+}
+
+function bookmarkIcon512FileName() {
+  return agentProvider === "claude" ? "bookmark-claude-512.png" : "bookmark-codex-512.png";
+}
+
+function iconHrefForRequest() {
+  return staticAssetHref(bookmarkIconFileName());
+}
+
 function serveIndex(req, res, { includeManifest = true, standalone = true, phoneToken = "" } = {}) {
   const indexPath = path.join(root, "public", "index.html");
+  const pageTitle = standalone ? phoneAppName : phoneAppShortName;
   let html = fs.readFileSync(indexPath, "utf8");
   html = html
-    .replace(/<title>[^<]*<\/title>/, `<title>${escapeHtml(phoneAppName)}</title>`)
+    .replace(/<title>[^<]*<\/title>/, `<title>${escapeHtml(pageTitle)}</title>`)
+    .replace(
+      /<link rel="icon" type="image\/png" sizes="192x192" href="icon-192\.png" \/>/,
+      `<link rel="icon" type="image/png" sizes="180x180" href="${escapeHtmlAttribute(iconHrefForRequest())}" />`,
+    )
+    .replace(
+      /<link rel="apple-touch-icon" href="apple-touch-icon\.png" \/>/,
+      `<link rel="apple-touch-icon" sizes="180x180" href="${escapeHtmlAttribute(iconHrefForRequest())}" />`,
+    )
     .replace(/<link rel="stylesheet" href="style\.css" \/>/, `<link rel="stylesheet" href="${escapeHtmlAttribute(staticAssetHref("style.css"))}" />`)
     .replace(/<script src="main\.js"><\/script>/, `<script src="${escapeHtmlAttribute(staticAssetHref("main.js"))}"></script>`)
     .replace(
@@ -838,6 +859,20 @@ function serveManifest(url, phoneToken, res) {
   manifest.id = `${safeBasePath}/codex-remote-${phoneAppId}`;
   manifest.scope = `${safeBasePath}/`;
   manifest.description = `${phoneAppName} local phone bridge (${agentProvider}:${uiPort}).`;
+  manifest.icons = [
+    {
+      src: `${safeBasePath}/${bookmarkIconFileName()}?v=${encodeURIComponent(phoneAppId)}`,
+      sizes: "180x180",
+      type: "image/png",
+      purpose: "any",
+    },
+    {
+      src: `${safeBasePath}/${bookmarkIcon512FileName()}?v=${encodeURIComponent(phoneAppId)}`,
+      sizes: "512x512",
+      type: "image/png",
+      purpose: "any maskable",
+    },
+  ];
   if (url.searchParams.get("token") === phoneToken) {
     manifest.start_url = `${safeBasePath}/?token=${encodeURIComponent(phoneToken)}`;
   } else {
