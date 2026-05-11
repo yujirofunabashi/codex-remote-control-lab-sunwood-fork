@@ -136,10 +136,21 @@ const accessModes = [
   { label: "確認モード", approvalPolicy: "on-request", sandboxMode: "workspace-write" },
   { label: "読み取り専用", approvalPolicy: "on-request", sandboxMode: "read-only" },
 ];
+const inlineModelChoices = {
+  codex: ["gpt-5.5", "gpt-5.4"],
+  claude: ["sonnet", "opus", "haiku"],
+};
 
 function labelForModel(model) {
   const label = String(model || "").replace(/^GPT-/, "").replace(/^gpt-/, "");
   return label || "model";
+}
+
+function displayModelName(model) {
+  const value = String(model || "");
+  if (/^gpt-/i.test(value)) return value.toUpperCase();
+  if (/^claude-/i.test(value)) return value.replace(/-/g, " ");
+  return value ? value[0].toUpperCase() + value.slice(1) : "Model";
 }
 
 function setSelectedModel(model, { persist = true } = {}) {
@@ -185,6 +196,7 @@ function updateModelButton() {
   modelButton.textContent = showReasoning ? `${selectedModelLabel} ${selectedReasoning}` : selectedModelLabel;
   thinkingButton.hidden = !showReasoning;
   modelMenu.classList.toggle("no-reasoning", !showReasoning);
+  renderInlineModelChoices();
   for (const row of modelMenu.querySelectorAll(".model-menu-label, [data-reasoning]")) {
     row.hidden = !showReasoning;
   }
@@ -205,6 +217,26 @@ function updateModelButton() {
   }
   for (const row of modelMenu.querySelectorAll("[data-model-choice]")) {
     row.classList.toggle("active", row.dataset.modelChoice === selectedModel);
+  }
+}
+
+function renderInlineModelChoices() {
+  const moreButton = modelMenu.querySelector("#moreModelsButton");
+  if (!moreButton) return;
+  for (const row of modelMenu.querySelectorAll("[data-model-choice]")) row.remove();
+  const choices = [...(inlineModelChoices[activeProvider] || inlineModelChoices.codex)];
+  if (selectedModel && !choices.includes(selectedModel)) choices.unshift(selectedModel);
+  for (const choice of choices) {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "model-menu-row submenu-row";
+    row.dataset.modelChoice = choice;
+    row.append(document.createTextNode(displayModelName(choice)));
+    const chevron = document.createElement("span");
+    chevron.className = "chevron";
+    chevron.textContent = "›";
+    row.appendChild(chevron);
+    moreButton.before(row);
   }
 }
 

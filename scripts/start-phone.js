@@ -44,6 +44,7 @@ function uploadLimitBytes() {
 const codexBin = path.join(root, "node_modules", ".bin", "codex");
 const claudeBin = process.env.CLAUDE_BIN || "claude";
 const envPath = path.join(root, ".env");
+const claudeProjectsRoot = path.join(os.homedir(), ".claude", "projects");
 const uiPort = Number(process.env.PHONE_UI_PORT || 45214);
 const uiHost = process.env.PHONE_UI_HOST || "0.0.0.0";
 const agentProvider = normalizeProvider(process.env.PHONE_AGENT_PROVIDER || process.env.AGENT_PROVIDER || process.env.PHONE_AGENT_PROVIDER_DEFAULT || "codex");
@@ -818,6 +819,123 @@ function capHistory(history) {
   return history.slice(-historyLimit);
 }
 
+function claudeProjectDirFor(cwd = workdir) {
+  return path.join(claudeProjectsRoot, path.resolve(cwd).replace(/[^A-Za-z0-9]/g, "-"));
+}
+
+function textFromClaudeContent(content) {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  const parts = [];
+  for (const part of content) {
+    if (part?.type === "text" && typeof part.text === "string") parts.push(part.text);
+  }
+  return parts.join("\n");
+}
+
+function claudeSessionFilePath(sessionId) {
+  const id = String(sessionId || "").trim();
+  if (!/^[A-Za-z0-9._:-]+$/.test(id)) return null;
+  const base = path.resolve(claudeProjectDirFor());
+  const target = path.resolve(base, `${id}.jsonl`);
+  if (!target.startsWith(`${base}${path.sep}`)) return null;
+  return target;
+}
+
+function readClaudeSessionFile(filePath) {
+  if (!filePath || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) return null;
+  const sessionId = path.basename(filePath, ".jsonl");
+  const stat = fs.statSync(filePath);
+  const history = [];
+  let title = "";
+  let firstUserText = "";
+  let lastUserText = "";
+  let cwd = workdir;
+  let createdAt = Number.POSITIVE_INFINITY;
+  let updatedAt = stat.mtimeMs;
+
+  for (const line of fs.readFileSync(filePath, "utf8").split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    let item;
+    try {
+      item = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (item.cwd) cwd = item.cwd;
+    if (item.type === "ai-title" && item.aiTitle) title = String(item.aiTitle);
+    const timestamp = Date.parse(item.timestamp || "");
+    if (Number.isFinite(timestamp)) {
+      createdAt = Math.min(createdAt, timestamp);
+      updatedAt = Math.max(updatedAt, timestamp);
+    }
+    if (item.type !== "user" && item.type !== "assistant") continue;
+    const text = textFromClaudeContent(item.message?.content);
+    if (!text.trim()) continue;
+    const role = item.message?.role === "assistant" || item.type === "assistant" ? "assistant" : "user";
+    if (role === "user") {
+      if (!firstUserText) firstUserText = text;
+      lastUserText = text;
+    }
+    history.push({
+      type: role === "assistant" ? "assistant" : "user",
+      text,
+      outputGroup: item.uuid || item.requestId || sessionId,
+    });
+  }
+
+  const fallbackTitle = firstUserText || sessionId;
+  const firstTimestamp = Number.isFinite(createdAt) ? createdAt : stat.birthtimeMs;
+  return {
+    summary: {
+      id: sessionId,
+      name: title || fallbackTitle,
+      preview: lastUserText || fallbackTitle,
+      cwd,
+      provider: "claude",
+      updatedAt,
+      updated_at: updatedAt,
+      createdAt: firstTimestamp,
+      created_at: firstTimestamp,
+    },
+    history: capHistory(history),
+  };
+}
+
+function readClaudeSession(sessionId) {
+  return readClaudeSessionFile(claudeSessionFilePath(sessionId));
+}
+
+function claudeHistoryForSession(sessionId) {
+  return readClaudeSession(sessionId)?.history || [];
+}
+
+function claudeThreadListPayload() {
+  const byId = new Map();
+  const dir = claudeProjectDirFor();
+  if (fs.existsSync(dir)) {
+    for (const fileName of fs.readdirSync(dir)) {
+      if (!fileName.endsWith(".jsonl")) continue;
+      const session = readClaudeSessionFile(path.join(dir, fileName));
+      if (session) byId.set(session.summary.id, session.summary);
+    }
+  }
+  for (const thread of localThreadList()) {
+    const existing = byId.get(thread.id);
+    byId.set(thread.id, {
+      ...existing,
+      ...thread,
+      name: thread.name === thread.id && existing?.name ? existing.name : thread.name,
+      preview: thread.preview === thread.id && existing?.preview ? existing.preview : thread.preview,
+    });
+  }
+  return {
+    provider: "claude",
+    activeProvider: agentProvider,
+    data: Array.from(byId.values()).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)),
+  };
+}
+
 class SharedBridge {
   constructor(requestedThreadId, bridgeKey) {
     this.requestedThreadId = requestedThreadId;
@@ -1140,7 +1258,7 @@ class ClaudeBridge {
     this.claudeSessionId = requestedThreadId && !requestedThreadId.startsWith("claude:") ? requestedThreadId : null;
     this.activeTurnId = null;
     this.ready = true;
-    this.history = [];
+    this.history = this.claudeSessionId ? claudeHistoryForSession(this.claudeSessionId) : [];
     this.turnQueue = [];
     this.activeProcess = null;
   }
@@ -1461,11 +1579,7 @@ async function main() {
       if (!requireToken(url, phoneToken, res)) return;
       const requestedProvider = normalizeProvider(url.searchParams.get("provider") || agentProvider);
       if (requestedProvider === "claude") {
-        sendJson(res, 200, {
-          provider: requestedProvider,
-          activeProvider: agentProvider,
-          data: requestedProvider === agentProvider ? localThreadList() : [],
-        });
+        sendJson(res, 200, claudeThreadListPayload());
         return;
       }
       try {
@@ -1674,7 +1788,7 @@ async function main() {
           provider: requestedProvider,
           activeProvider: agentProvider,
           threadId,
-          history: requestedProvider === agentProvider ? bridge?.history || [] : [],
+          history: bridge?.history?.length ? bridge.history : claudeHistoryForSession(threadId),
         });
         return;
       }

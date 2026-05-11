@@ -35,7 +35,7 @@ phone browser
   -> Codex app-server on ws://127.0.0.1:45213
 ```
 
-In Claude mode, the last hop changes to a per-turn `claude -p --output-format stream-json` process. The phone UI and upload path stay the same, but session resume relies on the Claude session ID returned by the CLI rather than Codex app-server threads.
+In Claude mode, the last hop changes to a per-turn `claude -p --output-format stream-json` process. The phone UI and upload path stay the same, but session resume relies on the Claude session ID returned by the CLI rather than Codex app-server threads. The Claude sidebar reads same-workdir Claude Code JSONL sessions from the local Claude project history.
 
 The `phone:claude` script sets Claude as the default provider only. If you save another provider from the settings panel and restart, the saved `.env` value takes precedence.
 
@@ -81,7 +81,7 @@ Startup notifications are optional. If `PHONE_NTFY_TOPIC` is set, the bridge pos
 
 Background thread-list polling suppresses repeated identical errors. A transient app-server restart or token mismatch should not continuously fill the chat log with the same `/api/threads` failure.
 
-Claude mode is intentionally narrower than Codex mode. It does not provide Codex app-server thread listing, plugin lookup, history sync, or live tool approval callbacks. Use `CLAUDE_PERMISSION_MODE` or the UI permission mode to decide how much autonomy each spawned Claude run has.
+Claude mode is intentionally narrower than Codex mode. It has Claude Code session listing for the active workdir, but does not provide Codex app-server history sync, plugin lookup, or live tool approval callbacks. Use `CLAUDE_PERMISSION_MODE` or the UI permission mode to decide how much autonomy each spawned Claude run has.
 
 ## UI Surface
 

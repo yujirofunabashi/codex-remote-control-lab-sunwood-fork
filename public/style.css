@@ -1131,6 +1131,12 @@ html[data-provider="claude"] .model-button {
   font-size: 16px;
 }
 
+.model-menu-label[hidden],
+.model-menu-row[hidden],
+.model-menu-separator[hidden] {
+  display: none !important;
+}
+
 .model-menu-row:hover,
 .model-menu-row.active {
   background: var(--soft);
