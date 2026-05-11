@@ -30,6 +30,11 @@ function loadEnvFile(filePath) {
 
 loadEnvFile(path.join(root, ".env"));
 
+function uploadLimitBytes() {
+  const mb = Number(process.env.PHONE_MAX_UPLOAD_MB || 256);
+  return (Number.isFinite(mb) && mb > 0 ? mb : 256) * 1024 * 1024;
+}
+
 const codexBin = path.join(root, "node_modules", ".bin", "codex");
 const envPath = path.join(root, ".env");
 const uiPort = Number(process.env.PHONE_UI_PORT || 45214);
@@ -44,6 +49,7 @@ const historySyncEnabled = isHistorySyncEnabled(process.env);
 const tokenPath = path.join(root, ".phone-token");
 const workspacePrefsPath = path.join(root, ".phone-workspaces.json");
 const uploadDir = path.join(root, ".uploads");
+const maxUploadBytes = uploadLimitBytes();
 const modelOptions = ["gpt-5.5", "gpt-5.4", "gpt-5.3-codex", "gpt-5.3-codex-spark", "gpt-5.2"];
 const bridges = new Map();
 const historyLimit = 80;
@@ -501,6 +507,96 @@ function isMissingThreadError(error) {
   return /no rollout found for thread id/i.test(error?.message || "");
 }
 
+function isAudioUpload(name, mime) {
+  return String(mime || "").startsWith("audio/") || /\.(m4a|mp3|wav|aac|flac|ogg|webm|mp4)$/i.test(String(name || ""));
+}
+
+function createUploadRecord(originalName, mime) {
+  const cleanMime = String(mime || "application/octet-stream").split(";")[0].trim() || "application/octet-stream";
+  const sourceName = String(originalName || "upload");
+  const originalExtension = path.extname(sourceName).replace(/[^a-z0-9.]/gi, "").slice(0, 12);
+  const isImage = cleanMime.startsWith("image/");
+  const isAudio = isAudioUpload(sourceName, cleanMime);
+  if (!isImage && !isAudio) throw new Error("Unsupported attachment type");
+
+  fs.mkdirSync(uploadDir, { recursive: true });
+  const extension = originalExtension || `.${cleanMime.split("/")[1]?.replace(/[^a-z0-9]/gi, "") || (isImage ? "png" : "dat")}`;
+  const safeName = sourceName
+    .replace(/[^a-z0-9._-]/gi, "-")
+    .replace(/-+/g, "-")
+    .slice(0, 64);
+  const nameWithExtension = path.extname(safeName) ? safeName : `${safeName || (isImage ? "image" : "audio")}${extension}`;
+  const fileName = `${Date.now()}-${crypto.randomBytes(4).toString("hex")}-${nameWithExtension}`;
+  const target = path.join(uploadDir, fileName);
+  return uploadRecordForTarget(target, sourceName, cleanMime);
+}
+
+function uploadRecordForTarget(target, originalName, mime) {
+  const fileName = path.basename(target);
+  const cleanMime = String(mime || mimeForPath(target) || "application/octet-stream").split(";")[0].trim() || "application/octet-stream";
+  const isImage = cleanMime.startsWith("image/") || isImagePath(target);
+  const isAudio = isAudioUpload(originalName || fileName, cleanMime);
+  if (!isImage && !isAudio) return null;
+  return {
+    input: isImage ? { type: "localImage", path: target } : null,
+    preview: {
+      name: originalName || fileName,
+      path: fileName,
+      absolutePath: target,
+      kind: isImage ? "image" : "audio",
+      mimeType: cleanMime,
+      url: isImage ? `/api/uploaded?name=${encodeURIComponent(fileName)}` : null,
+    },
+  };
+}
+
+function uploadedAttachmentRecord(attachment) {
+  const absolute = String(attachment.absolutePath || "").trim();
+  const target = absolute ? path.resolve(absolute) : safeUploadPath(attachment.path);
+  if (!target || (!target.startsWith(`${uploadDir}${path.sep}`) && target !== uploadDir)) return null;
+  if (!fs.existsSync(target) || !fs.statSync(target).isFile()) return null;
+  return uploadRecordForTarget(target, attachment.name || path.basename(target), attachment.mimeType || attachment.type);
+}
+
+function errorWithStatus(message, statusCode) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
+}
+
+function writeUploadStream(req, target) {
+  return new Promise((resolve, reject) => {
+    let received = 0;
+    let settled = false;
+    const out = fs.createWriteStream(target, { mode: 0o600 });
+    const fail = (error) => {
+      if (settled) return;
+      settled = true;
+      out.destroy();
+      fs.rm(target, { force: true }, () => reject(error));
+    };
+
+    req.on("data", (chunk) => {
+      if (settled) return;
+      received += chunk.length;
+      if (received > maxUploadBytes) {
+        req.pause();
+        fail(errorWithStatus(`Attachment is too large. Limit is ${Math.round(maxUploadBytes / 1024 / 1024)}MB.`, 413));
+        req.resume();
+      }
+    });
+    req.on("aborted", () => fail(errorWithStatus("Upload was aborted", 400)));
+    req.on("error", fail);
+    out.on("error", fail);
+    out.on("finish", () => {
+      if (settled) return;
+      settled = true;
+      resolve(received);
+    });
+    req.pipe(out);
+  });
+}
+
 function discoverArtifacts() {
   const files = ["README.md", "AGENTS.md"];
   const assetsDir = path.join(root, "docs", "assets");
@@ -535,35 +631,16 @@ function readAutomations() {
 }
 
 function saveDataUrlAttachment(attachment) {
+  const uploaded = uploadedAttachmentRecord(attachment);
+  if (uploaded) return uploaded;
   const match = String(attachment.dataUrl || "").match(/^data:([^;]+);base64,(.+)$/);
   if (!match) return null;
   const mime = match[1];
-  const originalName = String(attachment.name || "upload");
-  const originalExtension = path.extname(originalName).replace(/[^a-z0-9.]/gi, "").slice(0, 12);
-  const isImage = mime.startsWith("image/");
-  const isAudio = mime.startsWith("audio/") || /\.(m4a|mp3|wav|aac|flac|ogg|webm|mp4)$/i.test(originalName);
-  if (!isImage && !isAudio) return null;
-  fs.mkdirSync(uploadDir, { recursive: true });
-  const extension = originalExtension || `.${mime.split("/")[1]?.replace(/[^a-z0-9]/gi, "") || (isImage ? "png" : "dat")}`;
-  const safeName = originalName
-    .replace(/[^a-z0-9._-]/gi, "-")
-    .replace(/-+/g, "-")
-    .slice(0, 64);
-  const nameWithExtension = path.extname(safeName) ? safeName : `${safeName || (isImage ? "image" : "audio")}${extension}`;
-  const fileName = `${Date.now()}-${crypto.randomBytes(4).toString("hex")}-${nameWithExtension}`;
-  const target = path.join(uploadDir, fileName);
-  fs.writeFileSync(target, Buffer.from(match[2], "base64"), { mode: 0o600 });
-  return {
-    input: isImage ? { type: "localImage", path: target } : null,
-    preview: {
-      name: attachment.name || fileName,
-      path: fileName,
-      absolutePath: target,
-      kind: isImage ? "image" : "audio",
-      mimeType: mime,
-      url: isImage ? `/api/uploaded?name=${encodeURIComponent(fileName)}` : null,
-    },
-  };
+  const buffer = Buffer.from(match[2], "base64");
+  if (buffer.length > maxUploadBytes) throw errorWithStatus(`Attachment is too large. Limit is ${Math.round(maxUploadBytes / 1024 / 1024)}MB.`, 413);
+  const record = createUploadRecord(attachment.name || "upload", mime);
+  fs.writeFileSync(record.preview.absolutePath, buffer, { mode: 0o600 });
+  return record;
 }
 
 function sandboxPolicyForMode(mode) {
@@ -896,14 +973,23 @@ class SharedBridge {
       this.emit("status", { text: `キューに追加しました（${this.turnQueue.length}件待機）` });
       return;
     }
-    this.startPrompt(text, attachments, options);
+    try {
+      this.startPrompt(text, attachments, options);
+    } catch (error) {
+      this.emit("error", { text: `送信に失敗しました: ${error.message}` });
+    }
   }
 
   startNextQueuedTurn() {
     if (!this.ready || this.activeTurnId || this.hasPendingTurnStart() || !this.turnQueue.length) return;
     const next = this.turnQueue.shift();
     this.emit("status", { text: `キューから送信中（残り${this.turnQueue.length}件）` });
-    this.startPrompt(next.text, next.attachments, next.options);
+    try {
+      this.startPrompt(next.text, next.attachments, next.options);
+    } catch (error) {
+      this.emit("error", { text: `送信に失敗しました: ${error.message}` });
+      this.startNextQueuedTurn();
+    }
   }
 
   syncHistory(reason) {
@@ -996,7 +1082,13 @@ function bindBrowser(browser, phoneToken, threadId) {
   bridge.addClient(browser);
 
   browser.on("message", (data) => {
-    const msg = JSON.parse(data.toString());
+    let msg;
+    try {
+      msg = JSON.parse(data.toString());
+    } catch (error) {
+      bridge.emitTo(browser, "error", { text: `Invalid browser message: ${error.message}` });
+      return;
+    }
     if (msg.token !== phoneToken) {
       bridge.emitTo(browser, "error", { text: "Invalid token" });
       browser.close();
@@ -1131,6 +1223,29 @@ async function main() {
         return;
       }
       sendJson(res, 405, { error: "method not allowed" });
+      return;
+    }
+    if (url.pathname === "/api/upload") {
+      if (!requireToken(url, phoneToken, res)) return;
+      if (req.method !== "POST") {
+        sendJson(res, 405, { error: "method not allowed" });
+        return;
+      }
+      const contentLength = Number(req.headers["content-length"] || 0);
+      if (contentLength > maxUploadBytes) {
+        req.resume();
+        sendJson(res, 413, { error: `Attachment is too large. Limit is ${Math.round(maxUploadBytes / 1024 / 1024)}MB.` });
+        return;
+      }
+      try {
+        const originalName = decodeURIComponent(String(req.headers["x-file-name"] || url.searchParams.get("name") || "upload"));
+        const mime = String(req.headers["content-type"] || "application/octet-stream");
+        const record = createUploadRecord(originalName, mime);
+        const size = await writeUploadStream(req, record.preview.absolutePath);
+        sendJson(res, 200, { ok: true, attachment: { ...record.preview, size } });
+      } catch (error) {
+        sendJson(res, error.statusCode || 400, { error: error.message });
+      }
       return;
     }
     if (url.pathname === "/api/restart") {

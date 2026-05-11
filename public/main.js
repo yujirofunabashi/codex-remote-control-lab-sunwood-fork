@@ -1365,16 +1365,18 @@ function renderAttachments() {
     const chip = document.createElement("button");
     chip.type = "button";
     chip.className = "attachment-chip";
-    const thumb = file.type.startsWith("image/") ? document.createElement("img") : document.createElement("span");
-    if (file.type.startsWith("image/")) {
-      thumb.src = file.dataUrl;
+    const mimeType = file.mimeType || file.type || "";
+    const isImage = file.kind === "image" || mimeType.startsWith("image/");
+    const thumb = isImage ? document.createElement("img") : document.createElement("span");
+    if (isImage) {
+      thumb.src = file.dataUrl || urlWithToken(file.url);
       thumb.alt = "";
     } else {
       thumb.className = "attachment-file-icon";
-      thumb.textContent = file.type.startsWith("audio/") ? "音" : "FILE";
+      thumb.textContent = file.kind === "audio" || mimeType.startsWith("audio/") ? "音" : "FILE";
     }
     const label = document.createElement("span");
-    label.textContent = file.name;
+    label.textContent = file.size ? `${file.name} (${formatBytes(file.size)})` : file.name;
     const close = document.createElement("span");
     close.textContent = "×";
     chip.append(thumb, label, close);
@@ -1386,13 +1388,30 @@ function renderAttachments() {
   }
 }
 
-function readFileAsDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve({ name: file.name, type: file.type, dataUrl: reader.result });
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(file);
+function formatBytes(bytes) {
+  const value = Number(bytes || 0);
+  if (value >= 1024 * 1024) return `${(value / 1024 / 1024).toFixed(value >= 10 * 1024 * 1024 ? 0 : 1)}MB`;
+  if (value >= 1024) return `${Math.round(value / 1024)}KB`;
+  return `${value}B`;
+}
+
+async function uploadFile(file) {
+  const response = await fetch(urlWithToken("/api/upload"), {
+    method: "POST",
+    headers: {
+      "content-type": file.type || "application/octet-stream",
+      "x-file-name": encodeURIComponent(file.name || "upload"),
+      "x-file-size": String(file.size || 0),
+    },
+    body: file,
   });
+  const result = await response.json().catch(() => ({ error: `${response.status} ${response.statusText}` }));
+  if (!response.ok) throw new Error(result.error || `${response.status} ${response.statusText}`);
+  return {
+    ...result.attachment,
+    type: result.attachment?.mimeType || file.type || "application/octet-stream",
+    size: result.attachment?.size || file.size || 0,
+  };
 }
 
 function connect() {
@@ -1575,14 +1594,20 @@ addButton.addEventListener("click", () => fileInput.click());
 fileInput.addEventListener("change", async () => {
   const selectedFiles = Array.from(fileInput.files || []);
   const files = selectedFiles.filter(isSupportedUpload);
+  addButton.disabled = true;
   try {
-    pendingFiles = pendingFiles.concat(await Promise.all(files.map(readFileAsDataUrl)));
+    for (const file of files) {
+      addStatus(`添付をMacへアップロード中: ${file.name} (${formatBytes(file.size)})`);
+      pendingFiles.push(await uploadFile(file));
+      renderAttachments();
+    }
     renderAttachments();
-    if (files.length) addStatus(`${files.length}件のファイルを添付しました。送信時にMacへアップロードします。`);
+    if (files.length) addStatus(`${files.length}件のファイルを添付しました。送信時は保存済みパスだけを渡します。`);
     if (selectedFiles.length > files.length) addStatus(`${selectedFiles.length - files.length}件の未対応ファイルをスキップしました。`);
   } catch (error) {
     addEntry("error", `添付に失敗しました: ${error.message}`);
   } finally {
+    addButton.disabled = false;
     fileInput.value = "";
   }
 });
