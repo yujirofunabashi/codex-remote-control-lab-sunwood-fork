@@ -1038,6 +1038,17 @@ function renderLocalSettings(payload) {
   }
   modelSelect.value = settings.model || active.model || selectedModel || "";
 
+  const providerSelect = document.createElement("select");
+  providerSelect.className = "settings-select";
+  const providerValues = new Set([settings.provider, active.provider, ...(options.providers || ["codex", "claude"])].filter(Boolean));
+  for (const providerValue of providerValues) {
+    const option = document.createElement("option");
+    option.value = providerValue;
+    option.textContent = providerValue;
+    providerSelect.appendChild(option);
+  }
+  providerSelect.value = settings.provider || active.provider || "codex";
+
   const workspaceSelect = document.createElement("select");
   workspaceSelect.className = "settings-select";
   renderWorkspaceOptions(workspaceSelect, workspaceItems, settings.workdir || active.workdir || "");
@@ -1072,6 +1083,7 @@ function renderLocalSettings(payload) {
   const form = document.createElement("form");
   form.className = "settings-form";
   form.append(
+    settingField("Provider", providerSelect),
     settingField("モデル", modelSelect),
     settingField("作業ディレクトリ", workspaceSelect),
     settingField("候補にないフォルダを追加", manualRow),
@@ -1120,6 +1132,7 @@ function renderLocalSettings(payload) {
     setSettingsStatus(status, "保存中...");
     try {
       const result = await apiPost("/api/local-settings", {
+        provider: providerSelect.value,
         model: modelSelect.value,
         workdir: workspaceSelect.value,
         historySyncEnabled: historyInput.checked,
@@ -1294,7 +1307,8 @@ async function showStatus() {
   try {
     const result = await apiGet("/api/status");
     addPanelRow("UI port", String(result.uiPort));
-    addPanelRow("Codex app-server", result.codexUrl);
+    addPanelRow("Provider", result.provider || "codex");
+    if (result.codexUrl) addPanelRow("Codex app-server", result.codexUrl);
     addPanelRow("履歴同期", result.historySyncEnabled ? "有効" : "無効");
     addPanelRow("作業ディレクトリ", result.workdir);
     for (const bridge of result.bridges || []) {
@@ -1435,7 +1449,7 @@ function connect() {
   meta.textContent = "接続中";
 
   ws.addEventListener("open", () => {
-    setRunState("connecting", "Codex に接続中");
+    setRunState("connecting", "Agent に接続中");
     addEntry("status", "Macの共有ブリッジへ接続しました。");
   });
 
@@ -1447,7 +1461,7 @@ function connect() {
       renderHistoryIfChanged(msg.history || []);
       meta.textContent = `${msg.model}  •  ${msg.clients}端末  •  ${msg.workdir}`;
       setRunState("ready");
-      addEntry("status", `共有Codex thread ready: ${msg.threadId}`);
+      addEntry("status", `共有${msg.provider || "codex"} thread ready: ${msg.threadId}`);
       return;
     }
     if (msg.type === "user") {

@@ -11,6 +11,12 @@ npm ci
 npm run phone
 ```
 
+For the experimental Claude provider, run:
+
+```bash
+npm run phone:claude
+```
+
 The command prints one URL per LAN IPv4 address:
 
 ```text
@@ -28,6 +34,8 @@ phone browser
   -> token-protected bridge on 0.0.0.0:45214
   -> Codex app-server on ws://127.0.0.1:45213
 ```
+
+In Claude mode, the last hop changes to a per-turn `claude -p --output-format stream-json` process. The phone UI and upload path stay the same, but session resume relies on the Claude session ID returned by the CLI rather than Codex app-server threads.
 
 The bridge shares a thread across multiple browser clients. Add `thread=<thread_id>` to resume a known Codex thread. This is the PC/mobile sync path: both devices are looking at the same bridge-managed Codex conversation instead of creating separate sessions.
 
@@ -52,8 +60,11 @@ In this mode, OCdex does not start a new app-server. It uses the app-server behi
 
 ```bash
 PHONE_UI_PORT=45214 npm run phone
+PHONE_AGENT_PROVIDER=claude npm run phone
 CODEX_WORKDIR=/Users/admin/Prj/some-project npm run phone
 CODEX_MODEL=gpt-5.4 npm run phone
+CLAUDE_WORKDIR=/Users/admin/Prj/some-project npm run phone:claude
+CLAUDE_MODEL=sonnet npm run phone:claude
 CODEX_APP_SERVER_SOCK=/Users/admin/.codex/app-server-control/app-server-control.sock npm run phone
 CODEX_APP_SERVER_URL=ws://127.0.0.1:45213 npm run phone
 CODEX_HISTORY_SYNC=0 npm run phone
@@ -67,6 +78,8 @@ PHONE_NOTIFY_TIMEOUT_MS=5000 npm run phone
 Startup notifications are optional. If `PHONE_NTFY_TOPIC` is set, the bridge posts the ready URLs to that ntfy topic. If `PHONE_PUSHOVER_TOKEN` and `PHONE_PUSHOVER_USER` are set, it sends the same URLs through Pushover. If `PHONE_DISCORD_WEBHOOK_URL` is set, it posts them to Discord. `npm run phone` loads local `.env` values before reading these variables. `PHONE_NTFY_SERVER` defaults to `https://ntfy.sh` and must use HTTPS. Notification requests time out after `PHONE_NOTIFY_TIMEOUT_MS`, which defaults to 5000 ms. When a LAN IPv4 URL is available, the message includes the tokenized bridge URL, so use a private/protected topic, account, or channel and keep notification credentials out of Git. If no LAN IPv4 URL is detected, the notification omits provider link fields and tells you to check the host console.
 
 Background thread-list polling suppresses repeated identical errors. A transient app-server restart or token mismatch should not continuously fill the chat log with the same `/api/threads` failure.
+
+Claude mode is intentionally narrower than Codex mode. It does not provide Codex app-server thread listing, plugin lookup, history sync, or live tool approval callbacks. Use `CLAUDE_PERMISSION_MODE` or the UI permission mode to decide how much autonomy each spawned Claude run has.
 
 ## UI Surface
 
