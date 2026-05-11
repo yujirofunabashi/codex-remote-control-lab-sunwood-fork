@@ -46,7 +46,7 @@ const claudeBin = process.env.CLAUDE_BIN || "claude";
 const envPath = path.join(root, ".env");
 const uiPort = Number(process.env.PHONE_UI_PORT || 45214);
 const uiHost = process.env.PHONE_UI_HOST || "0.0.0.0";
-const agentProvider = normalizeProvider(process.env.PHONE_AGENT_PROVIDER || process.env.AGENT_PROVIDER || "codex");
+const agentProvider = normalizeProvider(process.env.PHONE_AGENT_PROVIDER || process.env.AGENT_PROVIDER || process.env.PHONE_AGENT_PROVIDER_DEFAULT || "codex");
 const isCodexProvider = agentProvider === "codex";
 const isClaudeProvider = agentProvider === "claude";
 const codexPort = Number(process.env.CODEX_APP_SERVER_PORT || 45213);
