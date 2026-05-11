@@ -1,6 +1,8 @@
 {
   "name": "Codex Remote Control Lab",
   "short_name": "Codex Remote",
+  "id": "/codex-remote",
+  "scope": "/",
   "description": "Local-first Codex app-server and token-protected phone bridge.",
   "start_url": "/",
   "display": "standalone",

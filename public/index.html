@@ -9,7 +9,10 @@
     <link rel="apple-touch-icon" href="apple-touch-icon.png" />
     <link rel="manifest" href="site.webmanifest" />
     <meta name="theme-color" content="#15151a" />
-    <link rel="stylesheet" href="/style.css" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Codex Remote" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <link rel="stylesheet" href="style.css" />
   </head>
   <body>
     <main class="app-shell">
@@ -38,6 +41,7 @@
           </div>
           <div class="title-actions">
             <button id="connect" type="button" class="icon-button" title="再接続">↻</button>
+            <button type="button" class="icon-button mobile-settings-button" id="mobileSettingsButton" title="設定" aria-label="設定">⚙︎</button>
             <button type="button" class="icon-button" id="menuButton" title="メニュー">…</button>
           </div>
         </header>
@@ -60,7 +64,7 @@
               <span id="runStateLabel">接続準備中</span>
             </div>
             <form id="composer" class="composer">
-              <input id="fileInput" class="hidden" type="file" accept="image/*" multiple />
+              <input id="fileInput" class="hidden" type="file" accept="image/*,audio/*,.m4a,.mp3,.wav,.aac,.flac,.ogg,.webm,.mp4" multiple />
               <div id="attachments" class="attachments" aria-live="polite"></div>
               <textarea id="prompt" rows="3" placeholder="フォローアップの変更を求める"></textarea>
               <div class="composer-footer">
@@ -119,6 +123,6 @@
       </section>
     </main>
 
-    <script src="/main.js"></script>
+    <script src="main.js"></script>
   </body>
 </html>

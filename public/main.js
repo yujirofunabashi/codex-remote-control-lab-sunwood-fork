@@ -7,6 +7,7 @@ const pluginsButton = document.querySelector("#pluginsButton");
 const automationsButton = document.querySelector("#automationsButton");
 const settingsButton = document.querySelector("#settingsButton");
 const menuButton = document.querySelector("#menuButton");
+const mobileSettingsButton = document.querySelector("#mobileSettingsButton");
 const closePanelButton = document.querySelector("#closePanelButton");
 const addButton = document.querySelector("#addButton");
 const accessButton = document.querySelector("#accessButton");
@@ -43,6 +44,27 @@ const params = new URLSearchParams(location.search);
 const token = params.get("token") || localStorage.getItem("codexPhoneToken") || "";
 let selectedThread = params.get("thread") || "";
 if (token) localStorage.setItem("codexPhoneToken", token);
+const manifestLink = document.querySelector('link[rel="manifest"]');
+
+function proxyBasePath() {
+  const match = location.pathname.match(/^\/(?:abs)?proxy\/\d+(?=\/|$)/);
+  return match ? match[0] : "";
+}
+
+const appBasePath = proxyBasePath();
+
+function appPath(path) {
+  const raw = String(path || "");
+  if (/^[a-z][a-z0-9+.-]*:/i.test(raw)) return raw;
+  if (!raw.startsWith("/")) return raw;
+  return `${appBasePath}${raw}`;
+}
+
+if (manifestLink && token) {
+  manifestLink.href = appPath(
+    `/site.webmanifest?token=${encodeURIComponent(token)}&base=${encodeURIComponent(appBasePath)}`,
+  );
+}
 
 const themeOptions = [
   { id: "simple", name: "シンプル", detail: "今のCodex Desktop風" },
@@ -54,6 +76,7 @@ let selectedTheme = localStorage.getItem("codexPhoneTheme") || "simple";
 let ws = null;
 let pendingApproval = null;
 let assistantEntry = null;
+let liveOutputGroup = "";
 let statusGroup = null;
 let threadCache = [];
 let liveTurnActive = false;
@@ -61,6 +84,11 @@ let lastHistorySignature = "";
 let lastThreadListError = "";
 let lastThreadRefreshError = "";
 let selectedThreadRefreshActive = false;
+let activeProvider = "codex";
+let threadProvider = normalizeProviderName(params.get("provider") || "");
+let threadProviderExplicit = Boolean(threadProvider);
+const selectedThreadByProvider = new Map();
+if (selectedThread && threadProvider) selectedThreadByProvider.set(threadProvider, selectedThread);
 let selectedModel = localStorage.getItem("codexPhoneModel") || "";
 let selectedModelLabel = localStorage.getItem("codexPhoneModelLabel") || "5.5";
 let selectedReasoning = localStorage.getItem("codexPhoneReasoning") || "中";
@@ -77,7 +105,7 @@ let pendingFiles = [];
 const runStateText = {
   connecting: "接続中",
   ready: "待機中",
-  running: "Codex 処理中",
+  running: "Agent 処理中",
   streaming: "回答生成中",
   approval: "承認待ち",
   syncing: "履歴同期中",
@@ -108,9 +136,72 @@ const accessModes = [
   { label: "確認モード", approvalPolicy: "on-request", sandboxMode: "workspace-write" },
   { label: "読み取り専用", approvalPolicy: "on-request", sandboxMode: "read-only" },
 ];
+const inlineModelChoices = {
+  codex: ["gpt-5.5", "gpt-5.4"],
+  claude: ["sonnet", "opus", "haiku"],
+};
+
+function labelForModel(model) {
+  const label = String(model || "").replace(/^GPT-/, "").replace(/^gpt-/, "");
+  return label || "model";
+}
+
+function displayModelName(model) {
+  const value = String(model || "");
+  if (/^gpt-/i.test(value)) return value.toUpperCase();
+  if (/^claude-/i.test(value)) return value.replace(/-/g, " ");
+  return value ? value[0].toUpperCase() + value.slice(1) : "Model";
+}
+
+function setSelectedModel(model, { persist = true } = {}) {
+  selectedModel = model || "";
+  selectedModelLabel = labelForModel(selectedModel);
+  if (persist) {
+    localStorage.setItem("codexPhoneModel", selectedModel);
+    localStorage.setItem("codexPhoneModelLabel", selectedModelLabel);
+  }
+  updateModelButton();
+}
+
+function providerSupportsReasoning() {
+  return activeProvider === "codex";
+}
+
+function normalizeProviderName(provider) {
+  const value = String(provider || "").trim().toLowerCase();
+  if (value === "codex" || value === "claude") return value;
+  return "";
+}
+
+function currentThreadProvider() {
+  return normalizeProviderName(threadProvider || activeProvider) || "codex";
+}
+
+function providerLabel(provider) {
+  return provider === "claude" ? "Claude" : "Codex";
+}
+
+function setActiveProvider(provider) {
+  const previousProvider = activeProvider;
+  activeProvider = normalizeProviderName(provider) || "codex";
+  if (!threadProviderExplicit && (!threadProvider || threadProvider === previousProvider)) {
+    threadProvider = activeProvider;
+  }
+  document.documentElement.dataset.provider = activeProvider;
+  updateModelButton();
+}
 
 function updateModelButton() {
-  modelButton.textContent = `${selectedModelLabel} ${selectedReasoning}`;
+  const showReasoning = providerSupportsReasoning();
+  modelButton.textContent = showReasoning ? `${selectedModelLabel} ${selectedReasoning}` : selectedModelLabel;
+  thinkingButton.hidden = !showReasoning;
+  modelMenu.classList.toggle("no-reasoning", !showReasoning);
+  renderInlineModelChoices();
+  for (const row of modelMenu.querySelectorAll(".model-menu-label, [data-reasoning]")) {
+    row.hidden = !showReasoning;
+  }
+  const separator = modelMenu.querySelector(".model-menu-separator");
+  if (separator) separator.hidden = !showReasoning;
   for (const row of modelMenu.querySelectorAll("[data-reasoning]")) {
     const active = row.dataset.reasoning === selectedReasoning;
     row.classList.toggle("active", active);
@@ -129,6 +220,26 @@ function updateModelButton() {
   }
 }
 
+function renderInlineModelChoices() {
+  const moreButton = modelMenu.querySelector("#moreModelsButton");
+  if (!moreButton) return;
+  for (const row of modelMenu.querySelectorAll("[data-model-choice]")) row.remove();
+  const choices = [...(inlineModelChoices[activeProvider] || inlineModelChoices.codex)];
+  if (selectedModel && !choices.includes(selectedModel)) choices.unshift(selectedModel);
+  for (const choice of choices) {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "model-menu-row submenu-row";
+    row.dataset.modelChoice = choice;
+    row.append(document.createTextNode(displayModelName(choice)));
+    const chevron = document.createElement("span");
+    chevron.className = "chevron";
+    chevron.textContent = "›";
+    row.appendChild(chevron);
+    moreButton.before(row);
+  }
+}
+
 function closeModelMenu() {
   modelMenu.classList.add("hidden");
 }
@@ -139,6 +250,7 @@ function toggleModelMenu() {
 }
 
 function selectReasoning(value) {
+  if (!providerSupportsReasoning()) return;
   selectedReasoning = value;
   localStorage.setItem("codexPhoneReasoning", value);
   updateModelButton();
@@ -147,12 +259,7 @@ function selectReasoning(value) {
 }
 
 function selectModel(model) {
-  selectedModel = model;
-  selectedModelLabel = model.replace(/^gpt-/, "").toUpperCase().replace(/^GPT-/, "");
-  if (selectedModelLabel.startsWith("5.")) selectedModelLabel = selectedModelLabel;
-  localStorage.setItem("codexPhoneModel", selectedModel);
-  localStorage.setItem("codexPhoneModelLabel", selectedModelLabel);
-  updateModelButton();
+  setSelectedModel(model);
   closeModelMenu();
   addStatus(`モデルを ${model.toUpperCase()} に設定しました。次の送信から反映します。`);
 }
@@ -461,7 +568,7 @@ function setEntryText(body, kind, text) {
 }
 
 function urlWithToken(url) {
-  const target = new URL(url, location.href);
+  const target = new URL(appPath(url), location.href);
   target.searchParams.set("token", token);
   return target.pathname + target.search;
 }
@@ -545,7 +652,7 @@ function addStatusGroupItem(text) {
   log.scrollTop = log.scrollHeight;
 }
 
-function addEntry(kind, text, images = []) {
+function addEntry(kind, text, images = [], options = {}) {
   if (kind === "status") {
     addStatusGroupItem(text);
     return null;
@@ -561,18 +668,84 @@ function addEntry(kind, text, images = []) {
 
   const body = document.createElement("div");
   body.className = "entry-body";
+  if (options.outputGroup) body.dataset.outputGroup = options.outputGroup;
   setEntryText(body, kind, text);
   const gallery = kind === "user" ? renderImageGallery(images) : null;
   if (gallery) body.appendChild(gallery);
 
   const tools = document.createElement("div");
   tools.className = "entry-tools";
-  tools.textContent = kind === "assistant" ? "□  ↗" : "";
+  if (kind === "assistant") {
+    tools.appendChild(createCopyOutputButton(body));
+    if (options.showBulkCopy) tools.appendChild(createCopyOutputButton(body, { mode: "group" }));
+  }
 
   el.append(avatar, body, tools);
   log.appendChild(el);
   log.scrollTop = log.scrollHeight;
   return body;
+}
+
+function createCopyOutputButton(body, options = {}) {
+  const isGroupCopy = options.mode === "group";
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = isGroupCopy ? "copy-output-button bulk" : "copy-output-button";
+  button.title = isGroupCopy ? "このターンの出力を一括コピー" : "この出力をコピー";
+  button.textContent = isGroupCopy ? "一括コピー" : "コピー";
+  button.addEventListener("click", async () => {
+    const originalText = button.textContent;
+    button.disabled = true;
+    try {
+      const copyText = isGroupCopy ? textForOutputGroup(body) : body.markdownSource || body.innerText || "";
+      await copyTextToClipboard(copyText);
+      button.textContent = "コピー済み";
+    } catch (error) {
+      button.textContent = "失敗";
+      addStatus(`コピーできませんでした: ${error.message}`);
+    } finally {
+      setTimeout(() => {
+        button.disabled = false;
+        button.textContent = originalText;
+      }, 1400);
+    }
+  });
+  return button;
+}
+
+function textForOutputGroup(body) {
+  const outputGroup = body.dataset.outputGroup;
+  if (!outputGroup) return body.markdownSource || body.innerText || "";
+  const bodies = Array.from(log.querySelectorAll(".entry.assistant .entry-body")).filter(
+    (candidate) => candidate.dataset.outputGroup === outputGroup,
+  );
+  return bodies.map((candidate) => candidate.markdownSource || candidate.innerText || "").filter(Boolean).join("\n\n");
+}
+
+async function copyTextToClipboard(text) {
+  const value = String(text || "").trimEnd();
+  if (!value) throw new Error("コピーする出力がありません");
+  if (navigator.clipboard?.writeText && window.isSecureContext) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.readOnly = true;
+  textarea.style.position = "fixed";
+  textarea.style.top = "0";
+  textarea.style.left = "-9999px";
+  textarea.style.width = "1px";
+  textarea.style.height = "1px";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.focus({ preventScroll: true });
+  textarea.select();
+  textarea.setSelectionRange(0, value.length);
+  const copied = document.execCommand("copy");
+  textarea.remove();
+  if (!copied) throw new Error("ブラウザがコピーを許可しませんでした");
 }
 
 function addStatus(text) {
@@ -587,7 +760,19 @@ function setReady(ready) {
 function renderHistory(history) {
   log.replaceChildren();
   statusGroup = null;
-  for (const entry of history || []) addEntry(entry.type, entry.text, entry.attachments || []);
+  const outputGroupLastIndex = new Map();
+  for (const [index, entry] of (history || []).entries()) {
+    if (entry.type !== "assistant" || !entry.outputGroup) continue;
+    outputGroupLastIndex.set(entry.outputGroup, index);
+  }
+  for (const [index, entry] of (history || []).entries()) {
+    const outputGroup = entry.outputGroup || "";
+    const showBulkCopy = entry.type === "assistant" && outputGroup && outputGroupLastIndex.get(outputGroup) === index;
+    addEntry(entry.type, entry.text, entry.attachments || [], {
+      outputGroup,
+      showBulkCopy,
+    });
+  }
 }
 
 function historySignature(history = []) {
@@ -595,6 +780,7 @@ function historySignature(history = []) {
     history.map((entry) => ({
       type: entry.type,
       text: entry.text || "",
+      outputGroup: entry.outputGroup || "",
       attachments: (entry.attachments || []).map((attachment) => attachment.name || attachment.url || ""),
     })),
   );
@@ -608,13 +794,24 @@ function renderHistoryIfChanged(history = []) {
   return true;
 }
 
+function normalizeThreadRecord(thread, provider) {
+  const nextProvider = normalizeProviderName(thread.provider) || normalizeProviderName(provider) || currentThreadProvider();
+  return {
+    ...thread,
+    provider: nextProvider,
+    updatedAt: thread.updatedAt || thread.updated_at || thread.updated_at_ms,
+    createdAt: thread.createdAt || thread.created_at || thread.created_at_ms,
+  };
+}
+
 function renderThreadList() {
   threadList.replaceChildren();
   const query = threadSearch.value.trim().toLowerCase();
+  const provider = currentThreadProvider();
   const newProject = document.createElement("button");
   newProject.type = "button";
   newProject.className = selectedThread ? "project-heading new-project" : "project-heading new-project active";
-  newProject.innerHTML = '<span class="project-folder"></span><span>New project</span>';
+  newProject.innerHTML = `<span class="project-folder"></span><span>New ${providerLabel(provider)} thread</span>`;
   newProject.addEventListener("click", () => selectThread(""));
   threadList.appendChild(newProject);
 
@@ -671,6 +868,13 @@ function renderThreadList() {
     }
     threadList.appendChild(group);
   }
+
+  if (!groups.size) {
+    const empty = document.createElement("div");
+    empty.className = "project-empty";
+    empty.textContent = `${providerLabel(provider)}のチャットはありません`;
+    threadList.appendChild(empty);
+  }
 }
 
 function authQuery() {
@@ -679,17 +883,70 @@ function authQuery() {
 
 async function apiGet(path) {
   const separator = path.includes("?") ? "&" : "?";
-  const response = await fetch(`${path}${separator}${authQuery()}`, { cache: "no-store" });
+  const response = await fetch(appPath(`${path}${separator}${authQuery()}`), { cache: "no-store" });
   const result = await response.json();
   if (!response.ok) throw new Error(result.error || `${response.status} ${response.statusText}`);
   return result;
 }
 
-async function loadThreads({ background = false } = {}) {
+async function apiPost(path, body = {}) {
+  const separator = path.includes("?") ? "&" : "?";
+  const response = await fetch(appPath(`${path}${separator}${authQuery()}`), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || `${response.status} ${response.statusText}`);
+  return result;
+}
+
+function switchThreadProvider(provider, { reload = true } = {}) {
+  const nextProvider = normalizeProviderName(provider) || activeProvider;
+  const previousProvider = currentThreadProvider();
+  if (nextProvider === previousProvider) {
+    threadProvider = nextProvider;
+    threadProviderExplicit = true;
+    updateUrlThread();
+    if (reload) loadThreads({ provider: nextProvider, background: true }).catch(() => {});
+    return;
+  }
+  selectedThreadByProvider.set(previousProvider, selectedThread);
+  threadProvider = nextProvider;
+  threadProviderExplicit = true;
+  selectedThread = selectedThreadByProvider.get(nextProvider) || "";
+  threadCache = [];
+  lastHistorySignature = "";
+  renderHistory([]);
+  updateUrlThread();
+  renderThreadList();
+
+  if (nextProvider !== activeProvider) {
+    if (ws) {
+      ws.close();
+      ws = null;
+    }
+    setReady(false);
+    meta.textContent = `${providerLabel(nextProvider)} は保存後の再起動で接続`;
+    setRunState("disconnected", "Provider再起動待ち");
+  } else {
+    connect();
+  }
+
+  if (reload) loadThreads({ provider: nextProvider, background: true }).catch(() => {});
+}
+
+async function loadThreads({ background = false, provider = "" } = {}) {
   if (!token) return;
+  const requestedProvider = normalizeProviderName(provider || threadProvider);
+  const path = requestedProvider ? `/api/threads?provider=${encodeURIComponent(requestedProvider)}` : "/api/threads";
   try {
-    const result = await apiGet("/api/threads");
-    threadCache = result.data || [];
+    const result = await apiGet(path);
+    if (result.activeProvider) setActiveProvider(result.activeProvider);
+    const resultProvider = normalizeProviderName(result.provider || requestedProvider || activeProvider) || currentThreadProvider();
+    if (requestedProvider && requestedProvider !== currentThreadProvider()) return;
+    if (!threadProviderExplicit) threadProvider = resultProvider;
+    threadCache = (result.data || []).map((thread) => normalizeThreadRecord(thread, resultProvider));
     renderThreadList();
     lastThreadListError = "";
   } catch (error) {
@@ -704,9 +961,10 @@ async function loadThreads({ background = false } = {}) {
 
 async function refreshSelectedThread() {
   if (!selectedThread || liveTurnActive || selectedThreadRefreshActive) return;
+  const provider = currentThreadProvider();
   selectedThreadRefreshActive = true;
   try {
-    const result = await apiGet(`/api/thread?thread=${encodeURIComponent(selectedThread)}`);
+    const result = await apiGet(`/api/thread?thread=${encodeURIComponent(selectedThread)}&provider=${encodeURIComponent(provider)}`);
     if (result.threadId !== selectedThread) return;
     renderHistoryIfChanged(result.history || []);
     lastThreadRefreshError = "";
@@ -735,10 +993,14 @@ function updateUrlThread() {
   const next = new URL(location.href);
   if (selectedThread) next.searchParams.set("thread", selectedThread);
   else next.searchParams.delete("thread");
+  if (threadProviderExplicit) next.searchParams.set("provider", currentThreadProvider());
+  else next.searchParams.delete("provider");
   history.replaceState(null, "", next);
 }
 
 function syncReadyThread(threadId) {
+  if (!threadProviderExplicit) threadProvider = activeProvider;
+  if (threadId) selectedThreadByProvider.set(currentThreadProvider(), threadId);
   if (!threadId || selectedThread === threadId) return;
   selectedThread = threadId;
   updateUrlThread();
@@ -749,10 +1011,12 @@ function syncReadyThread(threadId) {
 
 function selectThread(threadId) {
   selectedThread = threadId;
+  selectedThreadByProvider.set(currentThreadProvider(), selectedThread);
   updateUrlThread();
   renderThreadList();
   document.body.classList.remove("show-sidebar");
   connect();
+  if (selectedThread) refreshSelectedThread();
 }
 
 function showRightPanel() {
@@ -867,15 +1131,20 @@ async function showSettings() {
   renderThemeSettings();
   const loadingRow = addPanelRow("読み込み中...");
   try {
-    const result = await apiGet("/api/config");
+    const [configResult, localResult] = await Promise.allSettled([apiGet("/api/config"), apiGet("/api/local-settings")]);
     if (renderSeq !== settingsRenderSeq) return;
     loadingRow.remove();
+    if (localResult.status === "fulfilled") renderLocalSettings(localResult.value);
+    else addPanelRow("起動設定を読めませんでした", localResult.reason.message);
+
+    if (configResult.status === "rejected") throw configResult.reason;
+    const result = configResult.value;
     const config = result.config?.config || {};
     addPanelRow("認証", result.auth?.authMethod || "unknown");
     addPanelRow("既定モデル", config.model || selectedModel || "unknown");
     addPanelRow("承認", accessMode.approvalPolicy);
     addPanelRow("サンドボックス", accessMode.sandboxMode);
-    addPanelRow("作業ディレクトリ", config.cwd || "");
+    addPanelRow("作業ディレクトリ", localResult.value?.active?.workdir || "");
     if (result.errors?.length) addPanelRow("補足エラー", result.errors.join(" / "));
   } catch (error) {
     if (renderSeq !== settingsRenderSeq) return;
@@ -883,6 +1152,251 @@ async function showSettings() {
     addPanelRow("読み込みに失敗しました", error.message);
     addEntry("error", `設定: ${error.message}`);
   }
+}
+
+function renderLocalSettings(payload) {
+  const group = document.createElement("section");
+  group.className = "local-settings";
+
+  const title = document.createElement("div");
+  title.className = "theme-settings-title";
+  title.textContent = "起動設定";
+  group.appendChild(title);
+
+  const active = payload.active || {};
+  const settings = payload.settings || {};
+  const options = payload.options || {};
+  const modelsByProvider = options.modelsByProvider || { [active.provider || "codex"]: options.models || [] };
+  const defaultModels = options.defaultModels || {};
+  let workspaceItems = options.workspaces || [];
+
+  const modelLabel = document.createElement("div");
+  modelLabel.className = "local-settings-current";
+  modelLabel.innerHTML = `
+    <span>現在</span>
+    <strong>${escapeHtml(`${active.provider || "codex"} / ${active.model || "unknown"}`)}</strong>
+    <code>${escapeHtml(shortenPath(active.workdir || ""))}</code>
+  `;
+  group.appendChild(modelLabel);
+
+  const modelSelect = document.createElement("select");
+  modelSelect.className = "settings-select";
+
+  function modelChoicesForProvider(provider) {
+    return modelsByProvider[provider] || options.models || [];
+  }
+
+  function preferredModelForProvider(provider) {
+    if (settings.provider === provider && settings.model) return settings.model;
+    if (active.provider === provider && active.model) return active.model;
+    return defaultModels[provider] || modelChoicesForProvider(provider)[0] || selectedModel || "";
+  }
+
+  function renderModelSelectForProvider(provider, selectedValue = preferredModelForProvider(provider)) {
+    const modelValues = new Set([selectedValue, defaultModels[provider], ...(modelChoicesForProvider(provider) || [])].filter(Boolean));
+    modelSelect.replaceChildren();
+    for (const modelValue of modelValues) {
+      const option = document.createElement("option");
+      option.value = modelValue;
+      option.textContent = modelValue;
+      modelSelect.appendChild(option);
+    }
+    modelSelect.value = selectedValue || modelSelect.options[0]?.value || "";
+  }
+
+  const providerSelect = document.createElement("select");
+  providerSelect.className = "settings-select";
+  const providerValues = new Set([settings.provider, active.provider, ...(options.providers || ["codex", "claude"])].filter(Boolean));
+  for (const providerValue of providerValues) {
+    const option = document.createElement("option");
+    option.value = providerValue;
+    option.textContent = providerValue;
+    providerSelect.appendChild(option);
+  }
+  providerSelect.value = settings.provider || active.provider || "codex";
+  renderModelSelectForProvider(providerSelect.value);
+
+  const workspaceSelect = document.createElement("select");
+  workspaceSelect.className = "settings-select";
+  renderWorkspaceOptions(workspaceSelect, workspaceItems, settings.workdir || active.workdir || "");
+
+  const manualInput = document.createElement("input");
+  manualInput.className = "settings-input";
+  manualInput.type = "text";
+  manualInput.inputMode = "text";
+  manualInput.autocomplete = "off";
+  manualInput.placeholder = "/Users/minijiro/WORK_LOCAL/...";
+
+  const addWorkspaceButton = document.createElement("button");
+  addWorkspaceButton.type = "button";
+  addWorkspaceButton.className = "settings-inline-button";
+  addWorkspaceButton.textContent = "追加";
+
+  const manualRow = document.createElement("div");
+  manualRow.className = "settings-inline-row";
+  manualRow.append(manualInput, addWorkspaceButton);
+
+  const historyLabel = document.createElement("label");
+  historyLabel.className = "settings-check";
+  const historyInput = document.createElement("input");
+  historyInput.type = "checkbox";
+  historyInput.checked = settings.historySyncEnabled !== false;
+  historyLabel.append(historyInput, document.createTextNode("履歴同期"));
+
+  function updateProviderDependentControls() {
+    const nextProvider = providerSelect.value || "codex";
+    renderModelSelectForProvider(nextProvider);
+    historyInput.disabled = nextProvider !== "codex";
+    historyLabel.classList.toggle("disabled", historyInput.disabled);
+  }
+
+  const status = document.createElement("div");
+  status.className = payload.restartRequired ? "settings-status warning" : "settings-status";
+  status.textContent = payload.restartRequired ? "保存済み設定があります。再起動で反映します。" : "起動中の設定と一致しています。";
+
+  const form = document.createElement("form");
+  form.className = "settings-form";
+  form.append(
+    settingField("Provider", providerSelect),
+    settingField("モデル", modelSelect),
+    settingField("作業ディレクトリ", workspaceSelect),
+    settingField("候補にないフォルダを追加", manualRow),
+    historyLabel,
+    status,
+  );
+
+  const actions = document.createElement("div");
+  actions.className = "settings-actions";
+  const saveButton = document.createElement("button");
+  saveButton.type = "submit";
+  saveButton.textContent = "保存";
+  const restartButton = document.createElement("button");
+  restartButton.type = "button";
+  restartButton.className = "secondary";
+  restartButton.textContent = "再起動";
+  actions.append(saveButton, restartButton);
+  form.appendChild(actions);
+
+  providerSelect.addEventListener("change", () => {
+    const nextProvider = providerSelect.value || "codex";
+    updateProviderDependentControls();
+    switchThreadProvider(nextProvider);
+    setSettingsStatus(status, "Providerを変更しました。保存後、再起動で反映します。", "warning");
+  });
+  updateProviderDependentControls();
+
+  addWorkspaceButton.addEventListener("click", async () => {
+    const nextPath = manualInput.value.trim();
+    if (!nextPath) {
+      setSettingsStatus(status, "追加したいフォルダの絶対パスを入力してください。", "error");
+      manualInput.focus();
+      return;
+    }
+    addWorkspaceButton.disabled = true;
+    setSettingsStatus(status, "フォルダを確認中...");
+    try {
+      const result = await apiPost("/api/workspaces", { path: nextPath });
+      workspaceItems = result.options || workspaceItems;
+      renderWorkspaceOptions(workspaceSelect, workspaceItems, result.workspace?.path || nextPath);
+      manualInput.value = "";
+      setSettingsStatus(status, "候補に追加しました。保存すると次回起動の作業ディレクトリになります。");
+      addStatus("作業ディレクトリ候補を追加しました。");
+    } catch (error) {
+      setSettingsStatus(status, error.message, "error");
+    } finally {
+      addWorkspaceButton.disabled = false;
+    }
+  });
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    saveButton.disabled = true;
+    setSettingsStatus(status, "保存中...");
+    try {
+      const result = await apiPost("/api/local-settings", {
+        provider: providerSelect.value,
+        model: modelSelect.value,
+        workdir: workspaceSelect.value,
+        historySyncEnabled: historyInput.checked,
+      });
+      setSelectedModel(modelSelect.value);
+      workspaceItems = result.options?.workspaces || workspaceItems;
+      renderWorkspaceOptions(workspaceSelect, workspaceItems, result.settings?.workdir || workspaceSelect.value);
+      switchThreadProvider(providerSelect.value);
+      setSettingsStatus(status, result.restartRequired ? "保存しました。再起動で反映します。" : "保存しました。", result.restartRequired ? "warning" : "");
+      addStatus("起動設定を保存しました。");
+    } catch (error) {
+      setSettingsStatus(status, error.message, "error");
+    } finally {
+      saveButton.disabled = false;
+    }
+  });
+
+  restartButton.addEventListener("click", async () => {
+    restartButton.disabled = true;
+    setSettingsStatus(status, "再起動中...");
+    addStatus("phone bridgeを再起動しています。");
+    try {
+      await apiPost("/api/restart", {});
+    } catch (error) {
+      setSettingsStatus(status, error.message, "error");
+      restartButton.disabled = false;
+      return;
+    }
+    setTimeout(() => location.reload(), 1800);
+  });
+
+  group.appendChild(form);
+  artifactList.appendChild(group);
+}
+
+function renderWorkspaceOptions(select, items, selectedValue) {
+  const selectedPath = selectedValue || "";
+  const groups = new Map();
+  const seen = new Set();
+  for (const item of items || []) {
+    if (!item?.path || seen.has(item.path)) continue;
+    seen.add(item.path);
+    const groupName = item.group || "フォルダ";
+    if (!groups.has(groupName)) groups.set(groupName, []);
+    groups.get(groupName).push(item);
+  }
+  if (selectedPath && !seen.has(selectedPath)) {
+    groups.set("選択中", [{ path: selectedPath, label: shortenPath(selectedPath), group: "選択中" }]);
+  }
+
+  select.replaceChildren();
+  for (const [groupName, groupItems] of groups) {
+    const optgroup = document.createElement("optgroup");
+    optgroup.label = groupName;
+    for (const item of groupItems) {
+      const option = document.createElement("option");
+      option.value = item.path;
+      const displayName = item.name || item.label || shortenPath(item.path);
+      option.textContent = item.git ? `${displayName} · Git` : displayName;
+      optgroup.appendChild(option);
+    }
+    select.appendChild(optgroup);
+  }
+  select.value = selectedPath;
+}
+
+function setSettingsStatus(element, text, tone = "") {
+  element.className = tone ? `settings-status ${tone}` : "settings-status";
+  element.textContent = text;
+}
+
+function settingField(labelText, control) {
+  const label = document.createElement("label");
+  label.className = "settings-field";
+  const span = document.createElement("span");
+  span.textContent = labelText;
+  label.append(span, control);
+  return label;
+}
+
+function shortenPath(value) {
+  return String(value || "").replace(/^\/Users\/[^/]+/, "~");
 }
 
 function renderThemeSettings() {
@@ -926,11 +1440,7 @@ async function showModels() {
     const models = result.data || [];
     for (const candidate of models.slice(0, 24)) {
       addPanelRow(candidate.displayName || candidate.model || candidate.id, candidate.defaultReasoningEffort || "", () => {
-        selectedModel = candidate.model || candidate.id;
-        selectedModelLabel = (candidate.displayName || selectedModel).replace(/^GPT-/, "").replace(/^gpt-/, "");
-        localStorage.setItem("codexPhoneModel", selectedModel);
-        localStorage.setItem("codexPhoneModelLabel", selectedModelLabel);
-        updateModelButton();
+        setSelectedModel(candidate.model || candidate.id);
         addStatus(`モデルを ${selectedModel} に設定しました。次の送信から反映します。`);
       });
     }
@@ -972,7 +1482,8 @@ async function showStatus() {
   try {
     const result = await apiGet("/api/status");
     addPanelRow("UI port", String(result.uiPort));
-    addPanelRow("Codex app-server", result.codexUrl);
+    addPanelRow("Provider", result.provider || "codex");
+    if (result.codexUrl) addPanelRow("Codex app-server", result.codexUrl);
     addPanelRow("履歴同期", result.historySyncEnabled ? "有効" : "無効");
     addPanelRow("作業ディレクトリ", result.workdir);
     for (const bridge of result.bridges || []) {
@@ -1043,11 +1554,18 @@ function renderAttachments() {
     const chip = document.createElement("button");
     chip.type = "button";
     chip.className = "attachment-chip";
-    const thumb = document.createElement("img");
-    thumb.src = file.dataUrl;
-    thumb.alt = "";
+    const mimeType = file.mimeType || file.type || "";
+    const isImage = file.kind === "image" || mimeType.startsWith("image/");
+    const thumb = isImage ? document.createElement("img") : document.createElement("span");
+    if (isImage) {
+      thumb.src = file.dataUrl || urlWithToken(file.url);
+      thumb.alt = "";
+    } else {
+      thumb.className = "attachment-file-icon";
+      thumb.textContent = file.kind === "audio" || mimeType.startsWith("audio/") ? "音" : "FILE";
+    }
     const label = document.createElement("span");
-    label.textContent = file.name;
+    label.textContent = file.size ? `${file.name} (${formatBytes(file.size)})` : file.name;
     const close = document.createElement("span");
     close.textContent = "×";
     chip.append(thumb, label, close);
@@ -1059,13 +1577,30 @@ function renderAttachments() {
   }
 }
 
-function readFileAsDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve({ name: file.name, type: file.type, dataUrl: reader.result });
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(file);
+function formatBytes(bytes) {
+  const value = Number(bytes || 0);
+  if (value >= 1024 * 1024) return `${(value / 1024 / 1024).toFixed(value >= 10 * 1024 * 1024 ? 0 : 1)}MB`;
+  if (value >= 1024) return `${Math.round(value / 1024)}KB`;
+  return `${value}B`;
+}
+
+async function uploadFile(file) {
+  const response = await fetch(urlWithToken("/api/upload"), {
+    method: "POST",
+    headers: {
+      "content-type": file.type || "application/octet-stream",
+      "x-file-name": encodeURIComponent(file.name || "upload"),
+      "x-file-size": String(file.size || 0),
+    },
+    body: file,
   });
+  const result = await response.json().catch(() => ({ error: `${response.status} ${response.statusText}` }));
+  if (!response.ok) throw new Error(result.error || `${response.status} ${response.statusText}`);
+  return {
+    ...result.attachment,
+    type: result.attachment?.mimeType || file.type || "application/octet-stream",
+    size: result.attachment?.size || file.size || 0,
+  };
 }
 
 function connect() {
@@ -1073,8 +1608,20 @@ function connect() {
     addEntry("error", "URLに token がありません。Mac側に表示されたURLをそのまま開いてください。");
     return;
   }
+  const provider = currentThreadProvider();
+  if (provider !== activeProvider) {
+    if (ws) {
+      ws.close();
+      ws = null;
+    }
+    setReady(false);
+    meta.textContent = `${providerLabel(provider)} は保存後の再起動で接続`;
+    setRunState("disconnected", "Provider再起動待ち");
+    return;
+  }
   if (ws) ws.close();
   liveTurnActive = false;
+  liveOutputGroup = "";
   setRunState("connecting");
   lastHistorySignature = "";
   renderHistory([]);
@@ -1083,12 +1630,12 @@ function connect() {
 
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   const threadParam = selectedThread ? `&thread=${encodeURIComponent(selectedThread)}` : "";
-  ws = new WebSocket(`${proto}//${location.host}/bridge?token=${encodeURIComponent(token)}${threadParam}`);
+  ws = new WebSocket(`${proto}//${location.host}${appPath(`/bridge?token=${encodeURIComponent(token)}${threadParam}`)}`);
   connectButton.disabled = true;
   meta.textContent = "接続中";
 
   ws.addEventListener("open", () => {
-    setRunState("connecting", "Codex に接続中");
+    setRunState("connecting", "Agent に接続中");
     addEntry("status", "Macの共有ブリッジへ接続しました。");
   });
 
@@ -1096,23 +1643,40 @@ function connect() {
     const msg = JSON.parse(event.data);
     if (msg.type === "ready") {
       setReady(true);
+      setActiveProvider(msg.provider || "codex");
+      if (currentThreadProvider() !== activeProvider) {
+        setReady(false);
+        meta.textContent = `${providerLabel(currentThreadProvider())} は保存後の再起動で接続`;
+        setRunState("disconnected", "Provider再起動待ち");
+        renderHistory([]);
+        loadThreads({ provider: currentThreadProvider(), background: true }).catch(() => {});
+        if (ws) ws.close();
+        return;
+      }
+      setSelectedModel(msg.model, { persist: false });
       syncReadyThread(msg.threadId);
       renderHistoryIfChanged(msg.history || []);
       meta.textContent = `${msg.model}  •  ${msg.clients}端末  •  ${msg.workdir}`;
       setRunState("ready");
-      addEntry("status", `共有Codex thread ready: ${msg.threadId}`);
+      addEntry("status", `共有${msg.provider || "codex"} thread ready: ${msg.threadId}`);
       return;
     }
     if (msg.type === "user") {
       liveTurnActive = true;
       assistantEntry = null;
+      liveOutputGroup = `live-${Date.now()}`;
       setRunState("running");
       addEntry("user", msg.text, msg.attachments || []);
       return;
     }
     if (msg.type === "assistantDelta") {
       setRunState("streaming");
-      if (!assistantEntry) assistantEntry = addEntry("assistant", "");
+      if (!assistantEntry) {
+        assistantEntry = addEntry("assistant", "", [], {
+          outputGroup: liveOutputGroup || `live-${Date.now()}`,
+          showBulkCopy: true,
+        });
+      }
       setEntryText(assistantEntry, "assistant", `${assistantEntry.markdownSource || ""}${msg.text}`);
       log.scrollTop = log.scrollHeight;
       return;
@@ -1124,10 +1688,15 @@ function connect() {
       approval.classList.remove("hidden");
       return;
     }
+    if (msg.type === "turn" && msg.status === "started") {
+      if (msg.turnId && !assistantEntry) liveOutputGroup = msg.turnId;
+      return;
+    }
     if (msg.type === "turn" && msg.status === "completed") {
       liveTurnActive = false;
       lastHistorySignature = "";
       assistantEntry = null;
+      liveOutputGroup = "";
       setRunState("done", "完了しました");
       loadThreads();
       refreshSelectedThread();
@@ -1149,8 +1718,13 @@ function connect() {
   ws.addEventListener("close", () => {
     setReady(false);
     connectButton.disabled = false;
-    meta.textContent = "切断";
-    setRunState("disconnected");
+    if (currentThreadProvider() !== activeProvider) {
+      meta.textContent = `${providerLabel(currentThreadProvider())} は保存後の再起動で接続`;
+      setRunState("disconnected", "Provider再起動待ち");
+    } else {
+      meta.textContent = "切断";
+      setRunState("disconnected");
+    }
   });
 }
 
@@ -1162,7 +1736,7 @@ composer.addEventListener("submit", (event) => {
     JSON.stringify({
       type: "prompt",
       token,
-      text: text || "添付画像を確認してください。",
+      text: text || "添付ファイルを確認してください。",
       attachments: pendingFiles,
       options: {
         model: selectedModel || undefined,
@@ -1203,7 +1777,12 @@ threadSearch.addEventListener("input", renderThreadList);
 pluginsButton.addEventListener("click", showPlugins);
 automationsButton.addEventListener("click", showAutomations);
 settingsButton.addEventListener("click", showSettings);
-mobileThreadsButton.addEventListener("click", () => document.body.classList.toggle("show-sidebar"));
+mobileSettingsButton.addEventListener("click", showSettings);
+mobileThreadsButton.addEventListener("click", () => {
+  const nextVisible = !document.body.classList.contains("show-sidebar");
+  document.body.classList.toggle("show-sidebar", nextVisible);
+  if (nextVisible) closeRightPanel();
+});
 sidebarScrim.addEventListener("click", () => document.body.classList.remove("show-sidebar"));
 connectButton.addEventListener("click", connect);
 menuButton.addEventListener("click", () => {
@@ -1222,16 +1801,33 @@ closePanelButton.addEventListener("click", closeRightPanel);
 artifactPreview.addEventListener("click", (event) => {
   if (event.target.closest("[data-preview-close]")) hideArtifactPreview();
 });
+function isSupportedUpload(file) {
+  const name = String(file.name || "").toLowerCase();
+  return (
+    file.type.startsWith("image/") ||
+    file.type.startsWith("audio/") ||
+    /\.(m4a|mp3|wav|aac|flac|ogg|webm|mp4)$/.test(name)
+  );
+}
+
 addButton.addEventListener("click", () => fileInput.click());
 fileInput.addEventListener("change", async () => {
-  const files = Array.from(fileInput.files || []).filter((file) => file.type.startsWith("image/"));
+  const selectedFiles = Array.from(fileInput.files || []);
+  const files = selectedFiles.filter(isSupportedUpload);
+  addButton.disabled = true;
   try {
-    pendingFiles = pendingFiles.concat(await Promise.all(files.map(readFileAsDataUrl)));
+    for (const file of files) {
+      addStatus(`添付をMacへアップロード中: ${file.name} (${formatBytes(file.size)})`);
+      pendingFiles.push(await uploadFile(file));
+      renderAttachments();
+    }
     renderAttachments();
-    if (files.length) addStatus(`${files.length}件の画像を添付しました。送信時にCodexへ渡します。`);
+    if (files.length) addStatus(`${files.length}件のファイルを添付しました。送信時は保存済みパスだけを渡します。`);
+    if (selectedFiles.length > files.length) addStatus(`${selectedFiles.length - files.length}件の未対応ファイルをスキップしました。`);
   } catch (error) {
     addEntry("error", `添付に失敗しました: ${error.message}`);
   } finally {
+    addButton.disabled = false;
     fileInput.value = "";
   }
 });

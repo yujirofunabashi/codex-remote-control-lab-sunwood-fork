@@ -81,8 +81,12 @@ Useful environment variables:
 
 ```bash
 PHONE_UI_PORT=45214 npm run phone
+PHONE_AGENT_PROVIDER=claude npm run phone
+PHONE_UI_PORT=45224 PHONE_AGENT_PROVIDER=claude PHONE_APP_NAME="Claude Remote 45224" PHONE_APP_ID=claude-45224 npm run phone
 CODEX_WORKDIR=/Users/admin/Prj/some-project npm run phone
 CODEX_MODEL=gpt-5.4 npm run phone
+CLAUDE_WORKDIR=/Users/admin/Prj/some-project npm run phone:claude
+CLAUDE_MODEL=sonnet npm run phone:claude
 CODEX_APP_SERVER_SOCK=/Users/admin/.codex/app-server-control/app-server-control.sock npm run phone
 CODEX_APP_SERVER_URL=ws://127.0.0.1:45213 npm run phone
 CODEX_HISTORY_SYNC=0 npm run phone
@@ -93,7 +97,11 @@ PHONE_DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/... npm run phone
 PHONE_NOTIFY_TIMEOUT_MS=5000 npm run phone
 ```
 
+To run two phone bridges in parallel, start them on different `PHONE_UI_PORT` values and open both tokenized URLs on the phone. Each bridge has its own active queue and PWA identity, so both URLs can be added to the iPhone Home Screen as separate icons. By default the Home Screen name includes the provider and port, such as `Codex 45214` or `Claude 45224`; set `PHONE_APP_NAME`, `PHONE_APP_SHORT_NAME`, and `PHONE_APP_ID` when you want a custom label or stable identity. If iOS already cached an older icon, delete that Home Screen icon and add the URL again.
+
 `CODEX_APP_SERVER_SOCK` or `CODEX_APP_SERVER_URL` makes the bridge attach to an existing headless app-server instead of starting a new one. For live sync with Codex Desktop, use this with a Desktop Remote Connection that points at the same headless app-server. The normal local conversation view in Codex Desktop uses a private `stdio` app-server, so there is no public external route for a bridge to inject live UI updates into that local view.
+
+Set `PHONE_AGENT_PROVIDER=claude` or run `npm run phone:claude` to use the experimental Claude provider. The `phone:claude` script only sets Claude as the default provider, so a provider saved from the settings panel can still take effect after restart. The bridge keeps the same phone UI and upload flow, but sends each turn to `claude -p --output-format stream-json` and resumes with Claude's session ID after the first response. Claude mode reads same-workdir Claude Code JSONL sessions for its sidebar and thread resume, but it does not expose Codex thread history, plugin lookups, or live approval callbacks; choose `CLAUDE_PERMISSION_MODE` or the UI permission mode before sending a turn.
 
 History sync is enabled by default. After a web turn completes, the bridge warms the app-server history with `thread/read` and a scan-backed `thread/list`, and `/api/threads` also avoids state-DB-only listing. This helps Codex Desktop discover the updated session after reopening or refreshing the thread. It does not inject live updates into an already-open normal Desktop conversation view. Set `CODEX_HISTORY_SYNC=0` to disable the extra history refresh calls.
 
