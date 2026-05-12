@@ -10,6 +10,7 @@ const menuButton = document.querySelector("#menuButton");
 const mobileSettingsButton = document.querySelector("#mobileSettingsButton");
 const closePanelButton = document.querySelector("#closePanelButton");
 const addButton = document.querySelector("#addButton");
+const expandPromptButton = document.querySelector("#expandPromptButton");
 const accessButton = document.querySelector("#accessButton");
 const thinkingButton = document.querySelector("#thinkingButton");
 const modelButton = document.querySelector("#modelButton");
@@ -2135,6 +2136,12 @@ function isSupportedUpload(file) {
 }
 
 addButton.addEventListener("click", () => fileInput.click());
+expandPromptButton?.addEventListener("click", () => {
+  const expanded = composer.classList.toggle("composer-expanded");
+  expandPromptButton.setAttribute("aria-pressed", expanded ? "true" : "false");
+  expandPromptButton.title = expanded ? "入力欄を戻す" : "入力欄を広げる";
+  if (expanded) promptInput.focus({ preventScroll: false });
+});
 fileInput.addEventListener("change", async () => {
   const selectedFiles = Array.from(fileInput.files || []);
   const files = selectedFiles.filter(isSupportedUpload);

@@ -553,11 +553,40 @@ button.project-heading.active {
 
 .mobile-toggle {
   display: none;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   min-height: 34px;
+  padding: 0 10px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 10px;
   background: var(--card);
   color: var(--nav-text);
+}
+
+.sidebar-toggle-icon {
+  position: relative;
+  display: inline-block;
+  width: 18px;
+  height: 14px;
+  border: 1.4px solid currentColor;
+  border-radius: 3.5px;
+  flex: 0 0 auto;
+}
+
+.sidebar-toggle-icon::before {
+  content: "";
+  position: absolute;
+  top: -1.4px;
+  bottom: -1.4px;
+  left: 4.6px;
+  width: 1.4px;
+  background: currentColor;
+}
+
+.mobile-toggle-label {
+  font-size: 13px;
+  line-height: 1;
 }
 
 .title-stack {
@@ -606,6 +635,23 @@ p {
   font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
   font-size: 17px;
   font-weight: 600;
+}
+
+.mobile-menu-button {
+  display: grid;
+  place-items: center;
+  font-size: 0;
+}
+
+.menu-dots-icon {
+  display: inline-block;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow:
+    -7px 0 0 currentColor,
+    7px 0 0 currentColor;
 }
 
 .content-grid {
@@ -1149,6 +1195,15 @@ textarea::placeholder {
   color: color-mix(in srgb, var(--muted) 78%, transparent);
 }
 
+.composer.composer-expanded textarea {
+  min-height: 220px;
+  max-height: 60vh;
+}
+
+.composer.composer-expanded .expand-button {
+  color: var(--nav-text);
+}
+
 .composer-footer {
   display: flex;
   align-items: center;
@@ -1181,11 +1236,51 @@ textarea::placeholder {
 .access-button,
 .model-button,
 .thinking-button,
-.voice-button {
+.voice-button,
+.expand-button {
   min-height: 34px;
   border: 0;
   background: transparent;
   color: var(--muted);
+}
+
+.expand-button {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  padding: 0;
+  flex: 0 0 auto;
+}
+
+.expand-icon {
+  position: relative;
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+}
+
+.expand-icon::before,
+.expand-icon::after {
+  content: "";
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  border: 1.2px solid currentColor;
+}
+
+.expand-icon::before {
+  top: 0;
+  left: 0;
+  border-right: 0;
+  border-bottom: 0;
+}
+
+.expand-icon::after {
+  right: 0;
+  bottom: 0;
+  border-left: 0;
+  border-top: 0;
 }
 
 .access-button {
@@ -1202,10 +1297,12 @@ textarea::placeholder {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 7px;
+  gap: 6px;
   color: var(--nav-text);
-  font-size: 18px;
-  font-weight: 560;
+  font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+  font-size: 15px;
+  font-weight: 480;
+  letter-spacing: 0.005em;
   white-space: nowrap;
   max-width: 168px;
   overflow: hidden;
@@ -1354,10 +1451,10 @@ html[data-provider="claude"] .model-button {
   position: relative;
   display: grid;
   place-items: center;
-  width: 48px;
-  height: 48px;
+  width: 36px;
+  height: 36px;
   border: 0;
-  border-radius: 18px;
+  border-radius: 50%;
   background: var(--button);
   color: var(--button-text);
   font-size: 0;
@@ -1365,8 +1462,8 @@ html[data-provider="claude"] .model-button {
 
 .send-button::before {
   content: "";
-  width: 23px;
-  height: 23px;
+  width: 16px;
+  height: 16px;
   background: currentColor;
   clip-path: polygon(6% 6%, 96% 50%, 6% 94%, 27% 55%, 48% 50%, 27% 45%);
   transform: translateX(1px) rotate(-10deg);
@@ -2250,11 +2347,11 @@ html[data-provider="claude"] .model-button {
   }
 
   .mobile-toggle {
-    display: inline-block;
+    display: inline-flex;
   }
 
   .mobile-settings-button {
-    display: grid;
+    display: none;
   }
 
   .titlebar {
@@ -2486,9 +2583,19 @@ html[data-provider="claude"] .model-button {
   .access-button,
   .model-button,
   .thinking-button,
-  .voice-button {
+  .voice-button,
+  .expand-button {
     min-height: 30px;
     font-size: 15px;
+  }
+
+  .expand-button {
+    width: 28px;
+  }
+
+  .expand-icon {
+    width: 14px;
+    height: 14px;
   }
 
   .thinking-button,
@@ -2523,14 +2630,14 @@ html[data-provider="claude"] .model-button {
   }
 
   .send-button {
-    width: 38px;
-    height: 38px;
-    border-radius: 14px;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
   }
 
   .send-button::before {
-    width: 18px;
-    height: 18px;
+    width: 14px;
+    height: 14px;
   }
 
   .access-button {
@@ -2551,7 +2658,12 @@ html[data-provider="claude"] .model-button {
 
   .mobile-toggle {
     min-width: 56px;
-    padding: 0 7px;
+    padding: 0 8px;
+    gap: 5px;
+  }
+
+  .mobile-toggle-label {
+    font-size: 12px;
   }
 
   .icon-button {
@@ -2733,22 +2845,14 @@ html[data-provider="claude"] .model-button {
 
 @media (max-width: 380px) {
   .mobile-toggle {
-    min-width: 42px;
-    max-width: 42px;
-    overflow: hidden;
+    min-width: 38px;
+    max-width: 38px;
     padding: 0;
-    color: transparent;
-    position: relative;
+    justify-content: center;
   }
 
-  .mobile-toggle::before {
-    content: "☰";
-    position: absolute;
-    inset: 0;
-    display: grid;
-    place-items: center;
-    color: var(--nav-text);
-    font-size: 18px;
+  .mobile-toggle-label {
+    display: none;
   }
 
   .icon-button {
@@ -2779,8 +2883,18 @@ html[data-provider="claude"] .model-button {
   .access-button,
   .model-button,
   .thinking-button,
-  .voice-button {
+  .voice-button,
+  .expand-button {
     font-size: 13px;
+  }
+
+  .expand-button {
+    width: 26px;
+  }
+
+  .expand-icon {
+    width: 13px;
+    height: 13px;
   }
 
   .thread-time {
