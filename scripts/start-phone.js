@@ -1740,6 +1740,10 @@ function getBridge(threadId, connectionId = crypto.randomUUID()) {
 }
 
 function bindBrowser(browser, phoneToken, threadId) {
+  browser.isAlive = true;
+  browser.on("pong", () => {
+    browser.isAlive = true;
+  });
   const bridge = getBridge(threadId);
   bridge.addClient(browser);
 
@@ -2151,6 +2155,18 @@ async function main() {
   });
 
   const wss = new WebSocket.Server({ noServer: true });
+  const browserHeartbeat = setInterval(() => {
+    for (const client of wss.clients) {
+      if (client.isAlive === false) {
+        client.terminate();
+        continue;
+      }
+      client.isAlive = false;
+      client.ping();
+    }
+  }, 30_000);
+  server.on("close", () => clearInterval(browserHeartbeat));
+
   server.on("upgrade", (req, socket, head) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
     if (url.pathname !== "/bridge") {

@@ -83,6 +83,7 @@ let pendingApproval = null;
 let assistantEntry = null;
 let liveOutputGroup = "";
 let statusGroup = null;
+let reconnectTimer = null;
 let threadCache = [];
 let liveTurnActive = false;
 let lastHistorySignature = "";
@@ -90,6 +91,8 @@ let lastThreadListError = "";
 let lastThreadRefreshError = "";
 let lastDisplayedErrorSignature = "";
 let lastDisplayedErrorAt = 0;
+let lastResumeRefreshAt = 0;
+let lastWsMessageAt = 0;
 let selectedThreadRefreshActive = false;
 let activeProvider = "codex";
 let threadProvider = normalizeProviderName(params.get("provider") || "");
@@ -108,6 +111,11 @@ let accessMode = {
   sandboxMode: "danger-full-access",
 };
 let pendingFiles = [];
+const suppressedSocketReconnects = new WeakSet();
+const apiTimeoutMs = 9000;
+const uploadTimeoutMs = 60_000;
+const resumeRefreshDebounceMs = 1200;
+const staleSocketMs = 45_000;
 
 const runStateText = {
   connecting: "接続中",
@@ -953,9 +961,26 @@ function authQuery() {
   return `token=${encodeURIComponent(token)}`;
 }
 
+async function fetchWithTimeout(url, options = {}, timeoutMs = apiTimeoutMs) {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, {
+      ...options,
+      cache: options.cache || "no-store",
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error.name === "AbortError") throw new Error("通信がタイムアウトしました。接続を確認して再試行します。");
+    throw error;
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
 async function apiGet(path) {
   const separator = path.includes("?") ? "&" : "?";
-  const response = await fetch(appPath(`${path}${separator}${authQuery()}`), { cache: "no-store" });
+  const response = await fetchWithTimeout(appPath(`${path}${separator}${authQuery()}`));
   const result = await response.json();
   if (!response.ok) throw new Error(result.error || `${response.status} ${response.statusText}`);
   return result;
@@ -963,7 +988,7 @@ async function apiGet(path) {
 
 async function apiPost(path, body = {}) {
   const separator = path.includes("?") ? "&" : "?";
-  const response = await fetch(appPath(`${path}${separator}${authQuery()}`), {
+  const response = await fetchWithTimeout(appPath(`${path}${separator}${authQuery()}`), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -994,10 +1019,7 @@ function switchThreadProvider(provider, { reload = true } = {}) {
   renderThreadList();
 
   if (nextProvider !== activeProvider) {
-    if (ws) {
-      ws.close();
-      ws = null;
-    }
+    closeSocket({ suppressReconnect: true });
     setReady(false);
     meta.textContent = `${providerLabel(nextProvider)} は保存後の再起動で接続`;
     setRunState("disconnected", "Provider再起動待ち");
@@ -1025,7 +1047,9 @@ async function loadThreads({ background = false, provider = "" } = {}) {
     const message = error.message || String(error);
     if (message !== lastThreadListError) {
       lastThreadListError = message;
-      addEntry("error", `thread一覧を読めませんでした: ${message}`);
+      const text = `thread一覧を読めませんでした: ${message}`;
+      if (background) addStatus(text);
+      else addEntry("error", text);
     }
     if (!background) throw error;
   }
@@ -1044,7 +1068,7 @@ async function refreshSelectedThread() {
     const message = error.message || String(error);
     if (message !== lastThreadRefreshError) {
       lastThreadRefreshError = message;
-      addEntry("error", `thread更新を読めませんでした: ${message}`);
+      addStatus(`thread更新を読めませんでした: ${message}`);
     }
   } finally {
     selectedThreadRefreshActive = false;
@@ -1664,16 +1688,69 @@ function formatBytes(bytes) {
   return `${value}B`;
 }
 
+function closeSocket({ suppressReconnect = true } = {}) {
+  if (!ws) return;
+  const socket = ws;
+  if (suppressReconnect) suppressedSocketReconnects.add(socket);
+  try {
+    socket.close();
+  } catch {
+    // Best effort: a stale Safari socket may already be gone.
+  }
+  ws = null;
+}
+
+function canReconnect() {
+  return Boolean(token && document.visibilityState !== "hidden" && currentThreadProvider() === activeProvider);
+}
+
+function scheduleReconnect(reason = "reconnect", delay = 900) {
+  if (!canReconnect() || reconnectTimer) return;
+  reconnectTimer = window.setTimeout(() => {
+    reconnectTimer = null;
+    if (!canReconnect()) return;
+    addStatus(`接続を復旧します: ${reason}`);
+    connect({ preserveHistory: true });
+  }, delay);
+}
+
+function recoverFromPageResume(reason = "resume") {
+  if (!token || document.visibilityState === "hidden") return;
+  const now = Date.now();
+  if (now - lastResumeRefreshAt < resumeRefreshDebounceMs) return;
+  lastResumeRefreshAt = now;
+  selectedThreadRefreshActive = false;
+  loadThreads({ background: true }).catch(() => {});
+  if (selectedThread) refreshSelectedThread();
+  if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+    scheduleReconnect(reason, 120);
+    return;
+  }
+  if (ws.readyState === WebSocket.OPEN && lastWsMessageAt && now - lastWsMessageAt > staleSocketMs) {
+    if (liveTurnActive) {
+      addStatus("実行中のため、復帰後の再接続は完了後に待機します。");
+      return;
+    }
+    addStatus("Safari復帰後の接続が古いため再接続します。");
+    closeSocket({ suppressReconnect: true });
+    scheduleReconnect(reason, 120);
+  }
+}
+
 async function uploadFile(file) {
-  const response = await fetch(urlWithToken("/api/upload"), {
-    method: "POST",
-    headers: {
-      "content-type": file.type || "application/octet-stream",
-      "x-file-name": encodeURIComponent(file.name || "upload"),
-      "x-file-size": String(file.size || 0),
+  const response = await fetchWithTimeout(
+    urlWithToken("/api/upload"),
+    {
+      method: "POST",
+      headers: {
+        "content-type": file.type || "application/octet-stream",
+        "x-file-name": encodeURIComponent(file.name || "upload"),
+        "x-file-size": String(file.size || 0),
+      },
+      body: file,
     },
-    body: file,
-  });
+    uploadTimeoutMs,
+  );
   const result = await response.json().catch(() => ({ error: `${response.status} ${response.statusText}` }));
   if (!response.ok) throw new Error(result.error || `${response.status} ${response.statusText}`);
   return {
@@ -1683,43 +1760,45 @@ async function uploadFile(file) {
   };
 }
 
-function connect() {
+function connect({ preserveHistory = false } = {}) {
   if (!token) {
     addEntry("error", "URLに token がありません。Mac側に表示されたURLをそのまま開いてください。");
     return;
   }
   const provider = currentThreadProvider();
   if (provider !== activeProvider) {
-    if (ws) {
-      ws.close();
-      ws = null;
-    }
+    closeSocket({ suppressReconnect: true });
     setReady(false);
     meta.textContent = `${providerLabel(provider)} は保存後の再起動で接続`;
     setRunState("disconnected", "Provider再起動待ち");
     return;
   }
-  if (ws) ws.close();
+  closeSocket({ suppressReconnect: true });
   liveTurnActive = false;
   liveOutputGroup = "";
   setRunState("connecting");
-  lastHistorySignature = "";
-  renderHistory([]);
+  if (!preserveHistory) {
+    lastHistorySignature = "";
+    renderHistory([]);
+  }
   const selected = threadCache.find((thread) => thread.id === selectedThread);
   threadTitle.textContent = selected ? titleForThread(selected) : "新しい共有thread";
 
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   const threadParam = selectedThread ? `&thread=${encodeURIComponent(selectedThread)}` : "";
   ws = new WebSocket(`${proto}//${location.host}${appPath(`/bridge?token=${encodeURIComponent(token)}${threadParam}`)}`);
+  const socket = ws;
   connectButton.disabled = true;
   meta.textContent = "接続中";
 
-  ws.addEventListener("open", () => {
+  socket.addEventListener("open", () => {
+    lastWsMessageAt = Date.now();
     setRunState("connecting", "Agent に接続中");
     addEntry("status", "Macの共有ブリッジへ接続しました。");
   });
 
-  ws.addEventListener("message", (event) => {
+  socket.addEventListener("message", (event) => {
+    lastWsMessageAt = Date.now();
     const msg = JSON.parse(event.data);
     if (msg.type === "ready") {
       setReady(true);
@@ -1794,16 +1873,25 @@ function connect() {
     }
   });
 
-  ws.addEventListener("close", () => {
+  socket.addEventListener("close", () => {
     setReady(false);
     connectButton.disabled = false;
+    const shouldSuppressReconnect = suppressedSocketReconnects.has(socket);
+    suppressedSocketReconnects.delete(socket);
+    if (ws === socket) ws = null;
     if (currentThreadProvider() !== activeProvider) {
       meta.textContent = `${providerLabel(currentThreadProvider())} は保存後の再起動で接続`;
       setRunState("disconnected", "Provider再起動待ち");
     } else {
       meta.textContent = "切断";
       setRunState("disconnected");
+      if (!shouldSuppressReconnect) scheduleReconnect("WebSocket切断");
     }
+  });
+
+  socket.addEventListener("error", () => {
+    setRunState("disconnected", "接続エラー");
+    if (!suppressedSocketReconnects.has(socket)) scheduleReconnect("WebSocketエラー");
   });
 }
 
@@ -1965,9 +2053,22 @@ for (const button of artifactButtons) {
   });
 }
 
+window.addEventListener("pageshow", (event) => {
+  recoverFromPageResume(event.persisted ? "ページ復帰" : "ページ表示");
+});
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") recoverFromPageResume("Safari復帰");
+});
+window.addEventListener("focus", () => recoverFromPageResume("フォーカス復帰"));
+window.addEventListener("online", () => recoverFromPageResume("ネットワーク復帰"));
+
 setReady(false);
 updateModelButton();
 loadArtifacts();
 loadThreads().catch(() => {}).finally(connect);
-setInterval(() => loadThreads({ background: true }), 10_000);
-setInterval(refreshSelectedThread, 3_000);
+setInterval(() => {
+  if (document.visibilityState !== "hidden") loadThreads({ background: true });
+}, 10_000);
+setInterval(() => {
+  if (document.visibilityState !== "hidden") refreshSelectedThread();
+}, 3_000);
