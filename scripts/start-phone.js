@@ -8,7 +8,7 @@ const { spawn, spawnSync } = require("child_process");
 const WebSocket = require("ws");
 const { bridgeKeyForRequest, shouldDisposeIdleBridge, shouldPromoteBridgeKey } = require("./bridge-state");
 const { isHistorySyncEnabled, runHistorySync } = require("./history-sync");
-const { bridgeUrls, notifyBridgeUrls } = require("./phone-notify");
+const { bridgeUrls, notifyBridgeUrls, notifyTaskEvent } = require("./phone-notify");
 const { findLiveBridge, readThreadSnapshot } = require("./thread-read");
 
 const root = path.resolve(__dirname, "..");
@@ -53,6 +53,7 @@ const historySyncEnabled = isHistorySyncEnabled(process.env);
 const tokenPath = path.join(root, ".phone-token");
 const uploadDir = path.join(root, ".uploads");
 const bridges = new Map();
+let notificationBridgeUrls = [];
 const historyLimit = 80;
 const imageExtensions = new Map([
   [".png", "image/png"],
@@ -85,6 +86,53 @@ function lanAddresses() {
     .flat()
     .filter((entry) => entry && entry.family === "IPv4" && !entry.internal)
     .map((entry) => entry.address);
+}
+
+function preferredBridgeUrl(urls = notificationBridgeUrls) {
+  return (
+    urls.find((item) => {
+      try {
+        return new URL(item).hostname.startsWith("100.");
+      } catch {
+        return false;
+      }
+    }) ||
+    urls[0] ||
+    ""
+  );
+}
+
+function bridgeUrlForThread(threadId) {
+  const base = preferredBridgeUrl();
+  if (!base) return "";
+  try {
+    const url = new URL(base);
+    if (threadId) url.searchParams.set("thread", threadId);
+    return url.toString();
+  } catch {
+    return base;
+  }
+}
+
+function logNotifyResults(context, results) {
+  if (!results.length) return;
+  for (const result of results) {
+    if (result.ok) console.log(`[notify] ${context} sent via ${result.type}`);
+    else console.warn(`[notify] ${context} ${result.type} failed: ${result.error}`);
+  }
+}
+
+function notifyRunEvent(status, { threadId, turnId, message } = {}) {
+  notifyTaskEvent({
+    status,
+    provider: "Codex",
+    threadId,
+    turnId,
+    model,
+    workdir,
+    message,
+    url: bridgeUrlForThread(threadId),
+  }).then((results) => logNotifyResults(`task ${status}`, results));
 }
 
 function waitForReady() {
@@ -637,7 +685,9 @@ class SharedBridge {
       if (pendingMethod === "turn/start") {
         this.pending.delete(msg.id);
         if (msg.error) {
-          this.emit("error", { text: msg.error.message || JSON.stringify(msg.error) });
+          const message = msg.error.message || JSON.stringify(msg.error);
+          this.emit("error", { text: message });
+          notifyRunEvent("failed", { threadId: this.threadId, message });
           this.startNextQueuedTurn();
         } else {
           this.activeTurnId = msg.result.turn.id;
@@ -669,6 +719,7 @@ class SharedBridge {
       if (msg.method === "turn/completed") {
         this.activeTurnId = null;
         this.emit("turn", { status: "completed", turnId: msg.params.turnId });
+        notifyRunEvent("completed", { threadId: this.threadId, turnId: msg.params.turnId });
         this.syncHistory("turn completed");
         this.startNextQueuedTurn();
         return;
@@ -676,6 +727,11 @@ class SharedBridge {
 
       if (msg.method && msg.method.endsWith("/requestApproval")) {
         this.emit("approval", { request: msg });
+        notifyRunEvent("approval", {
+          threadId: this.threadId,
+          turnId: this.activeTurnId,
+          message: msg.method,
+        });
         return;
       }
 
@@ -1037,6 +1093,7 @@ async function main() {
 
   server.listen(uiPort, "0.0.0.0", () => {
     const urls = bridgeUrls(lanAddresses(), uiPort, phoneToken);
+    notificationBridgeUrls = urls;
     console.log("");
     console.log("Codex shared browser bridge is ready.");
     for (const url of urls) console.log(`  ${url}`);
@@ -1047,12 +1104,7 @@ async function main() {
     console.log("Open the same URL from PC and phone to share one bridge thread.");
     console.log("Press Ctrl+C to stop.");
 
-    notifyBridgeUrls(urls).then((results) => {
-      for (const result of results) {
-        if (result.ok) console.log(`[notify] sent via ${result.type}`);
-        else console.warn(`[notify] ${result.type} failed: ${result.error}`);
-      }
-    });
+    notifyBridgeUrls(urls).then((results) => logNotifyResults("startup", results));
   });
 
   process.on("exit", () => {
