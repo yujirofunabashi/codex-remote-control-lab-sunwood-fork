@@ -696,11 +696,13 @@ body.hide-artifacts .artifact-panel {
 
 .status-list li {
   padding-left: 4px;
+  overflow-wrap: anywhere;
 }
 
 .entry.error .entry-body {
   color: var(--error);
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .entry-tools {

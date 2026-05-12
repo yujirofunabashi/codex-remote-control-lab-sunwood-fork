@@ -88,6 +88,8 @@ let liveTurnActive = false;
 let lastHistorySignature = "";
 let lastThreadListError = "";
 let lastThreadRefreshError = "";
+let lastDisplayedErrorSignature = "";
+let lastDisplayedErrorAt = 0;
 let selectedThreadRefreshActive = false;
 let activeProvider = "codex";
 let threadProvider = normalizeProviderName(params.get("provider") || "");
@@ -564,6 +566,69 @@ function stripUiDirectives(text) {
     .replace(/(?:^|\n)::[a-z0-9-]+\{[^\n]*\}(?=\n|$)/gi, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+function parseJsonish(value) {
+  if (value && typeof value === "object") return value;
+  const text = String(value || "").trim();
+  if (!text || !/^[{[]/.test(text)) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+function compactBridgeError(raw) {
+  const text = String(raw || "").trim();
+  const parsed = parseJsonish(text);
+  const root = parsed && typeof parsed === "object" ? parsed : {};
+  const error = root.error && typeof root.error === "object" ? root.error : root;
+  const message = String(error.message || root.message || text || "エラー");
+  const info = error.codexErrorInfo || root.codexErrorInfo || {};
+  const code = Object.keys(info)[0] || "";
+  const additional = String(error.additionalDetails || root.additionalDetails || "");
+  const requestId = (additional.match(/request ID\s+([a-f0-9-]+)/i) || text.match(/request ID\s+([a-f0-9-]+)/i))?.[1] || "";
+  const willRetry = root.willRetry === true || /reconnecting/i.test(message);
+  const streamDisconnected =
+    code === "responseStreamDisconnected" || /responseStreamDisconnected|stream disconnected before completion/i.test(text);
+
+  if (streamDisconnected) {
+    const lines = [willRetry ? "Codexの応答ストリームが切断されました。再接続中です。" : "Codexの応答ストリームが切断されました。"];
+    if (message && !/^reconnecting/i.test(message)) lines.push(message);
+    if (requestId) lines.push(`Request ID: ${requestId}`);
+    return {
+      text: lines.join("\n"),
+      label: willRetry ? "再接続中" : "ストリーム切断",
+      retrying: willRetry,
+      signature: `stream-disconnected:${requestId || message}`,
+    };
+  }
+
+  const shortened = text.length > 900 ? `${text.slice(0, 900)}\n...` : text;
+  return {
+    text: shortened || "エラー",
+    label: "エラー",
+    retrying: false,
+    signature: shortened.slice(0, 180),
+  };
+}
+
+function showBridgeError(rawText) {
+  const error = compactBridgeError(rawText);
+  const now = Date.now();
+  if (error.signature && error.signature === lastDisplayedErrorSignature && now - lastDisplayedErrorAt < 15_000) {
+    return;
+  }
+  lastDisplayedErrorSignature = error.signature;
+  lastDisplayedErrorAt = now;
+  if (error.retrying) {
+    setRunState("running", error.label);
+    addStatus(error.text);
+    return;
+  }
+  setRunState("error", error.label);
+  addEntry("error", error.text);
 }
 
 function setEntryText(body, kind, text) {
@@ -1718,8 +1783,7 @@ function connect() {
       return;
     }
     if (msg.type === "error") {
-      setRunState("error", msg.text || "エラー");
-      addEntry("error", msg.text);
+      showBridgeError(msg.text || "エラー");
       return;
     }
     if (msg.type === "status") {

@@ -660,6 +660,37 @@ function isMissingThreadError(error) {
   return /no rollout found for thread id/i.test(error?.message || "");
 }
 
+function parseJsonish(value) {
+  if (value && typeof value === "object") return value;
+  const text = String(value || "").trim();
+  if (!text || !/^[{[]/.test(text)) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+function compactCodexError(raw) {
+  const text = String(raw || "").trim();
+  const parsed = parseJsonish(text);
+  const root = parsed && typeof parsed === "object" ? parsed : {};
+  const error = root.error && typeof root.error === "object" ? root.error : root;
+  const message = String(error.message || root.message || text || "Codex error");
+  const info = error.codexErrorInfo || root.codexErrorInfo || {};
+  const code = Object.keys(info)[0] || "";
+  const additional = String(error.additionalDetails || root.additionalDetails || "");
+  const requestId = (additional.match(/request ID\s+([a-f0-9-]+)/i) || text.match(/request ID\s+([a-f0-9-]+)/i))?.[1] || "";
+  const willRetry = root.willRetry === true || /reconnecting/i.test(message);
+  const streamDisconnected =
+    code === "responseStreamDisconnected" || /responseStreamDisconnected|stream disconnected before completion/i.test(text);
+  if (!streamDisconnected) return { text, retrying: false };
+  const lines = [willRetry ? "Codex stream disconnected. Reconnecting." : "Codex stream disconnected."];
+  if (message && !/^reconnecting/i.test(message)) lines.push(message);
+  if (requestId) lines.push(`Request ID: ${requestId}`);
+  return { text: lines.join("\n"), retrying: willRetry };
+}
+
 function isAudioUpload(name, mime) {
   return String(mime || "").startsWith("audio/") || /\.(m4a|mp3|wav|aac|flac|ogg|webm|mp4)$/i.test(String(name || ""));
 }
@@ -1250,13 +1281,14 @@ class SharedBridge {
       if (pendingMethod === "thread/start" || pendingMethod === "thread/resume") {
         this.pending.delete(msg.id);
         if (msg.error) {
-          const error = new Error(msg.error.message || JSON.stringify(msg.error));
+          const compact = compactCodexError(msg.error.message || JSON.stringify(msg.error));
+          const error = new Error(compact.text);
           if (pendingMethod === "thread/resume" && isMissingThreadError(error)) {
             this.fallbackToNewThread(error);
             return;
           }
           this.startupFailed = true;
-          this.emit("error", { text: msg.error.message || JSON.stringify(msg.error) });
+          this.emit(compact.retrying ? "status" : "error", { text: compact.text });
           return;
         }
         this.threadId = msg.result.thread.id;
@@ -1272,11 +1304,14 @@ class SharedBridge {
       if (pendingMethod === "turn/start") {
         this.pending.delete(msg.id);
         if (msg.error) {
-          this.emit("error", { text: msg.error.message || JSON.stringify(msg.error) });
-          notifyRunEvent("failed", {
-            threadId: this.threadId,
-            message: msg.error.message || JSON.stringify(msg.error),
-          });
+          const error = compactCodexError(msg.error.message || JSON.stringify(msg.error));
+          this.emit(error.retrying ? "status" : "error", { text: error.text });
+          if (!error.retrying) {
+            notifyRunEvent("failed", {
+              threadId: this.threadId,
+              message: error.text,
+            });
+          }
           this.startNextQueuedTurn();
         } else {
           this.activeTurnId = msg.result.turn.id;
@@ -1325,11 +1360,16 @@ class SharedBridge {
       }
 
       if (msg.method === "error") {
-        this.emit("error", { text: msg.params.message || JSON.stringify(msg.params) });
+        const error = compactCodexError(msg.params.message || JSON.stringify(msg.params));
+        if (error.retrying) {
+          this.emit("status", { text: error.text });
+          return;
+        }
+        this.emit("error", { text: error.text });
         notifyRunEvent("failed", {
           threadId: this.threadId,
           turnId: this.activeTurnId,
-          message: msg.params.message || JSON.stringify(msg.params),
+          message: error.text,
         });
         return;
       }
