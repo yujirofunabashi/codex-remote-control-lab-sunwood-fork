@@ -868,10 +868,7 @@ function setPendingSubmission(submission) {
   setReady(connectionReady);
   pendingSubmissionTimer = window.setTimeout(() => {
     if (!pendingSubmission || pendingSubmission.id !== submission.id) return;
-    pendingSubmission = null;
-    pendingSubmissionTimer = null;
-    setReady(connectionReady);
-    addStatus("送信確認がタイムアウトしました。入力は残しています。");
+    releasePendingSubmission("送信確認がタイムアウトしました。");
   }, 12_000);
 }
 
@@ -900,8 +897,14 @@ function acceptPendingSubmission(clientMessageIdValue) {
 
 function releasePendingSubmission(message = "") {
   if (!pendingSubmission) return;
+  const submission = pendingSubmission;
   pendingSubmission = null;
   clearPendingSubmissionTimer();
+  if (!promptInput.value && submission.inputValue) promptInput.value = submission.inputValue;
+  if (!pendingFiles.length && submission.files?.length) {
+    pendingFiles = submission.files.map((file) => ({ ...file }));
+    renderAttachments();
+  }
   setReady(connectionReady);
   if (message) addStatus(`${message} 入力は残しています。`);
 }
@@ -1991,6 +1994,7 @@ composer.addEventListener("submit", (event) => {
     id: clientMessageId(),
     inputValue,
     fileSignature: fileDraftSignature(),
+    files: attachmentsToSend,
   };
   setPendingSubmission(submission);
   setRunState("running", "送信確認中");
