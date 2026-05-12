@@ -375,25 +375,14 @@ button {
 }
 
 .settings-icon::before {
-  content: "";
-  width: 17px;
-  height: 17px;
-  border: 2px solid currentColor;
-  border-radius: 50%;
-  box-shadow:
-    0 -8px 0 -6px currentColor,
-    0 8px 0 -6px currentColor,
-    -8px 0 0 -6px currentColor,
-    8px 0 0 -6px currentColor;
+  content: "⚙︎";
+  color: currentColor;
+  font-size: 22px;
+  line-height: 1;
 }
 
 .settings-icon::after {
-  content: "";
-  position: absolute;
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: currentColor;
+  content: none;
 }
 
 .thread-section {
@@ -1842,6 +1831,7 @@ html[data-provider="claude"] .model-button {
 }
 
 .local-settings {
+  min-width: 0;
   margin: 0 0 14px;
   padding: 0 0 14px;
   border-bottom: 1px solid var(--line);
@@ -1890,11 +1880,13 @@ html[data-provider="claude"] .model-button {
 .settings-form {
   display: grid;
   gap: 11px;
+  min-width: 0;
 }
 
 .settings-field {
   display: grid;
   gap: 6px;
+  min-width: 0;
   color: var(--muted);
   font-size: 12px;
 }
@@ -1906,6 +1898,8 @@ html[data-provider="claude"] .model-button {
 .settings-select,
 .settings-input {
   width: 100%;
+  max-width: 100%;
+  min-width: 0;
   min-height: 38px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -1929,8 +1923,9 @@ html[data-provider="claude"] .model-button {
 
 .settings-inline-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(56px, auto);
   gap: 8px;
+  min-width: 0;
 }
 
 .settings-inline-button {
@@ -2184,11 +2179,70 @@ html[data-provider="claude"] .model-button {
     position: fixed;
     inset: 0 auto 0 0;
     z-index: 20;
-    width: min(84vw, 340px);
-    padding: 18px 16px;
+    width: min(82vw, 330px);
+    gap: 13px;
+    padding: 14px 14px 16px;
     transform: translateX(-100%);
     transition: transform 180ms ease;
     box-shadow: 18px 0 30px color-mix(in srgb, var(--text) 14%, transparent);
+  }
+
+  .sidebar-windowbar {
+    min-height: 28px;
+    padding: 0 3px;
+  }
+
+  .window-dots {
+    gap: 8px;
+  }
+
+  .window-actions {
+    gap: 8px;
+  }
+
+  .window-dot {
+    width: 10px;
+    height: 10px;
+  }
+
+  .window-action {
+    width: 21px;
+    height: 21px;
+  }
+
+  .window-chevron {
+    width: 13px;
+    height: 13px;
+  }
+
+  .nav-command,
+  .settings {
+    grid-template-columns: 32px minmax(0, 1fr);
+    gap: 6px;
+    min-height: 38px;
+    padding: 0 6px;
+    font-size: 15px;
+  }
+
+  .command-icon {
+    width: 26px;
+    height: 26px;
+  }
+
+  .nav-command.new-chat .command-icon {
+    border-radius: 8px;
+  }
+
+  .plus-icon::before {
+    width: 14px;
+  }
+
+  .plus-icon::after {
+    height: 14px;
+  }
+
+  .section-title {
+    padding: 8px 8px 6px;
   }
 
   body.show-sidebar .sidebar {
@@ -2332,8 +2386,11 @@ html[data-provider="claude"] .model-button {
   }
 
   .project-heading {
-    min-height: 36px;
-    font-size: 17px;
+    grid-template-columns: 24px minmax(0, 1fr);
+    gap: 7px;
+    min-height: 34px;
+    padding: 0 6px;
+    font-size: 16px;
   }
 
   .project-group {
@@ -2341,14 +2398,14 @@ html[data-provider="claude"] .model-button {
   }
 
   .thread-item {
-    min-height: 36px;
-    padding-left: 38px;
+    min-height: 34px;
+    padding-left: 36px;
     font-size: 14px;
   }
 
   .project-empty,
   .project-more {
-    padding-left: 38px;
+    padding-left: 36px;
     font-size: 14px;
   }
 
@@ -2422,7 +2479,7 @@ html[data-provider="claude"] .model-button {
 
   .composer-left,
   .composer-right {
-    gap: 8px;
+    gap: 6px;
   }
 
   .ghost-button,
@@ -2436,7 +2493,7 @@ html[data-provider="claude"] .model-button {
 
   .thinking-button,
   .voice-button {
-    width: 30px;
+    width: 28px;
   }
 
   .thinking-button::before {
@@ -2445,35 +2502,35 @@ html[data-provider="claude"] .model-button {
   }
 
   .voice-button::before {
-    top: 4px;
-    width: 9px;
-    height: 15px;
+    top: 5px;
+    width: 8px;
+    height: 14px;
   }
 
   .voice-button::after {
     top: 14px;
-    width: 15px;
-    height: 11px;
+    width: 14px;
+    height: 10px;
     background:
-      linear-gradient(var(--muted), var(--muted)) center 7px / 2px 7px no-repeat,
-      linear-gradient(var(--muted), var(--muted)) center 13px / 12px 2px no-repeat;
+      linear-gradient(var(--muted), var(--muted)) center 6px / 2px 7px no-repeat,
+      linear-gradient(var(--muted), var(--muted)) center 12px / 11px 2px no-repeat;
   }
 
   .voice-button.listening::after {
     background:
-      linear-gradient(var(--accent), var(--accent)) center 7px / 2px 7px no-repeat,
-      linear-gradient(var(--accent), var(--accent)) center 13px / 12px 2px no-repeat;
+      linear-gradient(var(--accent), var(--accent)) center 6px / 2px 7px no-repeat,
+      linear-gradient(var(--accent), var(--accent)) center 12px / 11px 2px no-repeat;
   }
 
   .send-button {
-    width: 42px;
-    height: 42px;
-    border-radius: 15px;
+    width: 38px;
+    height: 38px;
+    border-radius: 14px;
   }
 
   .send-button::before {
-    width: 20px;
-    height: 20px;
+    width: 18px;
+    height: 18px;
   }
 
   .access-button {
@@ -2585,21 +2642,88 @@ html[data-provider="claude"] .model-button {
   }
 
   .panel-title {
-    font-size: 20px;
+    margin-bottom: 14px;
+    font-size: 19px;
   }
 
   .panel-close {
-    width: 40px;
-    height: 40px;
+    width: 36px;
+    height: 36px;
+    border-radius: 12px;
+    font-size: 26px;
   }
 
   .panel-tabs {
-    min-height: 52px;
-    margin-bottom: 16px;
+    gap: 4px;
+    min-height: 42px;
+    margin-bottom: 14px;
+    border-radius: 13px;
+    padding: 4px;
   }
 
   .panel-tab {
-    min-height: 40px;
+    min-height: 34px;
+    border-radius: 10px;
+  }
+
+  .panel-tab.file::before {
+    width: 14px;
+    height: 18px;
+  }
+
+  .panel-tab.file::after {
+    top: 10px;
+    right: calc(50% - 8px);
+    width: 6px;
+    height: 6px;
+  }
+
+  .panel-tab.folder::before {
+    width: 22px;
+    height: 14px;
+  }
+
+  .panel-tab.folder::after {
+    top: 11px;
+    left: calc(50% - 11px);
+    width: 9px;
+    height: 5px;
+  }
+
+  .panel-tab.branch::before {
+    width: 16px;
+    height: 18px;
+    transform: translate(3px, 2px);
+  }
+
+  .panel-tab.branch::after {
+    width: 23px;
+    height: 21px;
+    background:
+      radial-gradient(circle at 5px 16px, currentColor 0 2.5px, transparent 2.5px),
+      radial-gradient(circle at 5px 5px, currentColor 0 2.5px, transparent 2.5px),
+      radial-gradient(circle at 20px 5px, currentColor 0 2.5px, transparent 2.5px);
+  }
+
+  .panel-tab.terminal::before {
+    width: 20px;
+    height: 16px;
+  }
+
+  .panel-tab.terminal::after {
+    width: 10px;
+    height: 7px;
+  }
+
+  .panel-tab.globe::before {
+    width: 22px;
+    height: 22px;
+  }
+
+  .panel-tab.globe::after {
+    width: 14px;
+    height: 22px;
+    background: linear-gradient(currentColor, currentColor) center / 22px 2px no-repeat;
   }
 
   .image-preview img {
