@@ -1098,6 +1098,51 @@ function historyFromThread(thread) {
   return capHistory(history);
 }
 
+function recentJsonlRows(filePath, maxBytes = 1024 * 1024) {
+  if (!filePath || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) return [];
+  const stat = fs.statSync(filePath);
+  const start = Math.max(0, stat.size - maxBytes);
+  const fd = fs.openSync(filePath, "r");
+  try {
+    const buffer = Buffer.alloc(stat.size - start);
+    fs.readSync(fd, buffer, 0, buffer.length, start);
+    const text = buffer.toString("utf8");
+    const lines = text.split(/\r?\n/);
+    if (start > 0) lines.shift();
+    return lines
+      .filter(Boolean)
+      .map((line) => {
+        try {
+          return JSON.parse(line);
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function runStateFromSessionFile(thread) {
+  const rows = recentJsonlRows(thread?.path);
+  let latestStarted = null;
+  let latestCompleted = null;
+  for (const row of rows) {
+    if (row.type !== "event_msg") continue;
+    const payload = row.payload || {};
+    if (payload.type === "task_started") latestStarted = { turnId: payload.turn_id || null, timestamp: row.timestamp || "" };
+    if (payload.type === "task_complete") latestCompleted = { turnId: payload.turn_id || null, timestamp: row.timestamp || "" };
+  }
+  if (latestStarted && (!latestCompleted || latestCompleted.timestamp < latestStarted.timestamp)) {
+    return { state: "streaming", label: "回答生成中", turnId: latestStarted.turnId };
+  }
+  if (latestCompleted) {
+    return { state: "done", label: "前回完了・送信できます", turnId: latestCompleted.turnId };
+  }
+  return null;
+}
+
 function idleRunStateFromHistory(history = []) {
   const lastConversationEntry = [...history].reverse().find((entry) => entry.type === "user" || entry.type === "assistant");
   if (!lastConversationEntry) return { state: "ready", label: "未実行・送信できます", turnId: null };
@@ -1439,7 +1484,7 @@ class SharedBridge {
         this.promoteBridgeKey();
         this.ready = true;
         this.history = historyFromThread(msg.result.thread);
-        const idleState = idleRunStateFromHistory(this.history);
+        const idleState = runStateFromSessionFile(msg.result.thread) || idleRunStateFromHistory(this.history);
         this.setBridgeRunState(idleState.state, idleState.label, idleState.turnId);
         this.emit("ready", this.readyPayload());
         if (this.requestedThreadId) this.emit("status", { text: `既存threadを再開しました: ${this.threadId}` });
