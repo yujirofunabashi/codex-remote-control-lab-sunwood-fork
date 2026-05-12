@@ -1098,6 +1098,15 @@ function historyFromThread(thread) {
   return capHistory(history);
 }
 
+function idleRunStateFromHistory(history = []) {
+  const lastConversationEntry = [...history].reverse().find((entry) => entry.type === "user" || entry.type === "assistant");
+  if (!lastConversationEntry) return { state: "ready", label: "未実行・送信できます", turnId: null };
+  if (lastConversationEntry.type === "assistant") {
+    return { state: "done", label: "前回完了・送信できます", turnId: lastConversationEntry.outputGroup || null };
+  }
+  return { state: "ready", label: "前回送信済み・応答未確認", turnId: lastConversationEntry.outputGroup || null };
+}
+
 function capHistory(history) {
   return history.slice(-historyLimit);
 }
@@ -1274,7 +1283,7 @@ class SharedBridge {
         updatedAt: Date.now(),
       };
     }
-    return this.runState || { state: "ready", label: "送信できます", turnId: null, updatedAt: Date.now() };
+    return this.runState || { state: "ready", label: "未実行・送信できます", turnId: null, updatedAt: Date.now() };
   }
 
   setBridgeRunState(state, label, turnId = this.activeTurnId || null) {
@@ -1430,7 +1439,8 @@ class SharedBridge {
         this.promoteBridgeKey();
         this.ready = true;
         this.history = historyFromThread(msg.result.thread);
-        this.setBridgeRunState("ready", "送信できます");
+        const idleState = idleRunStateFromHistory(this.history);
+        this.setBridgeRunState(idleState.state, idleState.label, idleState.turnId);
         this.emit("ready", this.readyPayload());
         if (this.requestedThreadId) this.emit("status", { text: `既存threadを再開しました: ${this.threadId}` });
         return;
@@ -1685,7 +1695,8 @@ class ClaudeBridge {
     this.history = this.claudeSessionId ? claudeHistoryForSession(this.claudeSessionId) : [];
     this.turnQueue = [];
     this.activeProcess = null;
-    this.runState = { state: "ready", label: "送信できます", turnId: null, updatedAt: Date.now() };
+    const idleState = idleRunStateFromHistory(this.history);
+    this.runState = { ...idleState, updatedAt: Date.now() };
     this.streamingStarted = false;
     this.idleDisposeTimer = null;
   }
@@ -1723,7 +1734,7 @@ class ClaudeBridge {
         updatedAt: Date.now(),
       };
     }
-    return this.runState || { state: "ready", label: "送信できます", turnId: null, updatedAt: Date.now() };
+    return this.runState || { state: "ready", label: "未実行・送信できます", turnId: null, updatedAt: Date.now() };
   }
 
   setBridgeRunState(state, label, turnId = this.activeTurnId || null) {

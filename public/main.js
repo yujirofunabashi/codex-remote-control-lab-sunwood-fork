@@ -122,12 +122,12 @@ const staleSocketMs = 45_000;
 
 const runStateText = {
   connecting: "接続中",
-  ready: "送信できます",
+  ready: "未実行・送信できます",
   running: "Agent 処理中",
   streaming: "回答生成中",
   approval: "承認待ち",
   syncing: "履歴同期中",
-  done: "完了",
+  done: "完了しました",
   disconnected: "切断",
   error: "エラー",
 };
