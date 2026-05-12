@@ -7,4 +7,5 @@ docs/.vitepress/cache/
 *.log
 .env
 .phone-token
+.phone-workspaces.json
 .uploads/
