@@ -119,7 +119,7 @@ const staleSocketMs = 45_000;
 
 const runStateText = {
   connecting: "接続中",
-  ready: "待機中",
+  ready: "送信できます",
   running: "Agent 処理中",
   streaming: "回答生成中",
   approval: "承認待ち",
@@ -135,6 +135,18 @@ function setRunState(state, label) {
   if (runState.dataset.state === state && runStateLabel.textContent === nextLabel) return;
   runState.dataset.state = state;
   runStateLabel.textContent = nextLabel;
+}
+
+function applyServerRunState(run = {}) {
+  const state = run.state || "ready";
+  const activeStates = new Set(["running", "streaming", "approval", "syncing"]);
+  liveTurnActive = activeStates.has(state);
+  if (liveTurnActive && run.turnId) liveOutputGroup = run.turnId;
+  if (!liveTurnActive && (state === "done" || state === "ready" || state === "error")) {
+    assistantEntry = null;
+    if (state !== "streaming") liveOutputGroup = "";
+  }
+  setRunState(state, run.label);
 }
 
 function applyTheme(themeId) {
@@ -1726,12 +1738,8 @@ function recoverFromPageResume(reason = "resume") {
     scheduleReconnect(reason, 120);
     return;
   }
-  if (ws.readyState === WebSocket.OPEN && lastWsMessageAt && now - lastWsMessageAt > staleSocketMs) {
-    if (liveTurnActive) {
-      addStatus("実行中のため、復帰後の再接続は完了後に待機します。");
-      return;
-    }
-    addStatus("Safari復帰後の接続が古いため再接続します。");
+  if (ws.readyState === WebSocket.OPEN && (liveTurnActive || (lastWsMessageAt && now - lastWsMessageAt > staleSocketMs))) {
+    addStatus(liveTurnActive ? "Safari復帰後の実行状態を再同期します。" : "Safari復帰後の接続が古いため再接続します。");
     closeSocket({ suppressReconnect: true });
     scheduleReconnect(reason, 120);
   }
@@ -1816,8 +1824,12 @@ function connect({ preserveHistory = false } = {}) {
       syncReadyThread(msg.threadId);
       renderHistoryIfChanged(msg.history || []);
       meta.textContent = `${msg.model}  •  ${msg.clients}端末  •  ${msg.workdir}`;
-      setRunState("ready");
+      applyServerRunState(msg.run || { state: "ready" });
       addEntry("status", `共有${msg.provider || "codex"} thread ready: ${msg.threadId}`);
+      return;
+    }
+    if (msg.type === "runState") {
+      applyServerRunState(msg);
       return;
     }
     if (msg.type === "user") {
@@ -1849,14 +1861,14 @@ function connect({ preserveHistory = false } = {}) {
     }
     if (msg.type === "turn" && msg.status === "started") {
       if (msg.turnId && !assistantEntry) liveOutputGroup = msg.turnId;
+      applyServerRunState(msg.run || { state: "running", label: "Agent 処理中", turnId: msg.turnId });
       return;
     }
     if (msg.type === "turn" && msg.status === "completed") {
-      liveTurnActive = false;
       lastHistorySignature = "";
       assistantEntry = null;
       liveOutputGroup = "";
-      setRunState("done", "完了しました");
+      applyServerRunState(msg.run || { state: "done", label: "完了しました", turnId: msg.turnId });
       loadThreads();
       refreshSelectedThread();
       return;

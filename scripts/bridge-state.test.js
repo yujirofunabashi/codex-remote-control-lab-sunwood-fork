@@ -17,6 +17,7 @@ test("any idle bridge can be disposed when its last browser client leaves", () =
   assert.equal(shouldDisposeIdleBridge({ clientCount: 0, ready: true }), true);
   assert.equal(shouldDisposeIdleBridge({ clientCount: 1, ready: true }), false);
   assert.equal(shouldDisposeIdleBridge({ clientCount: 0, ready: false }), true);
+  assert.equal(shouldDisposeIdleBridge({ clientCount: 0, ready: true, active: true }), false);
 });
 
 test("new bridge keys promote to the real thread id once ready", () => {

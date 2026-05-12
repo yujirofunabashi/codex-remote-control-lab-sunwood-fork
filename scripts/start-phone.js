@@ -98,6 +98,7 @@ let notificationBridgeUrls = [];
 let codexProcess = null;
 let codexStartPromise = null;
 const historyLimit = 80;
+const idleBridgeTtlMs = Number(process.env.PHONE_IDLE_BRIDGE_TTL_MS || 60 * 60 * 1000);
 const imageExtensions = new Map([
   [".png", "image/png"],
   [".jpg", "image/jpeg"],
@@ -1231,11 +1232,15 @@ class SharedBridge {
     this.startupFailed = false;
     this.history = [];
     this.turnQueue = [];
+    this.runState = { state: "connecting", label: "接続中", turnId: null, updatedAt: Date.now() };
+    this.streamingStarted = false;
+    this.idleDisposeTimer = null;
     this.upstream = createUpstreamWebSocket();
     this.bindUpstream();
   }
 
   addClient(browser) {
+    this.cancelIdleDispose();
     this.clients.add(browser);
     this.emitTo(browser, "status", { text: "共有Codexブリッジに参加しました。" });
     if (this.ready) {
@@ -1243,10 +1248,7 @@ class SharedBridge {
     }
     browser.on("close", () => {
       this.clients.delete(browser);
-      if (shouldDisposeIdleBridge({ clientCount: this.clients.size, ready: this.ready })) {
-        this.upstream.close();
-        bridges.delete(this.bridgeKey);
-      }
+      this.scheduleIdleDispose();
     });
   }
 
@@ -1259,7 +1261,59 @@ class SharedBridge {
       shared: true,
       clients: this.clients.size,
       history: this.history,
+      run: this.runPayload(),
     };
+  }
+
+  runPayload() {
+    if (this.activeTurnId) {
+      return {
+        state: this.streamingStarted ? "streaming" : "running",
+        label: this.streamingStarted ? "回答生成中" : "Agent 処理中",
+        turnId: this.activeTurnId,
+        updatedAt: Date.now(),
+      };
+    }
+    return this.runState || { state: "ready", label: "送信できます", turnId: null, updatedAt: Date.now() };
+  }
+
+  setBridgeRunState(state, label, turnId = this.activeTurnId || null) {
+    const next = { state, label, turnId, updatedAt: Date.now() };
+    const previous = this.runState || {};
+    this.runState = next;
+    if (previous.state !== state || previous.label !== label || previous.turnId !== turnId) {
+      this.emit("runState", next);
+    }
+  }
+
+  hasActiveWork() {
+    return Boolean(this.activeTurnId || this.hasPendingTurnStart() || this.turnQueue.length);
+  }
+
+  cancelIdleDispose() {
+    if (!this.idleDisposeTimer) return;
+    clearTimeout(this.idleDisposeTimer);
+    this.idleDisposeTimer = null;
+  }
+
+  scheduleIdleDispose() {
+    this.cancelIdleDispose();
+    if (
+      !shouldDisposeIdleBridge({
+        clientCount: this.clients.size,
+        ready: this.ready,
+        active: this.hasActiveWork(),
+      })
+    ) {
+      return;
+    }
+    this.idleDisposeTimer = setTimeout(() => {
+      this.idleDisposeTimer = null;
+      if (this.clients.size || this.hasActiveWork()) return;
+      this.dispose();
+      if (bridges.get(this.bridgeKey) === this) bridges.delete(this.bridgeKey);
+    }, idleBridgeTtlMs);
+    this.idleDisposeTimer.unref?.();
   }
 
   emit(type, payload = {}) {
@@ -1291,6 +1345,7 @@ class SharedBridge {
   }
 
   dispose() {
+    this.cancelIdleDispose();
     if (this.upstream && this.upstream.readyState !== WebSocket.CLOSED) {
       this.upstream.close();
     }
@@ -1375,6 +1430,7 @@ class SharedBridge {
         this.promoteBridgeKey();
         this.ready = true;
         this.history = historyFromThread(msg.result.thread);
+        this.setBridgeRunState("ready", "送信できます");
         this.emit("ready", this.readyPayload());
         if (this.requestedThreadId) this.emit("status", { text: `既存threadを再開しました: ${this.threadId}` });
         return;
@@ -1385,6 +1441,7 @@ class SharedBridge {
         if (msg.error) {
           const error = compactCodexError(msg.error.message || JSON.stringify(msg.error));
           this.emit(error.retrying ? "status" : "error", { text: error.text });
+          this.setBridgeRunState(error.retrying ? "running" : "error", error.retrying ? "再試行中" : "開始に失敗");
           if (!error.retrying) {
             notifyRunEvent("failed", {
               threadId: this.threadId,
@@ -1394,12 +1451,18 @@ class SharedBridge {
           this.startNextQueuedTurn();
         } else {
           this.activeTurnId = msg.result.turn.id;
-          this.emit("turn", { status: "started", turnId: this.activeTurnId });
+          this.streamingStarted = false;
+          this.setBridgeRunState("running", "Agent 処理中", this.activeTurnId);
+          this.emit("turn", { status: "started", turnId: this.activeTurnId, run: this.runPayload() });
         }
         return;
       }
 
       if (msg.method === "item/agentMessage/delta") {
+        if (!this.streamingStarted) {
+          this.streamingStarted = true;
+          this.setBridgeRunState("streaming", "回答生成中", this.activeTurnId);
+        }
         this.emit("assistantDelta", { text: msg.params.delta });
         return;
       }
@@ -1420,15 +1483,20 @@ class SharedBridge {
       }
 
       if (msg.method === "turn/completed") {
+        const completedTurnId = msg.params.turnId || this.activeTurnId;
         this.activeTurnId = null;
-        this.emit("turn", { status: "completed", turnId: msg.params.turnId });
-        notifyRunEvent("completed", { threadId: this.threadId, turnId: msg.params.turnId });
+        this.streamingStarted = false;
+        this.setBridgeRunState("done", "完了しました", completedTurnId);
+        this.emit("turn", { status: "completed", turnId: completedTurnId, run: this.runPayload() });
+        notifyRunEvent("completed", { threadId: this.threadId, turnId: completedTurnId });
         this.syncHistory("turn completed");
         this.startNextQueuedTurn();
+        this.scheduleIdleDispose();
         return;
       }
 
       if (msg.method && msg.method.endsWith("/requestApproval")) {
+        this.setBridgeRunState("approval", "承認待ち", this.activeTurnId);
         this.emit("approval", { request: msg });
         notifyRunEvent("approval", {
           threadId: this.threadId,
@@ -1441,9 +1509,11 @@ class SharedBridge {
       if (msg.method === "error") {
         const error = compactCodexError(msg.params.message || JSON.stringify(msg.params));
         if (error.retrying) {
+          this.setBridgeRunState("running", "再試行中", this.activeTurnId);
           this.emit("status", { text: error.text });
           return;
         }
+        this.setBridgeRunState("error", "エラー", this.activeTurnId);
         this.emit("error", { text: error.text });
         notifyRunEvent("failed", {
           threadId: this.threadId,
@@ -1459,6 +1529,7 @@ class SharedBridge {
     this.upstream.on("error", (error) => {
       if (!this.ready) this.startupFailed = true;
       this.emit("error", { text: error.message });
+      if (this.activeTurnId) this.setBridgeRunState("error", "接続エラー", this.activeTurnId);
       if (shouldStartCodexServer && isCodexConnectionFailure(error)) {
         ensureCodexServerRunning().catch((restartError) => {
           this.emit("error", { text: `Codex app-serverを再起動できませんでした: ${restartError.message}` });
@@ -1475,6 +1546,7 @@ class SharedBridge {
     this.upstream.on("close", () => {
       if (!this.ready) this.startupFailed = true;
       this.emit("status", { text: "Codex接続が閉じました" });
+      if (this.activeTurnId) this.setBridgeRunState("error", "接続が閉じました", this.activeTurnId);
       if (shouldStartCodexServer) {
         ensureCodexServerRunning().catch((error) => {
           this.emit("error", { text: `Codex app-serverを再起動できませんでした: ${error.message}` });
@@ -1559,6 +1631,7 @@ class SharedBridge {
       ...params,
     });
     this.pending.set(id, "turn/start");
+    this.setBridgeRunState("running", "送信済み・開始待ち");
     const savedAttachments = [...savedImages, ...savedFiles];
     const displayText = savedAttachments.length ? `${text}\n\n添付: ${savedAttachments.map((file) => file.name).join(", ")}` : text;
     this.appendHistory({ type: "user", text: displayText, attachments: savedImages });
@@ -1611,17 +1684,19 @@ class ClaudeBridge {
     this.history = this.claudeSessionId ? claudeHistoryForSession(this.claudeSessionId) : [];
     this.turnQueue = [];
     this.activeProcess = null;
+    this.runState = { state: "ready", label: "送信できます", turnId: null, updatedAt: Date.now() };
+    this.streamingStarted = false;
+    this.idleDisposeTimer = null;
   }
 
   addClient(browser) {
+    this.cancelIdleDispose();
     this.clients.add(browser);
     this.emitTo(browser, "status", { text: "共有Claudeブリッジに参加しました。" });
     this.emitTo(browser, "ready", this.readyPayload());
     browser.on("close", () => {
       this.clients.delete(browser);
-      if (shouldDisposeIdleBridge({ clientCount: this.clients.size, ready: this.ready })) {
-        bridges.delete(this.bridgeKey);
-      }
+      this.scheduleIdleDispose();
     });
   }
 
@@ -1634,7 +1709,58 @@ class ClaudeBridge {
       shared: true,
       clients: this.clients.size,
       history: this.history,
+      run: this.runPayload(),
     };
+  }
+
+  runPayload() {
+    if (this.activeTurnId || this.activeProcess) {
+      return {
+        state: this.streamingStarted ? "streaming" : "running",
+        label: this.streamingStarted ? "回答生成中" : "Agent 処理中",
+        turnId: this.activeTurnId,
+        updatedAt: Date.now(),
+      };
+    }
+    return this.runState || { state: "ready", label: "送信できます", turnId: null, updatedAt: Date.now() };
+  }
+
+  setBridgeRunState(state, label, turnId = this.activeTurnId || null) {
+    const next = { state, label, turnId, updatedAt: Date.now() };
+    const previous = this.runState || {};
+    this.runState = next;
+    if (previous.state !== state || previous.label !== label || previous.turnId !== turnId) {
+      this.emit("runState", next);
+    }
+  }
+
+  hasActiveWork() {
+    return Boolean(this.activeTurnId || this.activeProcess || this.turnQueue.length);
+  }
+
+  cancelIdleDispose() {
+    if (!this.idleDisposeTimer) return;
+    clearTimeout(this.idleDisposeTimer);
+    this.idleDisposeTimer = null;
+  }
+
+  scheduleIdleDispose() {
+    this.cancelIdleDispose();
+    if (
+      !shouldDisposeIdleBridge({
+        clientCount: this.clients.size,
+        ready: this.ready,
+        active: this.hasActiveWork(),
+      })
+    ) {
+      return;
+    }
+    this.idleDisposeTimer = setTimeout(() => {
+      this.idleDisposeTimer = null;
+      if (this.clients.size || this.hasActiveWork()) return;
+      if (bridges.get(this.bridgeKey) === this) bridges.delete(this.bridgeKey);
+    }, idleBridgeTtlMs);
+    this.idleDisposeTimer.unref?.();
   }
 
   emit(type, payload = {}) {
@@ -1694,9 +1820,11 @@ class ClaudeBridge {
     const displayText = savedAttachments.length ? `${text || "添付ファイルを確認してください。"}\n\n添付: ${savedAttachments.map((file) => file.name).join(", ")}` : text;
     const turnId = `claude-turn:${crypto.randomUUID()}`;
     this.activeTurnId = turnId;
+    this.streamingStarted = false;
+    this.setBridgeRunState("running", "Agent 処理中", turnId);
     this.appendHistory({ type: "user", text: displayText, attachments: savedImages });
     this.emit("user", { text: displayText, attachments: savedImages });
-    this.emit("turn", { status: "started", turnId });
+    this.emit("turn", { status: "started", turnId, run: this.runPayload() });
 
     const args = [
       "-p",
@@ -1745,6 +1873,10 @@ class ClaudeBridge {
       }
       const delta = msg.type === "stream_event" && msg.event?.delta?.type === "text_delta" ? msg.event.delta.text : "";
       if (delta) {
+        if (!this.streamingStarted) {
+          this.streamingStarted = true;
+          this.setBridgeRunState("streaming", "回答生成中", this.activeTurnId);
+        }
         assistantText += delta;
         this.emit("assistantDelta", { text: delta });
         return;
@@ -1755,6 +1887,10 @@ class ClaudeBridge {
           this.promoteBridgeKey();
         }
         if (!assistantText && msg.result) {
+          if (!this.streamingStarted) {
+            this.streamingStarted = true;
+            this.setBridgeRunState("streaming", "回答生成中", this.activeTurnId);
+          }
           assistantText = String(msg.result);
           this.emit("assistantDelta", { text: assistantText });
         }
@@ -1778,6 +1914,7 @@ class ClaudeBridge {
       }
     });
     child.on("error", (error) => {
+      this.setBridgeRunState("error", "起動に失敗", this.activeTurnId);
       this.emit("error", { text: `Claudeを起動できませんでした: ${error.message}` });
       notifyRunEvent("failed", {
         threadId: this.threadId,
@@ -1789,13 +1926,16 @@ class ClaudeBridge {
       if (stdoutBuffer.trim()) handleLine(stdoutBuffer);
       this.activeProcess = null;
       this.activeTurnId = null;
+      this.streamingStarted = false;
       if (code === 0) {
         if (assistantText.trim()) this.appendHistory({ type: "assistant", text: assistantText, outputGroup: turnId });
-        this.emit("turn", { status: "completed", turnId });
+        this.setBridgeRunState("done", "完了しました", turnId);
+        this.emit("turn", { status: "completed", turnId, run: this.runPayload() });
         notifyRunEvent("completed", { threadId: this.threadId, turnId });
       } else {
         const reason = signal ? `signal=${signal}` : `code=${code}`;
         const message = `Claude process exited (${reason})${stderrBuffer.trim() ? `: ${stderrBuffer.trim().slice(-1000)}` : ""}`;
+        this.setBridgeRunState("error", "エラー", turnId);
         this.emit("error", { text: message });
         notifyRunEvent("failed", {
           threadId: this.threadId,
@@ -1804,6 +1944,7 @@ class ClaudeBridge {
         });
       }
       this.startNextQueuedTurn();
+      this.scheduleIdleDispose();
     });
   }
 
@@ -1880,6 +2021,7 @@ function bridgeSummaries() {
     clients: bridge.clients.size,
     ready: bridge.ready,
     provider: agentProvider,
+    run: typeof bridge.runPayload === "function" ? bridge.runPayload() : null,
   }));
 }
 

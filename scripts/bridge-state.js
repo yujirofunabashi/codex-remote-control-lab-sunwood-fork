@@ -3,8 +3,8 @@ function bridgeKeyForRequest(threadId, connectionId) {
   return "new:shared";
 }
 
-function shouldDisposeIdleBridge({ clientCount }) {
-  return clientCount === 0;
+function shouldDisposeIdleBridge({ clientCount, active = false }) {
+  return clientCount === 0 && !active;
 }
 
 function shouldPromoteBridgeKey({ bridgeKey, threadId }) {
