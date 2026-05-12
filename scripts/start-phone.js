@@ -8,7 +8,7 @@ const { spawn } = require("child_process");
 const WebSocket = require("ws");
 const { bridgeKeyForRequest, shouldDisposeIdleBridge, shouldPromoteBridgeKey } = require("./bridge-state");
 const { isHistorySyncEnabled, runHistorySync } = require("./history-sync");
-const { bridgeUrls, notifyBridgeUrls } = require("./phone-notify");
+const { bridgeUrls, notifyBridgeUrls, notifyTaskEvent } = require("./phone-notify");
 const { findLiveBridge, readThreadSnapshot } = require("./thread-read");
 
 const root = path.resolve(__dirname, "..");
@@ -94,6 +94,7 @@ const codexModelOptions = ["gpt-5.5", "gpt-5.4", "gpt-5.3-codex", "gpt-5.3-codex
 const claudeModelOptions = ["sonnet", "opus", "haiku", "claude-sonnet-4-6", "claude-opus-4-5"];
 const modelOptions = isClaudeProvider ? claudeModelOptions : codexModelOptions;
 const bridges = new Map();
+let notificationBridgeUrls = [];
 const historyLimit = 80;
 const imageExtensions = new Map([
   [".png", "image/png"],
@@ -418,6 +419,49 @@ function lanAddresses() {
     .map((entry) => entry.address);
 }
 
+function preferredBridgeUrl(urls = notificationBridgeUrls) {
+  return urls.find((item) => {
+    try {
+      return new URL(item).hostname.startsWith("100.");
+    } catch {
+      return false;
+    }
+  }) || urls[0] || "";
+}
+
+function bridgeUrlForThread(threadId) {
+  const base = preferredBridgeUrl();
+  if (!base) return "";
+  try {
+    const url = new URL(base);
+    if (threadId) url.searchParams.set("thread", threadId);
+    return url.toString();
+  } catch {
+    return base;
+  }
+}
+
+function logNotifyResults(context, results) {
+  if (!results.length) return;
+  for (const result of results) {
+    if (result.ok) console.log(`[notify] ${context} sent via ${result.type}`);
+    else console.warn(`[notify] ${context} ${result.type} failed: ${result.error}`);
+  }
+}
+
+function notifyRunEvent(status, { threadId, turnId, message } = {}) {
+  notifyTaskEvent({
+    status,
+    provider: agentProvider,
+    threadId,
+    turnId,
+    model,
+    workdir,
+    message,
+    url: bridgeUrlForThread(threadId),
+  }).then((results) => logNotifyResults(`task ${status}`, results));
+}
+
 function waitForReady() {
   const url = `http://127.0.0.1:${codexPort}/readyz`;
   return new Promise((resolve, reject) => {
@@ -436,6 +480,21 @@ function waitForReady() {
         .on("error", retry);
     };
     tick();
+  });
+}
+
+function isCodexReady() {
+  const url = `http://127.0.0.1:${codexPort}/readyz`;
+  return new Promise((resolve) => {
+    const req = http.get(url, (res) => {
+      res.resume();
+      resolve(res.statusCode === 200);
+    });
+    req.setTimeout(1000, () => {
+      req.destroy();
+      resolve(false);
+    });
+    req.on("error", () => resolve(false));
   });
 }
 
@@ -1214,6 +1273,10 @@ class SharedBridge {
         this.pending.delete(msg.id);
         if (msg.error) {
           this.emit("error", { text: msg.error.message || JSON.stringify(msg.error) });
+          notifyRunEvent("failed", {
+            threadId: this.threadId,
+            message: msg.error.message || JSON.stringify(msg.error),
+          });
           this.startNextQueuedTurn();
         } else {
           this.activeTurnId = msg.result.turn.id;
@@ -1245,6 +1308,7 @@ class SharedBridge {
       if (msg.method === "turn/completed") {
         this.activeTurnId = null;
         this.emit("turn", { status: "completed", turnId: msg.params.turnId });
+        notifyRunEvent("completed", { threadId: this.threadId, turnId: msg.params.turnId });
         this.syncHistory("turn completed");
         this.startNextQueuedTurn();
         return;
@@ -1252,11 +1316,21 @@ class SharedBridge {
 
       if (msg.method && msg.method.endsWith("/requestApproval")) {
         this.emit("approval", { request: msg });
+        notifyRunEvent("approval", {
+          threadId: this.threadId,
+          turnId: this.activeTurnId,
+          message: msg.method,
+        });
         return;
       }
 
       if (msg.method === "error") {
         this.emit("error", { text: msg.params.message || JSON.stringify(msg.params) });
+        notifyRunEvent("failed", {
+          threadId: this.threadId,
+          turnId: this.activeTurnId,
+          message: msg.params.message || JSON.stringify(msg.params),
+        });
         return;
       }
 
@@ -1266,6 +1340,13 @@ class SharedBridge {
     this.upstream.on("error", (error) => {
       if (!this.ready) this.startupFailed = true;
       this.emit("error", { text: error.message });
+      if (this.activeTurnId) {
+        notifyRunEvent("failed", {
+          threadId: this.threadId,
+          turnId: this.activeTurnId,
+          message: error.message,
+        });
+      }
     });
     this.upstream.on("close", () => {
       if (!this.ready) this.startupFailed = true;
@@ -1569,6 +1650,11 @@ class ClaudeBridge {
     });
     child.on("error", (error) => {
       this.emit("error", { text: `Claudeを起動できませんでした: ${error.message}` });
+      notifyRunEvent("failed", {
+        threadId: this.threadId,
+        turnId,
+        message: error.message,
+      });
     });
     child.on("exit", (code, signal) => {
       if (stdoutBuffer.trim()) handleLine(stdoutBuffer);
@@ -1577,9 +1663,16 @@ class ClaudeBridge {
       if (code === 0) {
         if (assistantText.trim()) this.appendHistory({ type: "assistant", text: assistantText, outputGroup: turnId });
         this.emit("turn", { status: "completed", turnId });
+        notifyRunEvent("completed", { threadId: this.threadId, turnId });
       } else {
         const reason = signal ? `signal=${signal}` : `code=${code}`;
-        this.emit("error", { text: `Claude process exited (${reason})${stderrBuffer.trim() ? `: ${stderrBuffer.trim().slice(-1000)}` : ""}` });
+        const message = `Claude process exited (${reason})${stderrBuffer.trim() ? `: ${stderrBuffer.trim().slice(-1000)}` : ""}`;
+        this.emit("error", { text: message });
+        notifyRunEvent("failed", {
+          threadId: this.threadId,
+          turnId,
+          message,
+        });
       }
       this.startNextQueuedTurn();
     });
@@ -1684,9 +1777,11 @@ function localModelList() {
 
 async function main() {
   const phoneToken = getToken();
-  const codex = shouldStartCodexServer ? startCodexServer() : null;
+  const reuseExistingCodexServer = shouldStartCodexServer && (await isCodexReady());
+  const codex = shouldStartCodexServer && !reuseExistingCodexServer ? startCodexServer() : null;
+  const managedCodexServer = Boolean(codex);
   if (isCodexProvider) {
-    if (shouldStartCodexServer) {
+    if (managedCodexServer) {
       await waitForReady();
     } else {
       await appServerRequest("thread/loaded/list", { cursor: null, limit: 1 });
@@ -1703,7 +1798,7 @@ async function main() {
         app: { id: phoneAppId, name: phoneAppName, shortName: phoneAppShortName },
         codexUrl: isCodexProvider ? codexUrl : null,
         codexSocketPath: isCodexProvider ? codexSocketPath || null : null,
-        managedCodexServer: shouldStartCodexServer,
+        managedCodexServer,
         tokenRequired: true,
       });
       return;
@@ -1884,7 +1979,7 @@ async function main() {
         app: { id: phoneAppId, name: phoneAppName, shortName: phoneAppShortName },
         codexUrl: isCodexProvider ? codexUrl : null,
         codexSocketPath: isCodexProvider ? codexSocketPath || null : null,
-        managedCodexServer: shouldStartCodexServer,
+        managedCodexServer,
         historySyncEnabled,
         uiPort,
         codexPort,
@@ -2034,6 +2129,7 @@ async function main() {
   server.listen(uiPort, uiHost, () => {
     const advertisedAddresses = uiHost === "0.0.0.0" ? lanAddresses() : [uiHost];
     const urls = bridgeUrls(advertisedAddresses, uiPort, phoneToken);
+    notificationBridgeUrls = urls;
     console.log("");
     console.log("Codex shared browser bridge is ready.");
     for (const url of urls) console.log(`  ${url}`);
@@ -2043,16 +2139,13 @@ async function main() {
     console.log(`Model:   ${model}`);
     console.log(`App:     ${phoneAppName} (${phoneAppId})`);
     console.log(`Bridge:  ${uiHost}:${uiPort}`);
-    if (isCodexProvider) console.log(`Codex:   ${shouldStartCodexServer ? codexUrl : codexSocketPath || codexUrl}`);
+    if (isCodexProvider) console.log(`Codex:   ${managedCodexServer ? codexUrl : codexSocketPath || codexUrl}`);
     else console.log(`Claude:  ${claudeBin}`);
     console.log("Open the same URL from PC and phone to share one bridge thread.");
     console.log("Press Ctrl+C to stop.");
 
     notifyBridgeUrls(urls).then((results) => {
-      for (const result of results) {
-        if (result.ok) console.log(`[notify] sent via ${result.type}`);
-        else console.warn(`[notify] ${result.type} failed: ${result.error}`);
-      }
+      logNotifyResults("startup", results);
     });
   });
 
