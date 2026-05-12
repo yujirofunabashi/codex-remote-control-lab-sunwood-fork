@@ -1555,18 +1555,19 @@ class SharedBridge {
     });
   }
 
-  prompt(text, attachments = [], options = {}) {
+  prompt(text, attachments = [], options = {}, clientMessageId = null) {
     if (!this.threadId) {
       this.emit("error", { text: "Thread is not ready yet" });
       return;
     }
     if (this.activeTurnId || this.hasPendingTurnStart()) {
-      this.turnQueue.push({ text, attachments, options });
+      this.turnQueue.push({ text, attachments, options, clientMessageId });
+      if (clientMessageId) this.emit("promptAccepted", { clientMessageId, queued: true });
       this.emit("status", { text: `キューに追加しました（${this.turnQueue.length}件待機）` });
       return;
     }
     try {
-      this.startPrompt(text, attachments, options);
+      this.startPrompt(text, attachments, options, clientMessageId);
     } catch (error) {
       this.emit("error", { text: `送信に失敗しました: ${error.message}` });
     }
@@ -1577,7 +1578,7 @@ class SharedBridge {
     const next = this.turnQueue.shift();
     this.emit("status", { text: `キューから送信中（残り${this.turnQueue.length}件）` });
     try {
-      this.startPrompt(next.text, next.attachments, next.options);
+      this.startPrompt(next.text, next.attachments, next.options, next.clientMessageId);
     } catch (error) {
       this.emit("error", { text: `送信に失敗しました: ${error.message}` });
       this.startNextQueuedTurn();
@@ -1600,7 +1601,7 @@ class SharedBridge {
       });
   }
 
-  startPrompt(text, attachments = [], options = {}) {
+  startPrompt(text, attachments = [], options = {}, clientMessageId = null) {
     const input = [{ type: "text", text, text_elements: [] }];
     const savedImages = [];
     const savedFiles = [];
@@ -1635,7 +1636,7 @@ class SharedBridge {
     const savedAttachments = [...savedImages, ...savedFiles];
     const displayText = savedAttachments.length ? `${text}\n\n添付: ${savedAttachments.map((file) => file.name).join(", ")}` : text;
     this.appendHistory({ type: "user", text: displayText, attachments: savedImages });
-    this.emit("user", { text: displayText, attachments: savedImages });
+    this.emit("user", { text: displayText, attachments: savedImages, clientMessageId });
   }
 
   appendHistory(entry) {
@@ -1786,14 +1787,15 @@ class ClaudeBridge {
     this.emit("ready", this.readyPayload());
   }
 
-  prompt(text, attachments = [], options = {}) {
+  prompt(text, attachments = [], options = {}, clientMessageId = null) {
     if (this.activeTurnId || this.activeProcess) {
-      this.turnQueue.push({ text, attachments, options });
+      this.turnQueue.push({ text, attachments, options, clientMessageId });
+      if (clientMessageId) this.emit("promptAccepted", { clientMessageId, queued: true });
       this.emit("status", { text: `キューに追加しました（${this.turnQueue.length}件待機）` });
       return;
     }
     try {
-      this.startPrompt(text, attachments, options);
+      this.startPrompt(text, attachments, options, clientMessageId);
     } catch (error) {
       this.emit("error", { text: `送信に失敗しました: ${error.message}` });
     }
@@ -1803,10 +1805,10 @@ class ClaudeBridge {
     if (this.activeTurnId || this.activeProcess || !this.turnQueue.length) return;
     const next = this.turnQueue.shift();
     this.emit("status", { text: `キューから送信中（残り${this.turnQueue.length}件）` });
-    this.startPrompt(next.text, next.attachments, next.options);
+    this.startPrompt(next.text, next.attachments, next.options, next.clientMessageId);
   }
 
-  startPrompt(text, attachments = [], options = {}) {
+  startPrompt(text, attachments = [], options = {}, clientMessageId = null) {
     const savedAttachments = [];
     const savedImages = [];
     for (const attachment of attachments || []) {
@@ -1823,7 +1825,7 @@ class ClaudeBridge {
     this.streamingStarted = false;
     this.setBridgeRunState("running", "Agent 処理中", turnId);
     this.appendHistory({ type: "user", text: displayText, attachments: savedImages });
-    this.emit("user", { text: displayText, attachments: savedImages });
+    this.emit("user", { text: displayText, attachments: savedImages, clientMessageId });
     this.emit("turn", { status: "started", turnId, run: this.runPayload() });
 
     const args = [
@@ -2010,7 +2012,7 @@ async function bindBrowser(browser, phoneToken, threadId) {
       browser.close();
       return;
     }
-    if (msg.type === "prompt") bridge.prompt(msg.text, msg.attachments, msg.options);
+    if (msg.type === "prompt") bridge.prompt(msg.text, msg.attachments, msg.options, msg.clientMessageId);
     if (msg.type === "approval") bridge.approval(msg.request, msg.decision);
   });
 }

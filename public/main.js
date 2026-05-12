@@ -86,6 +86,9 @@ let statusGroup = null;
 let reconnectTimer = null;
 let threadCache = [];
 let liveTurnActive = false;
+let connectionReady = false;
+let pendingSubmission = null;
+let pendingSubmissionTimer = null;
 let lastHistorySignature = "";
 let lastThreadListError = "";
 let lastThreadRefreshError = "";
@@ -843,10 +846,64 @@ function addStatus(text) {
 }
 
 function setReady(ready) {
-  sendButton.disabled = !ready;
+  connectionReady = ready;
+  sendButton.disabled = !ready || Boolean(pendingSubmission);
   promptInput.disabled = false;
   composer.dataset.ready = ready ? "true" : "false";
-  sendButton.title = ready ? "送信" : "接続後に送信できます";
+  sendButton.title = pendingSubmission ? "送信確認中です" : ready ? "送信" : "接続後に送信できます";
+}
+
+function clientMessageId() {
+  if (window.crypto?.randomUUID) return window.crypto.randomUUID();
+  return `phone-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function fileDraftSignature(files = pendingFiles) {
+  return JSON.stringify(files.map((file) => [file.name, file.absolutePath || file.path || file.url || "", file.size || 0]));
+}
+
+function setPendingSubmission(submission) {
+  if (pendingSubmissionTimer) window.clearTimeout(pendingSubmissionTimer);
+  pendingSubmission = submission;
+  setReady(connectionReady);
+  pendingSubmissionTimer = window.setTimeout(() => {
+    if (!pendingSubmission || pendingSubmission.id !== submission.id) return;
+    pendingSubmission = null;
+    pendingSubmissionTimer = null;
+    setReady(connectionReady);
+    addStatus("送信確認がタイムアウトしました。入力は残しています。");
+  }, 12_000);
+}
+
+function clearPendingSubmissionTimer() {
+  if (!pendingSubmissionTimer) return;
+  window.clearTimeout(pendingSubmissionTimer);
+  pendingSubmissionTimer = null;
+}
+
+function acceptPendingSubmission(clientMessageIdValue) {
+  if (!clientMessageIdValue || !pendingSubmission || pendingSubmission.id !== clientMessageIdValue) return false;
+  const shouldClearDraft =
+    promptInput.value === pendingSubmission.inputValue && fileDraftSignature() === pendingSubmission.fileSignature;
+  pendingSubmission = null;
+  clearPendingSubmissionTimer();
+  if (shouldClearDraft) {
+    promptInput.value = "";
+    pendingFiles = [];
+    renderAttachments();
+  } else {
+    addStatus("送信は受理されました。入力欄は変更されているため残しました。");
+  }
+  setReady(connectionReady);
+  return true;
+}
+
+function releasePendingSubmission(message = "") {
+  if (!pendingSubmission) return;
+  pendingSubmission = null;
+  clearPendingSubmissionTimer();
+  setReady(connectionReady);
+  if (message) addStatus(`${message} 入力は残しています。`);
 }
 
 function renderHistory(history) {
@@ -1833,11 +1890,16 @@ function connect({ preserveHistory = false } = {}) {
       return;
     }
     if (msg.type === "user") {
+      acceptPendingSubmission(msg.clientMessageId);
       liveTurnActive = true;
       assistantEntry = null;
       liveOutputGroup = `live-${Date.now()}`;
       setRunState("running");
       addEntry("user", msg.text, msg.attachments || []);
+      return;
+    }
+    if (msg.type === "promptAccepted") {
+      acceptPendingSubmission(msg.clientMessageId);
       return;
     }
     if (msg.type === "assistantDelta") {
@@ -1874,6 +1936,7 @@ function connect({ preserveHistory = false } = {}) {
       return;
     }
     if (msg.type === "error") {
+      releasePendingSubmission("送信に失敗しました。");
       showBridgeError(msg.text || "エラー");
       return;
     }
@@ -1891,6 +1954,7 @@ function connect({ preserveHistory = false } = {}) {
     const shouldSuppressReconnect = suppressedSocketReconnects.has(socket);
     suppressedSocketReconnects.delete(socket);
     if (ws === socket) ws = null;
+    releasePendingSubmission("接続が切れたため送信できませんでした。");
     if (currentThreadProvider() !== activeProvider) {
       meta.textContent = `${providerLabel(currentThreadProvider())} は保存後の再起動で接続`;
       setRunState("disconnected", "Provider再起動待ち");
@@ -1903,30 +1967,52 @@ function connect({ preserveHistory = false } = {}) {
 
   socket.addEventListener("error", () => {
     setRunState("disconnected", "接続エラー");
+    releasePendingSubmission("接続エラーで送信できませんでした。");
     if (!suppressedSocketReconnects.has(socket)) scheduleReconnect("WebSocketエラー");
   });
 }
 
 composer.addEventListener("submit", (event) => {
   event.preventDefault();
-  const text = promptInput.value.trim();
-  if ((!text && !pendingFiles.length) || !ws || ws.readyState !== WebSocket.OPEN) return;
-  ws.send(
-    JSON.stringify({
+  const inputValue = promptInput.value;
+  const text = inputValue.trim();
+  if (!text && !pendingFiles.length) return;
+  if (pendingSubmission) {
+    addStatus("前回の送信確認中です。入力は残しています。");
+    return;
+  }
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    addStatus("未接続のため送信できません。入力は残しています。");
+    scheduleReconnect("送信前の再接続", 120);
+    return;
+  }
+  const attachmentsToSend = pendingFiles.map((file) => ({ ...file }));
+  const submission = {
+    id: clientMessageId(),
+    inputValue,
+    fileSignature: fileDraftSignature(),
+  };
+  setPendingSubmission(submission);
+  setRunState("running", "送信確認中");
+  try {
+    ws.send(
+      JSON.stringify({
       type: "prompt",
       token,
+      clientMessageId: submission.id,
       text: text || "添付ファイルを確認してください。",
-      attachments: pendingFiles,
+      attachments: attachmentsToSend,
       options: {
         model: selectedModel || undefined,
         approvalPolicy: accessMode.approvalPolicy,
         sandboxMode: accessMode.sandboxMode,
       },
     }),
-  );
-  promptInput.value = "";
-  pendingFiles = [];
-  renderAttachments();
+    );
+  } catch (error) {
+    releasePendingSubmission("送信できませんでした。");
+    addEntry("error", `送信に失敗しました: ${error.message}`);
+  }
 });
 
 approveButton.addEventListener("click", () => {
