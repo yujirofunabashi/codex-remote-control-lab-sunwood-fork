@@ -95,6 +95,8 @@ const claudeModelOptions = ["sonnet", "opus", "haiku", "claude-sonnet-4-6", "cla
 const modelOptions = isClaudeProvider ? claudeModelOptions : codexModelOptions;
 const bridges = new Map();
 let notificationBridgeUrls = [];
+let codexProcess = null;
+let codexStartPromise = null;
 const historyLimit = 80;
 const imageExtensions = new Map([
   [".png", "image/png"],
@@ -462,12 +464,12 @@ function notifyRunEvent(status, { threadId, turnId, message } = {}) {
   }).then((results) => logNotifyResults(`task ${status}`, results));
 }
 
-function waitForReady() {
+function waitForReady(timeoutMs = 10_000) {
   const url = `http://127.0.0.1:${codexPort}/readyz`;
   return new Promise((resolve, reject) => {
     const started = Date.now();
     const retry = () => {
-      if (Date.now() - started > 10_000) reject(new Error("Codex app-server did not become ready"));
+      if (Date.now() - started > timeoutMs) reject(new Error("Codex app-server did not become ready"));
       else setTimeout(tick, 250);
     };
     const tick = () => {
@@ -594,7 +596,12 @@ class AppServerRpcClient {
 
 const appServerClient = new AppServerRpcClient();
 
+function isManagedCodexProcessAlive() {
+  return codexProcess && codexProcess.exitCode === null && !codexProcess.killed;
+}
+
 function startCodexServer() {
+  if (isManagedCodexProcessAlive()) return codexProcess;
   const child = spawn(codexBin, ["app-server", "--listen", codexUrl], {
     cwd: root,
     env: {
@@ -608,16 +615,70 @@ function startCodexServer() {
   child.stderr.on("data", (chunk) => process.stderr.write(`[codex] ${chunk}`));
   child.on("exit", (code, signal) => {
     console.error(`[codex] exited code=${code} signal=${signal}`);
+    if (codexProcess === child) {
+      codexProcess = null;
+      appServerClient.reset(new Error("Codex app-server exited"));
+    }
   });
-  process.on("SIGINT", () => {
-    child.kill("SIGINT");
-    process.exit(0);
-  });
+  codexProcess = child;
   return child;
 }
 
-function appServerRequest(method, params) {
-  return appServerClient.request(method, params);
+function stopCodexServer(signal = "SIGTERM") {
+  if (isManagedCodexProcessAlive()) codexProcess.kill(signal);
+}
+
+function shutdown(signal) {
+  stopCodexServer();
+  process.exit(signal === "SIGINT" ? 130 : 143);
+}
+
+function isCodexConnectionFailure(error) {
+  const message = String(error?.message || error || "");
+  return (
+    message.includes("ECONNREFUSED") ||
+    message.includes("app-server connection") ||
+    message.includes("WebSocket was closed") ||
+    message.includes("socket hang up")
+  );
+}
+
+async function ensureCodexServerRunning() {
+  if (!shouldStartCodexServer) return false;
+  if (await isCodexReady()) return false;
+  if (codexStartPromise) return codexStartPromise;
+
+  codexStartPromise = (async () => {
+    if (await isCodexReady()) return false;
+    if (isManagedCodexProcessAlive()) {
+      try {
+        await waitForReady(3_000);
+        return false;
+      } catch {
+        codexProcess.kill("SIGINT");
+        codexProcess = null;
+      }
+    }
+    startCodexServer();
+    await waitForReady();
+    return true;
+  })().finally(() => {
+    codexStartPromise = null;
+  });
+
+  return codexStartPromise;
+}
+
+async function appServerRequest(method, params) {
+  if (shouldStartCodexServer) await ensureCodexServerRunning();
+  try {
+    return await appServerClient.request(method, params);
+  } catch (error) {
+    if (!shouldStartCodexServer || !isCodexConnectionFailure(error)) throw error;
+    appServerClient.reset(error);
+    await ensureCodexServerRunning();
+    return appServerClient.request(method, params);
+  }
 }
 
 function sendJson(res, status, body) {
@@ -1213,9 +1274,27 @@ class SharedBridge {
   }
 
   request(method, params) {
+    if (!this.upstream || this.upstream.readyState !== WebSocket.OPEN) {
+      throw new Error("Codex app-server connection is not open");
+    }
     const id = this.nextId++;
     this.upstream.send(JSON.stringify({ id, method, params }));
     return id;
+  }
+
+  isReusable() {
+    return (
+      !this.startupFailed &&
+      this.upstream &&
+      (this.upstream.readyState === WebSocket.CONNECTING || this.upstream.readyState === WebSocket.OPEN)
+    );
+  }
+
+  dispose() {
+    if (this.upstream && this.upstream.readyState !== WebSocket.CLOSED) {
+      this.upstream.close();
+    }
+    for (const pending of this.pending.keys()) this.pending.delete(pending);
   }
 
   hasPendingTurnStart() {
@@ -1380,6 +1459,11 @@ class SharedBridge {
     this.upstream.on("error", (error) => {
       if (!this.ready) this.startupFailed = true;
       this.emit("error", { text: error.message });
+      if (shouldStartCodexServer && isCodexConnectionFailure(error)) {
+        ensureCodexServerRunning().catch((restartError) => {
+          this.emit("error", { text: `Codex app-serverを再起動できませんでした: ${restartError.message}` });
+        });
+      }
       if (this.activeTurnId) {
         notifyRunEvent("failed", {
           threadId: this.threadId,
@@ -1391,6 +1475,11 @@ class SharedBridge {
     this.upstream.on("close", () => {
       if (!this.ready) this.startupFailed = true;
       this.emit("status", { text: "Codex接続が閉じました" });
+      if (shouldStartCodexServer) {
+        ensureCodexServerRunning().catch((error) => {
+          this.emit("error", { text: `Codex app-serverを再起動できませんでした: ${error.message}` });
+        });
+      }
     });
   }
 
@@ -1730,20 +1819,40 @@ class ClaudeBridge {
 
 function getBridge(threadId, connectionId = crypto.randomUUID()) {
   if (!threadId) {
-    for (const bridge of bridges.values()) {
-      if (!bridge.requestedThreadId) return bridge;
+    for (const [key, bridge] of bridges.entries()) {
+      if (bridge.requestedThreadId) continue;
+      if (typeof bridge.isReusable !== "function" || bridge.isReusable()) return bridge;
+      if (typeof bridge.dispose === "function") bridge.dispose();
+      bridges.delete(key);
     }
   }
   const key = bridgeKeyForRequest(threadId, connectionId);
+  const existing = bridges.get(key);
+  if (existing && typeof existing.isReusable === "function" && !existing.isReusable()) {
+    existing.dispose();
+    bridges.delete(key);
+  }
   if (!bridges.has(key)) bridges.set(key, isClaudeProvider ? new ClaudeBridge(threadId, key) : new SharedBridge(threadId, key));
   return bridges.get(key);
 }
 
-function bindBrowser(browser, phoneToken, threadId) {
+async function bindBrowser(browser, phoneToken, threadId) {
   browser.isAlive = true;
   browser.on("pong", () => {
     browser.isAlive = true;
   });
+  if (shouldStartCodexServer) {
+    try {
+      await ensureCodexServerRunning();
+    } catch (error) {
+      if (browser.readyState === WebSocket.OPEN) {
+        browser.send(JSON.stringify({ type: "error", text: `Codex app-serverを起動できませんでした: ${error.message}` }));
+        browser.close();
+      }
+      return;
+    }
+  }
+  if (browser.readyState !== WebSocket.OPEN) return;
   const bridge = getBridge(threadId);
   bridge.addClient(browser);
 
@@ -1821,15 +1930,9 @@ function localModelList() {
 
 async function main() {
   const phoneToken = getToken();
-  const reuseExistingCodexServer = shouldStartCodexServer && (await isCodexReady());
-  const codex = shouldStartCodexServer && !reuseExistingCodexServer ? startCodexServer() : null;
-  const managedCodexServer = Boolean(codex);
+  const managedCodexServer = shouldStartCodexServer;
   if (isCodexProvider) {
-    if (managedCodexServer) {
-      await waitForReady();
-    } else {
-      await appServerRequest("thread/loaded/list", { cursor: null, limit: 1 });
-    }
+    await appServerRequest("thread/loaded/list", { cursor: null, limit: 1 });
   }
 
   const server = http.createServer(async (req, res) => {
@@ -2009,7 +2112,7 @@ async function main() {
       }
       sendJson(res, 200, { ok: true, message: "Restarting phone bridge" });
       setTimeout(() => {
-        if (codex) codex.kill("SIGINT");
+        stopCodexServer();
         process.exit(42);
       }, 200);
       return;
@@ -2179,7 +2282,14 @@ async function main() {
       return;
     }
     const threadId = url.searchParams.get("thread") || null;
-    wss.handleUpgrade(req, socket, head, (ws) => bindBrowser(ws, phoneToken, threadId));
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      bindBrowser(ws, phoneToken, threadId).catch((error) => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "error", text: error.message }));
+          ws.close();
+        }
+      });
+    });
   });
 
   server.listen(uiPort, uiHost, () => {
@@ -2206,8 +2316,10 @@ async function main() {
   });
 
   process.on("exit", () => {
-    if (codex) codex.kill("SIGINT");
+    stopCodexServer();
   });
+  process.once("SIGINT", () => shutdown("SIGINT"));
+  process.once("SIGTERM", () => shutdown("SIGTERM"));
 }
 
 main().catch((error) => {
