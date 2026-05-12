@@ -66,6 +66,12 @@ PHONE_NOTIFY_TIMEOUT_MS=5000 npm run phone
 
 起動通知は任意です。`PHONE_NTFY_TOPIC` を設定すると ready URL を ntfy topic へ投稿します。`PHONE_PUSHOVER_TOKEN` と `PHONE_PUSHOVER_USER` を設定すると同じ URL を Pushover へ送ります。`PHONE_DISCORD_WEBHOOK_URL` を設定すると Discord へ投稿します。`npm run phone` は local `.env` を読んでから環境変数を参照します。`PHONE_NTFY_SERVER` は既定で `https://ntfy.sh`、HTTPS 必須です。通知 request は `PHONE_NOTIFY_TIMEOUT_MS` で timeout し、既定は 5000 ms です。LAN IPv4 URL がある場合、通知本文には token 付き bridge URL が入るため、private/protected topic、account、channel を使い、通知用 credential は Git に入れないでください。LAN IPv4 URL を検出できない場合は、provider の link field を省略し、host console を確認するよう通知します。
 
+レート制限表示は local の非公式 provider 別 snapshot に対応しています。Codex では `PHONE_CODEX_RATE_LIMIT_REFRESH_COMMAND="node scripts/read-desktop-rate-limits.js"` を設定すると、bridge は Codex auth file `~/.codex/auth.json` を読み、Codex Desktop が使う usage endpoint を呼び、表示に必要な残量 percentage/reset だけを正規化して `.phone-rate-limits.json` に cache します。従来の `PHONE_RATE_LIMIT_REFRESH_COMMAND` も Codex 用としてだけ維持しているため、Claude mode で Codex の制限値が混ざることは避けます。token や raw API response は cache しません。失敗時は前回の provider cache か `unavailable` に fallback します。Codex app UI の macOS Accessibility fallback を明示的に使う場合だけ `PHONE_RATE_LIMIT_SOURCE=desktop` を設定します。
+
+Codex Desktop ではなく Chrome 上の ChatGPT を使う場合は、`PHONE_RATE_LIMIT_SOURCE=chrome` を設定し、`chatgpt.com` tab を開いて Chrome の `表示 > デベロッパー > Apple Events からの JavaScript を許可` を有効にします。Chrome provider は account/profile menu を開いた後の `document.body.innerText` だけを読みます。cookie、local storage、request header は読みません。
+
+Claude の subscription limit は Anthropic API の rate-limit header とは別物です。Claude mode では、headless の `claude --output-format stream-json` 実行から流れる Claude Code の `rate_limit_event` を bridge が監視し、5時間 / 7日 の subscription window を `.phone-rate-limits.claude.json` に正規化 cache します。interactive な Claude Code session では、status line command として `node /absolute/path/to/scripts/capture-claude-rate-limits.js` を設定すると、Claude Code の `rate_limits` status-line JSON を読み、同じ cache に残量 percentage/reset だけを書きます。
+
 background の thread 一覧 polling は、同じ error の連続表示を抑えます。app-server の短い再起動や token mismatch が起きても、同じ `/api/threads` failure が chat log に増え続けることは避けます。
 
 ## UI でできること

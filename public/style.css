@@ -177,34 +177,15 @@ button {
 .sidebar-windowbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   min-height: 34px;
   padding: 0 4px;
 }
 
-.window-dots,
 .window-actions {
   display: inline-flex;
   align-items: center;
   gap: 10px;
-}
-
-.window-dot {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-}
-
-.window-dot.red {
-  background: #ff6258;
-}
-
-.window-dot.yellow {
-  background: #ffbd4c;
-}
-
-.window-dot.green {
-  background: #4ec95d;
 }
 
 .window-action {
@@ -553,40 +534,43 @@ button.project-heading.active {
 
 .mobile-toggle {
   display: none;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  min-height: 34px;
-  padding: 0 10px;
+  position: relative;
+  width: 42px;
+  min-width: 42px;
+  height: 34px;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 8px;
+  padding: 0;
   background: var(--card);
   color: var(--nav-text);
 }
 
-.sidebar-toggle-icon {
-  position: relative;
-  display: inline-block;
-  width: 18px;
-  height: 14px;
-  border: 1.4px solid currentColor;
-  border-radius: 3.5px;
-  flex: 0 0 auto;
+.mobile-toggle-icon {
+  position: absolute;
+  inset: 8px 9px;
+  border: 2px solid currentColor;
+  border-radius: 4px;
 }
 
-.sidebar-toggle-icon::before {
+.mobile-toggle-icon::before {
   content: "";
   position: absolute;
-  top: -1.4px;
-  bottom: -1.4px;
-  left: 4.6px;
-  width: 1.4px;
-  background: currentColor;
+  top: 3px;
+  bottom: 3px;
+  left: 7px;
+  border-left: 2px solid currentColor;
 }
 
-.mobile-toggle-label {
-  font-size: 13px;
-  line-height: 1;
+.mobile-toggle-icon::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 3px;
+  width: 5px;
+  height: 5px;
+  border-top: 2px solid currentColor;
+  border-right: 2px solid currentColor;
+  transform: translateY(-50%) rotate(45deg);
 }
 
 .title-stack {
@@ -1195,15 +1179,6 @@ textarea::placeholder {
   color: color-mix(in srgb, var(--muted) 78%, transparent);
 }
 
-.composer.composer-expanded textarea {
-  min-height: 220px;
-  max-height: 60vh;
-}
-
-.composer.composer-expanded .expand-button {
-  color: var(--nav-text);
-}
-
 .composer-footer {
   display: flex;
   align-items: center;
@@ -1236,59 +1211,70 @@ textarea::placeholder {
 .access-button,
 .model-button,
 .thinking-button,
-.voice-button,
-.expand-button {
+.expand-button,
+.voice-button {
   min-height: 34px;
   border: 0;
   background: transparent;
   color: var(--muted);
 }
 
+.ghost-button,
 .expand-button {
-  position: relative;
+  flex: 0 0 auto;
   display: grid;
   place-items: center;
-  width: 32px;
+  width: 34px;
   padding: 0;
-  flex: 0 0 auto;
 }
 
-.expand-icon {
+.expand-button {
   position: relative;
-  display: inline-block;
-  width: 16px;
-  height: 16px;
 }
 
-.expand-icon::before,
-.expand-icon::after {
+.expand-button::before,
+.expand-button::after {
   content: "";
   position: absolute;
-  width: 6px;
-  height: 6px;
-  border: 1.2px solid currentColor;
+  width: 9px;
+  height: 9px;
+  border-color: currentColor;
+  opacity: 0.86;
 }
 
-.expand-icon::before {
-  top: 0;
-  left: 0;
-  border-right: 0;
-  border-bottom: 0;
+.expand-button::before {
+  top: 8px;
+  right: 8px;
+  border-top: 2px solid;
+  border-right: 2px solid;
 }
 
-.expand-icon::after {
-  right: 0;
-  bottom: 0;
-  border-left: 0;
-  border-top: 0;
+.expand-button::after {
+  left: 8px;
+  bottom: 8px;
+  border-left: 2px solid;
+  border-bottom: 2px solid;
 }
 
 .access-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   min-width: 0;
   color: var(--accent);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.access-button::after {
+  content: "";
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: translateY(-2px) rotate(45deg);
 }
 
 .model-button {
@@ -1329,6 +1315,10 @@ textarea::placeholder {
   padding: 0;
 }
 
+.thinking-button {
+  display: none !important;
+}
+
 .thinking-button::before {
   content: "";
   width: 18px;
@@ -1342,10 +1332,10 @@ textarea::placeholder {
   content: "";
   position: absolute;
   left: 50%;
-  top: 5px;
-  width: 10px;
-  height: 17px;
-  border: 2px solid var(--muted);
+  top: 6px;
+  width: 8px;
+  height: 15px;
+  border: 1.6px solid var(--muted);
   border-radius: 999px;
   transform: translateX(-50%);
 }
@@ -1355,14 +1345,14 @@ textarea::placeholder {
   position: absolute;
   left: 50%;
   top: 16px;
-  width: 18px;
-  height: 12px;
-  border: 2px solid var(--muted);
+  width: 15px;
+  height: 10px;
+  border: 1.6px solid var(--muted);
   border-top: 0;
   border-radius: 0 0 999px 999px;
   background:
-    linear-gradient(var(--muted), var(--muted)) center 8px / 2px 8px no-repeat,
-    linear-gradient(var(--muted), var(--muted)) center 15px / 14px 2px no-repeat;
+    linear-gradient(var(--muted), var(--muted)) center 7px / 1.6px 7px no-repeat,
+    linear-gradient(var(--muted), var(--muted)) center 13px / 11px 1.6px no-repeat;
   transform: translateX(-50%);
 }
 
@@ -1373,8 +1363,8 @@ textarea::placeholder {
 
 .voice-button.listening::after {
   background:
-    linear-gradient(var(--accent), var(--accent)) center 8px / 2px 8px no-repeat,
-    linear-gradient(var(--accent), var(--accent)) center 15px / 14px 2px no-repeat;
+    linear-gradient(var(--accent), var(--accent)) center 7px / 1.6px 7px no-repeat,
+    linear-gradient(var(--accent), var(--accent)) center 13px / 11px 1.6px no-repeat;
 }
 
 html[data-provider="claude"] .thinking-button {
@@ -1397,6 +1387,48 @@ html[data-provider="claude"] .model-button {
   background: var(--card);
   color: var(--text);
   box-shadow: 0 20px 44px color-mix(in srgb, var(--text) 12%, transparent);
+}
+
+.rate-limit-card {
+  display: grid;
+  gap: 7px;
+  margin: 0 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: var(--soft);
+}
+
+.rate-limit-title {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.rate-limit-list {
+  display: grid;
+  gap: 5px;
+}
+
+.rate-limit-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.rate-limit-row strong {
+  color: var(--text);
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.rate-limit-empty {
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .model-menu.no-reasoning {
@@ -1461,16 +1493,118 @@ html[data-provider="claude"] .model-button {
 }
 
 .send-button::before {
-  content: "";
-  width: 16px;
-  height: 16px;
-  background: currentColor;
-  clip-path: polygon(6% 6%, 96% 50%, 6% 94%, 27% 55%, 48% 50%, 27% 45%);
-  transform: translateX(1px) rotate(-10deg);
+  content: none;
+}
+
+.send-icon {
+  width: 24px;
+  height: 24px;
+  transform: translateX(1px) rotate(-8deg);
+}
+
+.send-icon path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .send-button:disabled {
   opacity: 0.42;
+}
+
+body.prompt-modal-open {
+  overflow: hidden;
+}
+
+.prompt-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: max(18px, env(safe-area-inset-top)) 18px max(18px, env(safe-area-inset-bottom));
+  background: color-mix(in srgb, var(--scrim) 72%, transparent);
+}
+
+.prompt-modal.hidden {
+  display: none;
+}
+
+.prompt-modal-card {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: min(900px, 100%);
+  height: min(760px, 100%);
+  min-height: 0;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: var(--card);
+  box-shadow: 0 24px 70px color-mix(in srgb, var(--text) 18%, transparent);
+  overflow: hidden;
+}
+
+.prompt-modal-header,
+.prompt-modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+}
+
+.prompt-modal-header {
+  border-bottom: 1px solid var(--line);
+}
+
+.prompt-modal-header h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: 16px;
+}
+
+.prompt-modal-close {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--soft);
+  color: var(--muted);
+  font-size: 24px;
+  line-height: 1;
+}
+
+.prompt-modal-input {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  max-height: none;
+  resize: none;
+  padding: 18px;
+  font-size: 17px;
+  line-height: 1.58;
+}
+
+.prompt-modal-footer {
+  border-top: 1px solid var(--line);
+}
+
+.prompt-modal-footer button {
+  min-height: 42px;
+  border: 1px solid var(--button);
+  border-radius: 11px;
+  padding: 0 18px;
+  background: var(--button);
+  color: var(--button-text);
+}
+
+.prompt-modal-footer .secondary {
+  border-color: var(--line);
+  background: var(--card);
+  color: var(--text);
 }
 
 .artifact-panel {
@@ -1725,6 +1859,17 @@ html[data-provider="claude"] .model-button {
 .artifact-row.active {
   background: var(--soft);
   font-weight: 600;
+}
+
+.panel-section-heading {
+  margin: 16px 4px 8px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.panel-section-heading:first-child {
+  margin-top: 0;
 }
 
 .artifact-browser-list {
@@ -2210,18 +2355,22 @@ html[data-provider="claude"] .model-button {
     position: fixed;
     inset: 62px 12px max(12px, env(safe-area-inset-bottom)) 12px;
     z-index: 24;
-    display: grid;
-    align-content: start;
+    display: flex;
+    flex-direction: column;
+    align-content: stretch;
     max-width: 460px;
     margin-left: auto;
     border: 1px solid var(--line);
     border-radius: 18px;
     padding: 10px;
+    background: var(--card);
     box-shadow: 0 20px 46px color-mix(in srgb, var(--text) 16%, transparent);
   }
 
   body.show-panel .panel-card-main {
-    min-height: 100%;
+    flex: 1 0 auto;
+    width: 100%;
+    min-height: 0;
   }
 }
 
@@ -2289,17 +2438,8 @@ html[data-provider="claude"] .model-button {
     padding: 0 3px;
   }
 
-  .window-dots {
-    gap: 8px;
-  }
-
   .window-actions {
     gap: 8px;
-  }
-
-  .window-dot {
-    width: 10px;
-    height: 10px;
   }
 
   .window-action {
@@ -2583,22 +2723,14 @@ html[data-provider="claude"] .model-button {
   .access-button,
   .model-button,
   .thinking-button,
-  .voice-button,
-  .expand-button {
+  .expand-button,
+  .voice-button {
     min-height: 30px;
     font-size: 15px;
   }
 
-  .expand-button {
-    width: 28px;
-  }
-
-  .expand-icon {
-    width: 14px;
-    height: 14px;
-  }
-
   .thinking-button,
+  .expand-button,
   .voice-button {
     width: 28px;
   }
@@ -2609,24 +2741,24 @@ html[data-provider="claude"] .model-button {
   }
 
   .voice-button::before {
-    top: 5px;
-    width: 8px;
-    height: 14px;
+    top: 6px;
+    width: 7px;
+    height: 13px;
   }
 
   .voice-button::after {
     top: 14px;
-    width: 14px;
-    height: 10px;
+    width: 13px;
+    height: 9px;
     background:
-      linear-gradient(var(--muted), var(--muted)) center 6px / 2px 7px no-repeat,
-      linear-gradient(var(--muted), var(--muted)) center 12px / 11px 2px no-repeat;
+      linear-gradient(var(--muted), var(--muted)) center 6px / 1.5px 6px no-repeat,
+      linear-gradient(var(--muted), var(--muted)) center 11px / 10px 1.5px no-repeat;
   }
 
   .voice-button.listening::after {
     background:
-      linear-gradient(var(--accent), var(--accent)) center 6px / 2px 7px no-repeat,
-      linear-gradient(var(--accent), var(--accent)) center 12px / 11px 2px no-repeat;
+      linear-gradient(var(--accent), var(--accent)) center 6px / 1.5px 6px no-repeat,
+      linear-gradient(var(--accent), var(--accent)) center 11px / 10px 1.5px no-repeat;
   }
 
   .send-button {
@@ -2635,9 +2767,9 @@ html[data-provider="claude"] .model-button {
     border-radius: 50%;
   }
 
-  .send-button::before {
-    width: 14px;
-    height: 14px;
+  .send-icon {
+    width: 18px;
+    height: 18px;
   }
 
   .access-button {
@@ -2657,13 +2789,9 @@ html[data-provider="claude"] .model-button {
   }
 
   .mobile-toggle {
-    min-width: 56px;
-    padding: 0 8px;
-    gap: 5px;
-  }
-
-  .mobile-toggle-label {
-    font-size: 12px;
+    width: 38px;
+    min-width: 38px;
+    height: 32px;
   }
 
   .icon-button {
@@ -2726,6 +2854,22 @@ html[data-provider="claude"] .model-button {
     border-radius: 16px;
   }
 
+  .prompt-modal {
+    align-items: stretch;
+    padding: max(10px, env(safe-area-inset-top)) 10px max(10px, env(safe-area-inset-bottom));
+  }
+
+  .prompt-modal-card {
+    width: 100%;
+    height: 100%;
+    border-radius: 16px;
+  }
+
+  .prompt-modal-input {
+    padding: 14px;
+    font-size: 16px;
+  }
+
   .composer-footer {
     gap: 6px;
     padding-bottom: 7px;
@@ -2737,7 +2881,8 @@ html[data-provider="claude"] .model-button {
   }
 
   .access-button {
-    max-width: 86px;
+    max-width: 112px;
+    font-size: 14px;
   }
 
   .model-button {
@@ -2748,10 +2893,10 @@ html[data-provider="claude"] .model-button {
     max-width: 84px;
   }
 
-  .model-menu {
-    right: 8px;
-    width: calc(100vw - 30px);
-  }
+	  .model-menu {
+	    right: 8px;
+	    width: calc(100vw - 30px);
+	  }
 
   .panel-title {
     margin-bottom: 14px;
@@ -2845,14 +2990,9 @@ html[data-provider="claude"] .model-button {
 
 @media (max-width: 380px) {
   .mobile-toggle {
-    min-width: 38px;
-    max-width: 38px;
-    padding: 0;
-    justify-content: center;
-  }
-
-  .mobile-toggle-label {
-    display: none;
+    width: 34px;
+    min-width: 34px;
+    height: 30px;
   }
 
   .icon-button {
@@ -2866,7 +3006,7 @@ html[data-provider="claude"] .model-button {
   }
 
   .access-button {
-    max-width: 72px;
+    max-width: 94px;
   }
 
   .model-button {
@@ -2883,18 +3023,13 @@ html[data-provider="claude"] .model-button {
   .access-button,
   .model-button,
   .thinking-button,
-  .voice-button,
-  .expand-button {
+  .expand-button,
+  .voice-button {
     font-size: 13px;
   }
 
   .expand-button {
     width: 26px;
-  }
-
-  .expand-icon {
-    width: 13px;
-    height: 13px;
   }
 
   .thread-time {

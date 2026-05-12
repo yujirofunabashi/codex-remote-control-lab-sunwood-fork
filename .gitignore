@@ -1,10 +1,13 @@
 node_modules/
+.DS_Store
 .codex-home*/
 schemas/
 docs/.vitepress/dist/
 docs/.vitepress/cache/
 *.log
 .env
+.claude/
 .phone-token
 .phone-workspaces.json
+.phone-rate-limits*.json
 .uploads/

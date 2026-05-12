@@ -19,11 +19,6 @@
       <button type="button" class="sidebar-scrim" id="sidebarScrim" aria-label="チャット一覧を閉じる"></button>
       <aside class="sidebar" id="threadSidebar" aria-label="スレッド">
         <div class="sidebar-windowbar" aria-hidden="true">
-          <span class="window-dots">
-            <span class="window-dot red"></span>
-            <span class="window-dot yellow"></span>
-            <span class="window-dot green"></span>
-          </span>
           <span class="window-actions">
             <span class="window-action split"></span>
             <span class="window-chevron left"></span>
@@ -61,9 +56,8 @@
 
       <section class="workspace">
         <header class="titlebar">
-          <button type="button" class="mobile-toggle" id="mobileThreads" aria-label="チャット一覧を切り替え" title="チャット一覧">
-            <span class="sidebar-toggle-icon" aria-hidden="true"></span>
-            <span class="mobile-toggle-label">チャット</span>
+          <button type="button" class="mobile-toggle" id="mobileThreads" title="チャット一覧を開く" aria-label="チャット一覧を開く" aria-controls="threadSidebar" aria-expanded="false">
+            <span class="mobile-toggle-icon" aria-hidden="true"></span>
           </button>
           <div class="title-stack">
             <h1 id="threadTitle">Codex Remote</h1>
@@ -102,19 +96,28 @@
               <div class="composer-footer">
                 <div class="composer-left">
                   <button type="button" class="ghost-button" id="addButton" aria-label="添付を追加" title="添付を追加">＋</button>
-                  <button type="button" class="expand-button" id="expandPromptButton" aria-label="入力欄を広げる" title="入力欄を広げる">
-                    <span class="expand-icon" aria-hidden="true"></span>
-                  </button>
-                  <button type="button" class="access-button" id="accessButton">フルアクセス⌄</button>
+                  <button type="button" class="expand-button" id="expandPromptButton" title="入力欄を拡大" aria-label="入力欄を拡大"></button>
+                  <button type="button" class="access-button" id="accessButton">フルアクセス</button>
                 </div>
                 <div class="composer-right">
                   <button type="button" class="thinking-button" id="thinkingButton" title="インテリジェンス"></button>
                   <button type="button" id="modelButton" class="model-button">5.5 中⌄</button>
                   <button type="button" class="voice-button" id="voiceButton" title="音声入力" aria-label="音声入力"></button>
-                  <button id="send" type="submit" class="send-button" title="送信">↑</button>
+                  <button id="send" type="submit" class="send-button" title="送信" aria-label="送信">
+                    <svg class="send-icon" viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M4 12.5 20 4l-6.4 16-2.4-6.6L4 12.5Z" />
+                      <path d="m11.2 13.4 3.4-3.4" />
+                    </svg>
+                  </button>
                 </div>
               </div>
               <div id="modelMenu" class="model-menu hidden" role="menu" aria-label="モデルとインテリジェンス">
+                <section class="rate-limit-card" aria-live="polite">
+                  <div class="rate-limit-title">残りのレート制限</div>
+                  <div class="rate-limit-list" id="rateLimitList">
+                    <span class="rate-limit-empty">未取得</span>
+                  </div>
+                </section>
                 <div class="model-menu-label">インテリジェンス</div>
                 <button type="button" class="model-menu-row" data-reasoning="低">低</button>
                 <button type="button" class="model-menu-row" data-reasoning="中">中<span class="checkmark">✓</span></button>
@@ -126,6 +129,19 @@
                 <button type="button" class="model-menu-row submenu-row" id="moreModelsButton">その他のモデル<span class="chevron">›</span></button>
               </div>
             </form>
+            <section class="prompt-modal hidden" id="promptModal" role="dialog" aria-modal="true" aria-labelledby="promptModalTitle">
+              <div class="prompt-modal-card">
+                <header class="prompt-modal-header">
+                  <h2 id="promptModalTitle">入力を編集</h2>
+                  <button type="button" class="prompt-modal-close" id="closePromptModalButton" aria-label="閉じる">×</button>
+                </header>
+                <textarea id="promptModalInput" class="prompt-modal-input" placeholder="フォローアップの変更を求める"></textarea>
+                <footer class="prompt-modal-footer">
+                  <button type="button" class="secondary" id="cancelPromptModalButton">キャンセル</button>
+                  <button type="button" id="applyPromptModalButton">反映</button>
+                </footer>
+              </div>
+            </section>
           </section>
 
           <aside class="artifact-panel" aria-label="アーティファクト">

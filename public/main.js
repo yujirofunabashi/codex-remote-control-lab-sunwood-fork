@@ -15,6 +15,7 @@ const accessButton = document.querySelector("#accessButton");
 const thinkingButton = document.querySelector("#thinkingButton");
 const modelButton = document.querySelector("#modelButton");
 const modelMenu = document.querySelector("#modelMenu");
+const rateLimitList = document.querySelector("#rateLimitList");
 const voiceButton = document.querySelector("#voiceButton");
 const fileInput = document.querySelector("#fileInput");
 const attachments = document.querySelector("#attachments");
@@ -40,6 +41,11 @@ const threadTitle = document.querySelector("#threadTitle");
 const composer = document.querySelector("#composer");
 const promptInput = document.querySelector("#prompt");
 const sendButton = document.querySelector("#send");
+const promptModal = document.querySelector("#promptModal");
+const promptModalInput = document.querySelector("#promptModalInput");
+const closePromptModalButton = document.querySelector("#closePromptModalButton");
+const cancelPromptModalButton = document.querySelector("#cancelPromptModalButton");
+const applyPromptModalButton = document.querySelector("#applyPromptModalButton");
 const approval = document.querySelector("#approval");
 const approvalText = document.querySelector("#approvalText");
 const approveButton = document.querySelector("#approve");
@@ -68,6 +74,11 @@ function appPath(path) {
   if (/^[a-z][a-z0-9+.-]*:/i.test(raw)) return raw;
   if (!raw.startsWith("/")) return raw;
   return `${appBasePath}${raw}`;
+}
+
+function setSidebarVisible(visible) {
+  document.body.classList.toggle("show-sidebar", visible);
+  mobileThreadsButton.setAttribute("aria-expanded", visible ? "true" : "false");
 }
 
 if (manifestLink && token) {
@@ -113,6 +124,7 @@ let selectedReasoning = localStorage.getItem("codexPhoneReasoning") || "中";
 let settingsRenderSeq = 0;
 let artifactItems = [];
 let activeArtifactPath = "";
+let latestRateLimits = null;
 let accessMode = {
   label: "フルアクセス",
   approvalPolicy: "never",
@@ -281,7 +293,70 @@ function closeModelMenu() {
 
 function toggleModelMenu() {
   updateModelButton();
+  const willOpen = modelMenu.classList.contains("hidden");
   modelMenu.classList.toggle("hidden");
+  if (willOpen) refreshRateLimits().catch(() => {});
+}
+
+function normalizeRateLimitWindows(rateLimits) {
+  const rawWindows = Array.isArray(rateLimits) ? rateLimits : rateLimits?.windows || rateLimits?.limits || [];
+  return rawWindows
+    .map((item) => {
+      const remainingPercent = Number(item.remainingPercent ?? item.remaining ?? item.percent);
+      const label = String(item.label || item.window || item.name || "").trim();
+      const resetsAt = String(item.resetsAt || item.resetAt || item.reset || "").trim();
+      if (!label && !Number.isFinite(remainingPercent) && !resetsAt) return null;
+      return {
+        label: label || "制限",
+        remainingPercent: Number.isFinite(remainingPercent) ? Math.max(0, Math.min(100, Math.round(remainingPercent))) : null,
+        resetsAt,
+      };
+    })
+    .filter(Boolean);
+}
+
+function renderRateLimitCard(rateLimits = latestRateLimits) {
+  if (!rateLimitList) return;
+  const windows = normalizeRateLimitWindows(rateLimits);
+  rateLimitList.replaceChildren();
+  if (!windows.length) {
+    const empty = document.createElement("span");
+    empty.className = "rate-limit-empty";
+    empty.textContent = rateLimits?.error ? "取得エラー" : rateLimits?.source === "unavailable" ? "取得元未設定" : "未取得";
+    rateLimitList.appendChild(empty);
+    return;
+  }
+  for (const item of windows) {
+    const row = document.createElement("div");
+    row.className = "rate-limit-row";
+    const label = document.createElement("span");
+    label.textContent = item.label;
+    const value = document.createElement("strong");
+    const percent = item.remainingPercent === null ? "--" : `${item.remainingPercent}%`;
+    value.textContent = item.resetsAt ? `${percent} ${item.resetsAt}` : percent;
+    row.append(label, value);
+    rateLimitList.appendChild(row);
+  }
+}
+
+function addRateLimitPanelRows(rateLimits) {
+  const windows = normalizeRateLimitWindows(rateLimits);
+  if (!windows.length) {
+    const detail = rateLimits?.error ? "取得エラー" : rateLimits?.source === "unavailable" ? "取得元未設定" : "未取得";
+    addPanelRow("レート制限", detail);
+    return;
+  }
+  for (const item of windows) {
+    const percent = item.remainingPercent === null ? "--" : `${item.remainingPercent}%`;
+    addPanelRow(`レート制限 ${item.label}`, item.resetsAt ? `${percent} / ${item.resetsAt}` : percent);
+  }
+}
+
+async function refreshRateLimits() {
+  const result = await apiGet("/api/status?refreshRateLimits=1");
+  latestRateLimits = result.rateLimits || null;
+  renderRateLimitCard(latestRateLimits);
+  return latestRateLimits;
 }
 
 function selectReasoning(value) {
@@ -1187,7 +1262,7 @@ function selectThread(threadId) {
   selectedThreadByProvider.set(currentThreadProvider(), selectedThread);
   updateUrlThread();
   renderThreadList();
-  document.body.classList.remove("show-sidebar");
+  setSidebarVisible(false);
   connect();
   if (selectedThread) refreshSelectedThread();
 }
@@ -1195,7 +1270,7 @@ function selectThread(threadId) {
 function showRightPanel() {
   document.body.classList.remove("hide-artifacts");
   document.body.classList.add("show-panel");
-  document.body.classList.remove("show-sidebar");
+  setSidebarVisible(false);
 }
 
 function closeRightPanel() {
@@ -1216,10 +1291,25 @@ function currentPanelTabName() {
 
 function keepComposerVisible() {
   if (!window.matchMedia("(max-width: 820px)").matches) return;
-  document.body.classList.remove("show-sidebar");
+  setSidebarVisible(false);
   closeRightPanel();
   requestAnimationFrame(() => composer.scrollIntoView({ block: "nearest", inline: "nearest" }));
   window.setTimeout(() => composer.scrollIntoView({ block: "nearest", inline: "nearest" }), 250);
+}
+
+function openPromptModal() {
+  promptModalInput.value = promptInput.value;
+  promptModal.classList.remove("hidden");
+  document.body.classList.add("prompt-modal-open");
+  requestAnimationFrame(() => promptModalInput.focus());
+}
+
+function closePromptModal({ apply = false } = {}) {
+  if (apply) promptInput.value = promptModalInput.value;
+  promptModal.classList.add("hidden");
+  document.body.classList.remove("prompt-modal-open");
+  promptInput.focus();
+  keepComposerVisible();
 }
 
 function clearPanel(title, tabName = "artifacts") {
@@ -1267,6 +1357,57 @@ function addPanelRow(text, detail, onClick, options = {}) {
   return row;
 }
 
+function addPanelSectionTitle(text) {
+  const heading = document.createElement("div");
+  heading.className = "panel-section-heading";
+  heading.textContent = text;
+  artifactList.appendChild(heading);
+  return heading;
+}
+
+function renderPanelSection(title, rows, emptyText) {
+  addPanelSectionTitle(title);
+  if (!rows.length) {
+    addPanelRow(emptyText);
+    return;
+  }
+  for (const row of rows) addPanelRow(row.name, row.detail);
+}
+
+function pluginDisplayName(plugin) {
+  const summary = plugin?.summary || plugin || {};
+  return summary.interface?.displayName || summary.name || summary.id || "プラグイン";
+}
+
+function pluginStatus(plugin) {
+  const summary = plugin?.summary || plugin || {};
+  if (summary.enabled) return "enabled";
+  if (summary.installed) return "installed";
+  return summary.availability || summary.installPolicy || "available";
+}
+
+function collectPluginRows(result) {
+  const rows = [];
+  const marketplaces = result.marketplaces || result.data || [];
+  for (const marketplace of marketplaces) {
+    const plugins = marketplace.plugins || marketplace.entries || [];
+    for (const plugin of plugins) {
+      rows.push({
+        name: pluginDisplayName(plugin),
+        detail: pluginStatus(plugin),
+      });
+    }
+  }
+  return rows;
+}
+
+function collectSkillRows(result) {
+  return (result.skills || result.data || []).map((skill) => ({
+    name: skill.name || skill.id || "スキル",
+    detail: skill.description || skill.source || skill.path || "",
+  }));
+}
+
 function renderArtifactIndex(items) {
   artifactItems = items;
   activeArtifactPath = "";
@@ -1305,27 +1446,29 @@ function showToolError(name, error) {
   clearPanel(name, currentPanelTabName());
   addPanelRow("読み込みに失敗しました", error.message);
   addEntry("error", `${name}: ${error.message}`);
-  document.body.classList.remove("show-sidebar");
+  setSidebarVisible(false);
 }
 
 async function showPlugins() {
-  clearPanel("プラグイン", "extensions");
+  clearPanel("プラグイン / スキル", "extensions");
   addPanelRow("読み込み中...");
-  try {
-    const result = await apiGet("/api/plugins");
-    const marketplaces = result.marketplaces || result.data || [];
-    artifactList.replaceChildren();
-    for (const marketplace of marketplaces) {
-      const plugins = marketplace.plugins || marketplace.entries || [];
-      if (!plugins.length) addPanelRow(marketplace.name || marketplace.id || "marketplace", "プラグインなし");
-      for (const plugin of plugins) {
-        const summary = plugin.summary || plugin;
-        addPanelRow(summary.name || summary.id, summary.enabled ? "enabled" : summary.installed ? "installed" : "available");
-      }
-    }
-    if (!artifactList.children.length) addPanelRow("プラグインは見つかりませんでした");
-  } catch (error) {
-    showToolError("プラグイン", error);
+  const [pluginsResult, skillsResult] = await Promise.allSettled([apiGet("/api/plugins"), apiGet("/api/skills")]);
+  artifactList.replaceChildren();
+
+  if (pluginsResult.status === "fulfilled") {
+    renderPanelSection("プラグイン", collectPluginRows(pluginsResult.value), "プラグインは見つかりませんでした");
+  } else {
+    addPanelSectionTitle("プラグイン");
+    addPanelRow("読み込みに失敗しました", pluginsResult.reason.message);
+    addEntry("error", `プラグイン: ${pluginsResult.reason.message}`);
+  }
+
+  if (skillsResult.status === "fulfilled") {
+    renderPanelSection("スキル", collectSkillRows(skillsResult.value), "スキルは見つかりませんでした");
+  } else {
+    addPanelSectionTitle("スキル");
+    addPanelRow("読み込みに失敗しました", skillsResult.reason.message);
+    addEntry("error", `スキル: ${skillsResult.reason.message}`);
   }
 }
 
@@ -1702,6 +1845,9 @@ async function showStatus() {
     addPanelRow("UI port", String(result.uiPort));
     addPanelRow("Provider", result.provider || "codex");
     if (result.codexUrl) addPanelRow("Codex app-server", result.codexUrl);
+    latestRateLimits = result.rateLimits || null;
+    renderRateLimitCard(latestRateLimits);
+    addRateLimitPanelRows(latestRateLimits);
     addPanelRow("履歴同期", result.historySyncEnabled ? "有効" : "無効");
     addPanelRow("作業ディレクトリ", result.workdir);
     for (const bridge of result.bridges || []) {
@@ -1935,6 +2081,11 @@ function connect({ preserveHistory = false } = {}) {
       applyServerRunState(msg);
       return;
     }
+    if (msg.type === "rateLimits") {
+      latestRateLimits = msg.rateLimits || null;
+      renderRateLimitCard(latestRateLimits);
+      return;
+    }
     if (msg.type === "user") {
       acceptPendingSubmission(msg.clientMessageId);
       liveTurnActive = true;
@@ -2083,7 +2234,7 @@ searchButton.addEventListener("click", () => {
   threadSearch.classList.toggle("hidden");
   threadSearch.focus();
   renderThreadList();
-  document.body.classList.add("show-sidebar");
+  setSidebarVisible(true);
 });
 threadSearch.addEventListener("input", renderThreadList);
 pluginsButton.addEventListener("click", showPlugins);
@@ -2092,10 +2243,12 @@ settingsButton.addEventListener("click", showSettings);
 mobileSettingsButton.addEventListener("click", showSettings);
 mobileThreadsButton.addEventListener("click", () => {
   const nextVisible = !document.body.classList.contains("show-sidebar");
-  document.body.classList.toggle("show-sidebar", nextVisible);
+  setSidebarVisible(nextVisible);
   if (nextVisible) closeRightPanel();
 });
-sidebarScrim.addEventListener("click", () => document.body.classList.remove("show-sidebar"));
+sidebarScrim.addEventListener("click", () => {
+  setSidebarVisible(false);
+});
 connectButton.addEventListener("click", connect);
 promptInput.addEventListener("focus", keepComposerVisible);
 promptInput.addEventListener("click", keepComposerVisible);
@@ -2136,11 +2289,15 @@ function isSupportedUpload(file) {
 }
 
 addButton.addEventListener("click", () => fileInput.click());
-expandPromptButton?.addEventListener("click", () => {
-  const expanded = composer.classList.toggle("composer-expanded");
-  expandPromptButton.setAttribute("aria-pressed", expanded ? "true" : "false");
-  expandPromptButton.title = expanded ? "入力欄を戻す" : "入力欄を広げる";
-  if (expanded) promptInput.focus({ preventScroll: false });
+expandPromptButton.addEventListener("click", openPromptModal);
+closePromptModalButton.addEventListener("click", () => closePromptModal({ apply: true }));
+cancelPromptModalButton.addEventListener("click", () => closePromptModal({ apply: false }));
+applyPromptModalButton.addEventListener("click", () => closePromptModal({ apply: true }));
+promptModal.addEventListener("click", (event) => {
+  if (event.target === promptModal) closePromptModal({ apply: true });
+});
+promptModalInput.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") closePromptModal({ apply: true });
 });
 fileInput.addEventListener("change", async () => {
   const selectedFiles = Array.from(fileInput.files || []);
@@ -2165,7 +2322,7 @@ fileInput.addEventListener("change", async () => {
 accessButton.addEventListener("click", () => {
   const index = accessModes.findIndex((candidate) => candidate.label === accessMode.label);
   accessMode = accessModes[(index + 1) % accessModes.length];
-  accessButton.textContent = `${accessMode.label}⌄`;
+  accessButton.textContent = accessMode.label;
   addStatus(`権限を ${accessMode.label} に切り替えました。次の送信から反映します。`);
 });
 thinkingButton.addEventListener("click", toggleModelMenu);

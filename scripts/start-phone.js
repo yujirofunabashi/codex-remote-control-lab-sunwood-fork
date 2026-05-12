@@ -64,6 +64,294 @@ function uploadLimitBytes() {
   return (Number.isFinite(mb) && mb > 0 ? mb : 256) * 1024 * 1024;
 }
 
+function sanitizeRateLimitWindow(item) {
+  const label = String(item?.label || item?.window || item?.name || "").trim();
+  const resetsAt = String(item?.resetsAt || item?.resetAt || item?.reset || "").trim();
+  const remainingPercent = Number(item?.remainingPercent ?? item?.remaining ?? item?.percent);
+  if (!label && !resetsAt && !Number.isFinite(remainingPercent)) return null;
+  return {
+    label: label || "制限",
+    remainingPercent: Number.isFinite(remainingPercent) ? Math.max(0, Math.min(100, Math.round(remainingPercent))) : null,
+    resetsAt,
+  };
+}
+
+function numberOrNull(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function clampPercent(value) {
+  if (!Number.isFinite(value)) return null;
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function sameLocalDay(a, b) {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+}
+
+function formatRateLimitResetAt(value) {
+  const numeric = numberOrNull(value);
+  let date = null;
+  if (numeric !== null) {
+    date = new Date((numeric > 1_000_000_000_000 ? numeric : numeric * 1000));
+  } else if (value) {
+    date = new Date(value);
+  }
+  if (!date || !Number.isFinite(date.getTime())) return "";
+  const locale = process.env.PHONE_RATE_LIMIT_LOCALE || "ja-JP";
+  const now = new Date();
+  if (sameLocalDay(date, now)) return new Intl.DateTimeFormat(locale, { timeStyle: "short" }).format(date);
+  if (date.getFullYear() === now.getFullYear()) return new Intl.DateTimeFormat(locale, { month: "short", day: "numeric" }).format(date);
+  return new Intl.DateTimeFormat(locale, { dateStyle: "medium" }).format(date);
+}
+
+function claudeRateLimitLabel(type, fallback = "制限") {
+  const value = String(type || "").trim();
+  if (value === "five_hour") return "5時間";
+  if (value === "seven_day") return "週あたり";
+  if (value === "seven_day_opus") return "週あたり Opus";
+  if (value === "seven_day_sonnet") return "週あたり Sonnet";
+  if (value === "overage") return "追加利用";
+  return fallback;
+}
+
+function remainingFromUsedPercent(value) {
+  const used = numberOrNull(value);
+  return used === null ? null : clampPercent(100 - used);
+}
+
+function remainingFromUtilization(value) {
+  const utilization = numberOrNull(value);
+  if (utilization === null) return null;
+  const usedPercent = utilization <= 1 ? utilization * 100 : utilization;
+  return clampPercent(100 - usedPercent);
+}
+
+function claudeStatusLineWindow(rateLimits, type) {
+  const camelType = type.replace(/_([a-z])/g, (_, char) => char.toUpperCase());
+  const item = rateLimits?.[type] || rateLimits?.[camelType];
+  if (!item || typeof item !== "object") return null;
+  return sanitizeRateLimitWindow({
+    label: claudeRateLimitLabel(type),
+    remainingPercent: remainingFromUsedPercent(item.used_percentage ?? item.usedPercentage),
+    resetsAt: formatRateLimitResetAt(item.resets_at ?? item.resetsAt),
+  });
+}
+
+function claudeEventWindow(info) {
+  if (!info || typeof info !== "object") return null;
+  const type = info.rate_limit_type || info.rateLimitType;
+  return sanitizeRateLimitWindow({
+    label: claudeRateLimitLabel(type),
+    remainingPercent: remainingFromUtilization(info.utilization),
+    resetsAt: formatRateLimitResetAt(info.resets_at ?? info.resetsAt),
+  });
+}
+
+function normalizeClaudeRateLimitPayload(payload, fallbackSource = "claude") {
+  const rateLimits = payload?.rate_limits || payload?.rateLimits;
+  const windows = [];
+  if (rateLimits && typeof rateLimits === "object") {
+    for (const type of ["five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet", "overage"]) {
+      const window = claudeStatusLineWindow(rateLimits, type);
+      if (window) windows.push(window);
+    }
+  }
+  const info = payload?.rate_limit_info || payload?.rateLimitInfo || payload?.data?.rate_limit_info || payload?.data?.rateLimitInfo;
+  const eventWindow = claudeEventWindow(info);
+  if (eventWindow) windows.push(eventWindow);
+  return {
+    provider: "claude",
+    source: String(payload?.source || fallbackSource),
+    updatedAt: payload?.updatedAt || new Date().toISOString(),
+    windows,
+  };
+}
+
+function normalizeRateLimitSnapshot(payload, fallbackSource = "unknown", provider = "") {
+  const normalizedProvider = provider ? normalizeProvider(provider) : "";
+  if (normalizedProvider === "claude") {
+    const claudeSnapshot = normalizeClaudeRateLimitPayload(payload, fallbackSource);
+    if (claudeSnapshot.windows.length) return claudeSnapshot;
+  }
+  const rawWindows = Array.isArray(payload) ? payload : payload?.windows || payload?.limits || [];
+  const windows = (Array.isArray(rawWindows) ? rawWindows : []).map(sanitizeRateLimitWindow).filter(Boolean);
+  return {
+    provider: normalizedProvider || payload?.provider || undefined,
+    source: String(payload?.source || fallbackSource),
+    updatedAt: payload?.updatedAt || new Date().toISOString(),
+    windows,
+  };
+}
+
+function providerEnvValue(provider, suffix, { legacyCodex = false } = {}) {
+  const normalizedProvider = normalizeProvider(provider);
+  const providerKey = normalizedProvider.toUpperCase();
+  const phoneKey = `PHONE_${providerKey}_${suffix}`;
+  const shortKey = `${providerKey}_${suffix}`;
+  if (process.env[phoneKey] !== undefined) return process.env[phoneKey];
+  if (process.env[shortKey] !== undefined) return process.env[shortKey];
+  if (legacyCodex && normalizedProvider === "codex") {
+    const legacyKey = `PHONE_${suffix}`;
+    if (process.env[legacyKey] !== undefined) return process.env[legacyKey];
+  }
+  return undefined;
+}
+
+function envRateLimitSnapshot(provider) {
+  const json = providerEnvValue(provider, "RATE_LIMITS_JSON", { legacyCodex: true });
+  if (json) {
+    try {
+      const parsed = JSON.parse(json);
+      return normalizeRateLimitSnapshot(parsed, "env", provider);
+    } catch (error) {
+      return { provider, source: "env", windows: [], error: error.message };
+    }
+  }
+  const hasShortLimit = ["RATE_LIMIT_SHORT_LABEL", "RATE_LIMIT_SHORT_PERCENT", "RATE_LIMIT_SHORT_RESET"].some(
+    (suffix) => providerEnvValue(provider, suffix, { legacyCodex: true }) !== undefined,
+  );
+  const hasWeeklyLimit = ["RATE_LIMIT_WEEKLY_LABEL", "RATE_LIMIT_WEEKLY_PERCENT", "RATE_LIMIT_WEEKLY_RESET"].some(
+    (suffix) => providerEnvValue(provider, suffix, { legacyCodex: true }) !== undefined,
+  );
+  const windows = [
+    hasShortLimit
+      ? sanitizeRateLimitWindow({
+          label: providerEnvValue(provider, "RATE_LIMIT_SHORT_LABEL", { legacyCodex: true }) || "5時間",
+          remainingPercent: providerEnvValue(provider, "RATE_LIMIT_SHORT_PERCENT", { legacyCodex: true }),
+          resetsAt: providerEnvValue(provider, "RATE_LIMIT_SHORT_RESET", { legacyCodex: true }),
+        })
+      : null,
+    hasWeeklyLimit
+      ? sanitizeRateLimitWindow({
+          label: providerEnvValue(provider, "RATE_LIMIT_WEEKLY_LABEL", { legacyCodex: true }) || "週あたり",
+          remainingPercent: providerEnvValue(provider, "RATE_LIMIT_WEEKLY_PERCENT", { legacyCodex: true }),
+          resetsAt: providerEnvValue(provider, "RATE_LIMIT_WEEKLY_RESET", { legacyCodex: true }),
+        })
+      : null,
+  ].filter(Boolean);
+  return windows.length ? { provider, source: "env", updatedAt: new Date().toISOString(), windows } : null;
+}
+
+function positiveNumber(value, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : fallback;
+}
+
+function rateLimitCachePathForProvider(provider) {
+  const configured = providerEnvValue(provider, "RATE_LIMIT_CACHE_PATH", { legacyCodex: true });
+  if (configured) return path.resolve(configured);
+  return provider === "claude" ? path.join(root, ".phone-rate-limits.claude.json") : path.join(root, ".phone-rate-limits.json");
+}
+
+function readRateLimitCache(provider) {
+  const cachePath = rateLimitCachePathForProvider(provider);
+  if (!fs.existsSync(cachePath)) return null;
+  try {
+    const snapshot = normalizeRateLimitSnapshot(JSON.parse(fs.readFileSync(cachePath, "utf8")), "cache", provider);
+    const updatedAtMs = Date.parse(snapshot.updatedAt);
+    if (Number.isFinite(updatedAtMs)) snapshot.stale = Date.now() - updatedAtMs > rateLimitCacheTtlMs;
+    return snapshot;
+  } catch (error) {
+    return { provider, source: "cache", windows: [], error: error.message };
+  }
+}
+
+function writeRateLimitCache(provider, snapshot) {
+  const cachePath = rateLimitCachePathForProvider(provider);
+  fs.writeFileSync(cachePath, `${JSON.stringify(snapshot, null, 2)}\n`, { mode: 0o600 });
+  try {
+    fs.chmodSync(cachePath, 0o600);
+  } catch {
+    // Best effort: cached rate-limit metadata is still usable if chmod fails.
+  }
+}
+
+function runRateLimitRefreshCommand(provider, command) {
+  return new Promise((resolve, reject) => {
+    let stdout = "";
+    let stderr = "";
+    const child = spawn(command, {
+      cwd: root,
+      env: process.env,
+      shell: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      reject(new Error(`rate limit command timed out after ${rateLimitRefreshTimeoutMs}ms`));
+    }, rateLimitRefreshTimeoutMs);
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString("utf8");
+      if (stdout.length > 64_000) child.kill("SIGTERM");
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString("utf8");
+      if (stderr.length > 8_000) stderr = stderr.slice(-8_000);
+    });
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.on("close", (code, signal) => {
+      clearTimeout(timer);
+      if (code !== 0) {
+        reject(new Error((stderr || `rate limit command exited with ${signal || code}`).trim()));
+        return;
+      }
+      try {
+        const snapshot = normalizeRateLimitSnapshot(JSON.parse(stdout), "command", provider);
+        if (!snapshot.windows.length) throw new Error("rate limit command returned no windows");
+        resolve(snapshot);
+      } catch (error) {
+        reject(new Error(`invalid rate limit command output: ${error.message}`));
+      }
+    });
+  });
+}
+
+function mergeRateLimitSnapshots(previous, next, provider) {
+  const merged = new Map();
+  for (const window of previous?.windows || []) merged.set(window.label, window);
+  for (const window of next?.windows || []) merged.set(window.label, window);
+  return {
+    provider,
+    source: next?.source || previous?.source || "cache",
+    updatedAt: next?.updatedAt || new Date().toISOString(),
+    windows: Array.from(merged.values()),
+  };
+}
+
+async function rateLimitSnapshot({ provider = agentProvider, refresh = false } = {}) {
+  const normalizedProvider = normalizeProvider(provider);
+  const envSnapshot = envRateLimitSnapshot(normalizedProvider);
+  if (envSnapshot) return envSnapshot;
+  const command = String(providerEnvValue(normalizedProvider, "RATE_LIMIT_REFRESH_COMMAND", { legacyCodex: true }) || "").trim();
+  const cached = readRateLimitCache(normalizedProvider);
+  if (refresh && command) {
+    try {
+      const snapshot = await runRateLimitRefreshCommand(normalizedProvider, command);
+      writeRateLimitCache(normalizedProvider, snapshot);
+      return snapshot;
+    } catch (error) {
+      if (cached && cached.windows?.length) return { ...cached, stale: true, error: error.message };
+      return { provider: normalizedProvider, source: "command", windows: [], error: error.message };
+    }
+  }
+  if (cached) return cached;
+  return { provider: normalizedProvider, source: command ? "command" : "unavailable", windows: [] };
+}
+
+function persistClaudeRateLimitMessage(message) {
+  const snapshot = normalizeClaudeRateLimitPayload(message, "claude-rate-limit-event");
+  if (!snapshot.windows.length) return null;
+  const cached = readRateLimitCache("claude");
+  const merged = mergeRateLimitSnapshots(cached, snapshot, "claude");
+  writeRateLimitCache("claude", merged);
+  return merged;
+}
+
 const codexBin = path.join(root, "node_modules", ".bin", "codex");
 const claudeBin = process.env.CLAUDE_BIN || "claude";
 const envPath = path.join(root, ".env");
@@ -88,6 +376,8 @@ const model = process.env.PHONE_MODEL || process.env[modelEnvKey] || (isClaudePr
 const historySyncEnabled = isCodexProvider && isHistorySyncEnabled(process.env);
 const tokenPath = path.join(root, ".phone-token");
 const workspacePrefsPath = path.join(root, ".phone-workspaces.json");
+const rateLimitCacheTtlMs = positiveNumber(process.env.PHONE_RATE_LIMIT_CACHE_TTL_MS, 5 * 60 * 1000);
+const rateLimitRefreshTimeoutMs = positiveNumber(process.env.PHONE_RATE_LIMIT_REFRESH_TIMEOUT_MS, 6000);
 const uploadDir = path.join(root, ".uploads");
 const maxUploadBytes = uploadLimitBytes();
 const codexModelOptions = ["gpt-5.5", "gpt-5.4", "gpt-5.3-codex", "gpt-5.3-codex-spark", "gpt-5.2"];
@@ -874,6 +1164,105 @@ function readAutomations() {
       const status = raw.match(/^status\s*=\s*"([^"]+)"/m)?.[1] || "UNKNOWN";
       return { id: entry.name, name, status };
     });
+}
+
+function skillDiscoveryRoots() {
+  const home = os.homedir();
+  const codexHome = process.env.CODEX_HOME || path.join(home, ".codex");
+  return [
+    path.join(codexHome, "skills"),
+    path.join(home, ".agents", "skills"),
+    path.join(root, ".agents", "skills"),
+    path.join(codexHome, "plugins", "cache"),
+  ];
+}
+
+function shouldSkipSkillPath(filePath) {
+  return filePath.split(path.sep).some((part) => /\.backup-\d{8}/.test(part));
+}
+
+function findSkillFiles(base, { maxDepth = 7, limit = 180, seen = new Set(), files = [] } = {}) {
+  const resolved = path.resolve(base);
+  if (files.length >= limit || maxDepth < 0 || seen.has(resolved) || !fs.existsSync(resolved)) return files;
+  let stat;
+  try {
+    stat = fs.statSync(resolved);
+  } catch {
+    return files;
+  }
+  if (!stat.isDirectory()) return files;
+  seen.add(resolved);
+  let entries = [];
+  try {
+    entries = fs.readdirSync(resolved, { withFileTypes: true });
+  } catch {
+    return files;
+  }
+  for (const entry of entries) {
+    if (files.length >= limit) break;
+    const target = path.join(resolved, entry.name);
+    if (shouldSkipSkillPath(target)) continue;
+    if (entry.isFile() && entry.name === "SKILL.md") {
+      files.push(target);
+    } else if (entry.isDirectory()) {
+      findSkillFiles(target, { maxDepth: maxDepth - 1, limit, seen, files });
+    }
+  }
+  return files;
+}
+
+function parseSkillFrontmatter(raw) {
+  const match = raw.match(/^---\n([\s\S]*?)\n---/);
+  if (!match) return {};
+  const values = {};
+  for (const line of match[1].split(/\r?\n/)) {
+    const field = line.match(/^([A-Za-z0-9_-]+):\s*(.*)$/);
+    if (!field) continue;
+    values[field[1]] = field[2].replace(/^["']|["']$/g, "").trim();
+  }
+  return values;
+}
+
+function skillSourceLabel(filePath) {
+  const parts = filePath.split(path.sep);
+  const pluginIndex = parts.indexOf("plugins");
+  const cacheIndex = parts.indexOf("cache");
+  if (pluginIndex >= 0 && cacheIndex >= 0 && cacheIndex > pluginIndex) {
+    const pluginName = parts[cacheIndex + 2] || parts[cacheIndex + 1];
+    return pluginName ? `plugin: ${pluginName}` : "plugin";
+  }
+  if (filePath.startsWith(path.join(os.homedir(), ".agents"))) return "user";
+  if (filePath.startsWith(path.join(root, ".agents"))) return "project";
+  return "codex";
+}
+
+function readSkills() {
+  const found = new Set();
+  const skills = [];
+  for (const base of skillDiscoveryRoots()) {
+    for (const skillFile of findSkillFiles(base)) {
+      const resolved = path.resolve(skillFile);
+      if (found.has(resolved)) continue;
+      found.add(resolved);
+      let raw = "";
+      try {
+        raw = fs.readFileSync(resolved, "utf8");
+      } catch {
+        continue;
+      }
+      const frontmatter = parseSkillFrontmatter(raw);
+      const heading = raw.match(/^#\s+(.+)$/m)?.[1]?.trim();
+      const id = path.basename(path.dirname(resolved));
+      skills.push({
+        id,
+        name: frontmatter.name || heading || id,
+        description: frontmatter.description || "",
+        source: skillSourceLabel(resolved),
+        path: resolved,
+      });
+    }
+  }
+  return skills.sort((a, b) => `${a.source}:${a.name}`.localeCompare(`${b.source}:${b.name}`));
 }
 
 function saveDataUrlAttachment(attachment) {
@@ -1917,6 +2306,11 @@ class ClaudeBridge {
         this.emit("status", { text: line.slice(0, 500) });
         return;
       }
+      const rateLimitUpdate = persistClaudeRateLimitMessage(msg);
+      if (rateLimitUpdate) {
+        this.emit("rateLimits", { rateLimits: rateLimitUpdate });
+        return;
+      }
       if (msg.session_id) {
         this.claudeSessionId = msg.session_id;
         this.promoteBridgeKey();
@@ -2204,6 +2598,15 @@ async function main() {
       }
       return;
     }
+    if (url.pathname === "/api/skills") {
+      if (!requireToken(url, phoneToken, res)) return;
+      try {
+        sendJson(res, 200, { data: readSkills() });
+      } catch (error) {
+        sendJson(res, 500, { error: error.message });
+      }
+      return;
+    }
     if (url.pathname === "/api/config") {
       if (!requireToken(url, phoneToken, res)) return;
       if (isClaudeProvider) {
@@ -2319,6 +2722,7 @@ async function main() {
     }
     if (url.pathname === "/api/status") {
       if (!requireToken(url, phoneToken, res)) return;
+      const refreshRateLimits = url.searchParams.get("refreshRateLimits") === "1";
       sendJson(res, 200, {
         provider: agentProvider,
         workdir,
@@ -2328,6 +2732,7 @@ async function main() {
         codexSocketPath: isCodexProvider ? codexSocketPath || null : null,
         managedCodexServer,
         historySyncEnabled,
+        rateLimits: await rateLimitSnapshot({ provider: agentProvider, refresh: refreshRateLimits }),
         uiPort,
         codexPort,
         bridges: bridgeSummaries(),
