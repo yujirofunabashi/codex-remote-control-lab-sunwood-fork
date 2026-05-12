@@ -27,6 +27,10 @@ const artifactPreview = document.querySelector("#artifactPreview");
 const terminalList = document.querySelector("#terminalList");
 const statusButton = document.querySelector("#statusButton");
 const webSearchButton = document.querySelector("#webSearchButton");
+const artifactsTab = document.querySelector("#artifactsTab");
+const workspaceTab = document.querySelector("#workspaceTab");
+const automationTab = document.querySelector("#automationTab");
+const panelTabButtons = document.querySelectorAll("[data-panel-tab]");
 const runState = document.querySelector("#runState");
 const runStateLabel = document.querySelector("#runStateLabel");
 const threadList = document.querySelector("#threadList");
@@ -1198,6 +1202,17 @@ function closeRightPanel() {
   document.body.classList.remove("show-panel");
 }
 
+function setActivePanelTab(tabName) {
+  if (!tabName) return;
+  for (const button of panelTabButtons) {
+    button.classList.toggle("active", button.dataset.panelTab === tabName);
+  }
+}
+
+function currentPanelTabName() {
+  return Array.from(panelTabButtons).find((button) => button.classList.contains("active"))?.dataset.panelTab || "artifacts";
+}
+
 function keepComposerVisible() {
   if (!window.matchMedia("(max-width: 820px)").matches) return;
   document.body.classList.remove("show-sidebar");
@@ -1206,8 +1221,9 @@ function keepComposerVisible() {
   window.setTimeout(() => composer.scrollIntoView({ block: "nearest", inline: "nearest" }), 250);
 }
 
-function clearPanel(title) {
+function clearPanel(title, tabName = "artifacts") {
   showRightPanel();
+  setActivePanelTab(tabName);
   artifactTitle.textContent = title;
   artifactList.classList.remove("artifact-browser-list");
   artifactList.replaceChildren();
@@ -1216,11 +1232,35 @@ function clearPanel(title) {
   artifactPreview.textContent = "";
 }
 
-function addPanelRow(text, detail, onClick) {
+function addPanelRow(text, detail, onClick, options = {}) {
   const row = document.createElement("button");
   row.type = "button";
   row.className = "artifact-row";
-  row.innerHTML = detail ? `<strong>${escapeHtml(text)}</strong><small>${escapeHtml(detail)}</small>` : escapeHtml(text);
+  if (options.badge) {
+    row.classList.add("has-badge");
+    const badge = document.createElement("span");
+    badge.className = "artifact-type-badge";
+    badge.textContent = options.badge;
+    const main = document.createElement("span");
+    main.className = "artifact-row-main";
+    const strong = document.createElement("strong");
+    strong.textContent = text;
+    main.appendChild(strong);
+    if (detail) {
+      const small = document.createElement("small");
+      small.textContent = detail;
+      main.appendChild(small);
+    }
+    row.append(badge, main);
+  } else if (detail) {
+    const strong = document.createElement("strong");
+    strong.textContent = text;
+    const small = document.createElement("small");
+    small.textContent = detail;
+    row.append(strong, small);
+  } else {
+    row.textContent = text;
+  }
   if (onClick) row.addEventListener("click", onClick);
   artifactList.appendChild(row);
   return row;
@@ -1229,6 +1269,7 @@ function addPanelRow(text, detail, onClick) {
 function renderArtifactIndex(items) {
   artifactItems = items;
   activeArtifactPath = "";
+  setActivePanelTab("artifacts");
   artifactTitle.textContent = "アーティファクト";
   artifactList.classList.add("artifact-browser-list");
   renderArtifactRows();
@@ -1238,8 +1279,8 @@ function renderArtifactIndex(items) {
 function renderArtifactRows() {
   artifactList.replaceChildren();
   for (const item of artifactItems) {
-    const icon = item.kind === "image" ? "画像" : item.kind === "markdown" ? "MD" : "FILE";
-    const row = addPanelRow(item.name, `${icon} · ${item.path}`, () => showArtifact(item.path));
+    const icon = item.kind === "image" ? "IMG" : item.kind === "markdown" ? "MD" : "FILE";
+    const row = addPanelRow(item.name, item.path, () => showArtifact(item.path), { badge: icon });
     row.classList.toggle("active", item.path === activeArtifactPath);
   }
   if (!artifactItems.length) addPanelRow("アーティファクトは見つかりませんでした");
@@ -1260,14 +1301,14 @@ function escapeHtml(value) {
 }
 
 function showToolError(name, error) {
-  clearPanel(name);
+  clearPanel(name, currentPanelTabName());
   addPanelRow("読み込みに失敗しました", error.message);
   addEntry("error", `${name}: ${error.message}`);
   document.body.classList.remove("show-sidebar");
 }
 
 async function showPlugins() {
-  clearPanel("プラグイン");
+  clearPanel("プラグイン", "extensions");
   addPanelRow("読み込み中...");
   try {
     const result = await apiGet("/api/plugins");
@@ -1288,7 +1329,7 @@ async function showPlugins() {
 }
 
 async function showAutomations() {
-  clearPanel("オートメーション");
+  clearPanel("オートメーション", "automation");
   addPanelRow("読み込み中...");
   try {
     const result = await apiGet("/api/automations");
@@ -1302,7 +1343,7 @@ async function showAutomations() {
 
 async function showSettings() {
   const renderSeq = ++settingsRenderSeq;
-  clearPanel("設定");
+  clearPanel("設定", "workspace");
   artifactList.replaceChildren();
   renderThemeSettings();
   const loadingRow = addPanelRow("読み込み中...");
@@ -1608,7 +1649,7 @@ function renderThemeSettings() {
 }
 
 async function showModels() {
-  clearPanel("モデル");
+  clearPanel("モデル", "models");
   addPanelRow("読み込み中...");
   try {
     const result = await apiGet("/api/models");
@@ -1654,7 +1695,7 @@ function startVoiceInput() {
 }
 
 async function showStatus() {
-  clearPanel("バックグラウンド");
+  clearPanel("バックグラウンド", "status");
   try {
     const result = await apiGet("/api/status");
     addPanelRow("UI port", String(result.uiPort));
@@ -1672,6 +1713,7 @@ async function showStatus() {
 
 async function showArtifact(path) {
   showRightPanel();
+  setActivePanelTab("artifacts");
   artifactTitle.textContent = "アーティファクト";
   artifactList.classList.add("artifact-browser-list");
   activeArtifactPath = path;
@@ -2143,8 +2185,15 @@ document.addEventListener("click", (event) => {
   if (modelMenu.contains(event.target) || modelButton.contains(event.target) || thinkingButton.contains(event.target)) return;
   closeModelMenu();
 });
+artifactsTab.addEventListener("click", () => {
+  showRightPanel();
+  renderArtifactIndex(artifactItems);
+});
+workspaceTab.addEventListener("click", showSettings);
+automationTab.addEventListener("click", showAutomations);
 statusButton.addEventListener("click", showStatus);
 webSearchButton.addEventListener("click", () => {
+  setActivePanelTab("web");
   promptInput.value = `${promptInput.value}${promptInput.value ? "\n" : ""}Web調査を使って確認してください。`;
   promptInput.focus();
 });

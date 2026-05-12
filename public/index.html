@@ -17,19 +17,46 @@
   <body>
     <main class="app-shell">
       <button type="button" class="sidebar-scrim" id="sidebarScrim" aria-label="チャット一覧を閉じる"></button>
-      <aside class="sidebar" aria-label="スレッド">
+      <aside class="sidebar" id="threadSidebar" aria-label="スレッド">
+        <div class="sidebar-windowbar" aria-hidden="true">
+          <span class="window-dots">
+            <span class="window-dot red"></span>
+            <span class="window-dot yellow"></span>
+            <span class="window-dot green"></span>
+          </span>
+          <span class="window-actions">
+            <span class="window-action split"></span>
+            <span class="window-chevron left"></span>
+            <span class="window-chevron right"></span>
+          </span>
+        </div>
         <nav class="primary-nav">
-          <button type="button" class="nav-command" id="newThread">新しいチャット</button>
-          <button type="button" class="nav-command muted" id="searchButton">検索</button>
-          <button type="button" class="nav-command muted" id="pluginsButton">プラグイン</button>
-          <button type="button" class="nav-command muted" id="automationsButton">オートメーション</button>
+          <button type="button" class="nav-command new-chat" id="newThread">
+            <span class="command-icon plus-icon" aria-hidden="true"></span>
+            <span>新しいチャット</span>
+          </button>
+          <button type="button" class="nav-command muted" id="searchButton">
+            <span class="command-icon search-icon" aria-hidden="true"></span>
+            <span>検索</span>
+          </button>
+          <button type="button" class="nav-command muted" id="pluginsButton">
+            <span class="command-icon plugin-icon" aria-hidden="true"></span>
+            <span>プラグイン</span>
+          </button>
+          <button type="button" class="nav-command muted" id="automationsButton">
+            <span class="command-icon automation-icon" aria-hidden="true"></span>
+            <span>オートメーション</span>
+          </button>
         </nav>
         <div class="thread-section">
           <div class="section-title">最近のチャット</div>
           <input id="threadSearch" class="thread-search hidden" type="search" placeholder="チャットを検索" />
           <div id="threadList" class="thread-list"></div>
         </div>
-        <button type="button" class="settings" id="settingsButton">設定</button>
+        <button type="button" class="settings" id="settingsButton">
+          <span class="command-icon settings-icon" aria-hidden="true"></span>
+          <span>設定</span>
+        </button>
       </aside>
 
       <section class="workspace">
@@ -94,29 +121,30 @@
           </section>
 
           <aside class="artifact-panel" aria-label="アーティファクト">
-            <section class="panel-card">
+            <section class="panel-card panel-card-main">
               <div class="panel-title">
                 <span id="artifactTitle">アーティファクト</span>
                 <button type="button" class="panel-close" id="closePanelButton" title="閉じる" aria-label="アーティファクトを閉じる">×</button>
               </div>
+              <div class="panel-tabs" role="toolbar" aria-label="右パネルを切り替え">
+                <button type="button" class="panel-tab file active" id="artifactsTab" data-panel-tab="artifacts" title="アーティファクト" aria-label="アーティファクト"></button>
+                <button type="button" class="panel-tab folder" id="workspaceTab" data-panel-tab="workspace" title="作業ディレクトリ" aria-label="作業ディレクトリ"></button>
+                <button type="button" class="panel-tab branch" id="automationTab" data-panel-tab="automation" title="オートメーション" aria-label="オートメーション"></button>
+                <button type="button" class="panel-tab terminal" id="statusButton" data-panel-tab="status" title="バックグラウンド" aria-label="バックグラウンド"></button>
+                <button type="button" class="panel-tab globe" id="webSearchButton" data-panel-tab="web" title="Web調査を追加" aria-label="Web調査を追加"></button>
+              </div>
               <div id="artifactList">
-                <button type="button" class="artifact-row" data-artifact="README.md">README.md</button>
-                <button type="button" class="artifact-row" data-artifact="AGENTS.md">AGENTS.md</button>
+                <button type="button" class="artifact-row has-badge" data-artifact="README.md">
+                  <span class="artifact-type-badge">MD</span>
+                  <span class="artifact-row-main"><strong>README.md</strong><small>README.md</small></span>
+                </button>
+                <button type="button" class="artifact-row has-badge" data-artifact="AGENTS.md">
+                  <span class="artifact-type-badge">MD</span>
+                  <span class="artifact-row-main"><strong>AGENTS.md</strong><small>AGENTS.md</small></span>
+                </button>
               </div>
               <div id="artifactPreview" class="artifact-preview hidden"></div>
-            </section>
-            <section class="panel-card">
-              <div class="panel-title">
-                <span>バックグラウンド ターミナル</span>
-                <span>▪</span>
-              </div>
-              <div id="terminalList">
-                <button type="button" class="terminal-row" id="statusButton">npm run phone</button>
-              </div>
-            </section>
-            <section class="panel-card">
-              <div class="panel-title">情報源</div>
-              <button type="button" class="source-row" id="webSearchButton">ウェブ検索</button>
+              <div id="terminalList" class="hidden"></div>
             </section>
           </aside>
         </div>
