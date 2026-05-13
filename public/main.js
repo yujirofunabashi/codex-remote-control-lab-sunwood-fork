@@ -58,11 +58,17 @@ const declineButton = document.querySelector("#decline");
 
 const params = new URLSearchParams(location.search);
 const token = params.get("token") || localStorage.getItem("codexPhoneToken") || "";
-let selectedThread = params.get("thread") || "";
+const preserveBookmarkEntryUrl = location.pathname.replace(/\/+$/, "").endsWith("/bookmark");
+let selectedThread = preserveBookmarkEntryUrl ? "" : params.get("thread") || "";
 if (token) localStorage.setItem("codexPhoneToken", token);
 if (token && !params.get("token") && window.history?.replaceState) {
   const nextUrl = new URL(location.href);
   nextUrl.searchParams.set("token", token);
+  window.history.replaceState(null, "", nextUrl);
+}
+if (preserveBookmarkEntryUrl && params.has("thread") && window.history?.replaceState) {
+  const nextUrl = new URL(location.href);
+  nextUrl.searchParams.delete("thread");
   window.history.replaceState(null, "", nextUrl);
 }
 const manifestLink = document.querySelector('link[rel="manifest"]');
@@ -119,7 +125,7 @@ let lastResumeRefreshAt = 0;
 let lastWsMessageAt = 0;
 let selectedThreadRefreshActive = false;
 let activeProvider = "codex";
-let threadProvider = normalizeProviderName(params.get("provider") || "");
+let threadProvider = normalizeProviderName(params.get("provider") || (selectedThread.startsWith("claude:") ? "claude" : ""));
 let threadProviderExplicit = Boolean(threadProvider);
 const selectedThreadByProvider = new Map();
 if (selectedThread && threadProvider) selectedThreadByProvider.set(threadProvider, selectedThread);
@@ -394,7 +400,7 @@ function addRateLimitPanelRows(rateLimits) {
 }
 
 async function refreshRateLimits() {
-  const result = await apiGet("/api/status?refreshRateLimits=1");
+  const result = await apiGet(`/api/status?refreshRateLimits=1&provider=${encodeURIComponent(currentThreadProvider())}`);
   setWorkspaceMeta(result);
   latestRateLimits = result.rateLimits || null;
   renderRateLimitCard(latestRateLimits);
@@ -1229,6 +1235,7 @@ function switchThreadProvider(provider, { reload = true } = {}) {
   if (nextProvider === previousProvider) {
     threadProvider = nextProvider;
     threadProviderExplicit = true;
+    setActiveProvider(nextProvider);
     updateUrlThread();
     if (reload) loadThreads({ provider: nextProvider, background: true }).catch(() => {});
     return;
@@ -1236,21 +1243,17 @@ function switchThreadProvider(provider, { reload = true } = {}) {
   selectedThreadByProvider.set(previousProvider, selectedThread);
   threadProvider = nextProvider;
   threadProviderExplicit = true;
+  setActiveProvider(nextProvider);
   selectedThread = selectedThreadByProvider.get(nextProvider) || "";
   threadCache = [];
   lastHistorySignature = "";
   renderHistory([]);
   updateUrlThread();
   renderThreadList();
-
-  if (nextProvider !== activeProvider) {
-    closeSocket({ suppressReconnect: true });
-    setReady(false);
-    meta.textContent = `${providerLabel(nextProvider)} は保存後の再起動で接続`;
-    setRunState("disconnected", "Provider再起動待ち");
-  } else {
-    connect();
-  }
+  closeSocket({ suppressReconnect: true });
+  setReady(false);
+  meta.textContent = `${providerLabel(nextProvider)} へ接続を切り替え中`;
+  connect();
 
   if (reload) loadThreads({ provider: nextProvider, background: true }).catch(() => {});
 }
@@ -1312,7 +1315,7 @@ async function loadArtifacts() {
 
 function updateUrlThread() {
   const next = new URL(location.href);
-  if (selectedThread) next.searchParams.set("thread", selectedThread);
+  if (selectedThread && !preserveBookmarkEntryUrl) next.searchParams.set("thread", selectedThread);
   else next.searchParams.delete("thread");
   if (threadProviderExplicit) next.searchParams.set("provider", currentThreadProvider());
   else next.searchParams.delete("provider");
@@ -1722,7 +1725,11 @@ async function showSettings() {
   renderThemeSettings();
   const loadingRow = addPanelRow("読み込み中...");
   try {
-    const [configResult, localResult] = await Promise.allSettled([apiGet("/api/config"), apiGet("/api/local-settings")]);
+    const provider = currentThreadProvider();
+    const [configResult, localResult] = await Promise.allSettled([
+      apiGet(`/api/config?provider=${encodeURIComponent(provider)}`),
+      apiGet("/api/local-settings"),
+    ]);
     if (renderSeq !== settingsRenderSeq) return;
     loadingRow.remove();
     if (localResult.status === "fulfilled") renderLocalSettings(localResult.value);
@@ -1804,7 +1811,7 @@ function renderLocalSettings(payload) {
     option.textContent = providerValue;
     providerSelect.appendChild(option);
   }
-  providerSelect.value = settings.provider || active.provider || "codex";
+  providerSelect.value = currentThreadProvider() || settings.provider || active.provider || "codex";
   renderModelSelectForProvider(providerSelect.value);
 
   const workspaceSelect = document.createElement("select");
@@ -1872,7 +1879,7 @@ function renderLocalSettings(payload) {
     const nextProvider = providerSelect.value || "codex";
     updateProviderDependentControls();
     switchThreadProvider(nextProvider);
-    setSettingsStatus(status, "Providerを変更しました。保存後、再起動で反映します。", "warning");
+    setSettingsStatus(status, "Providerを切り替えました。保存するとこのポートの既定になります。");
   });
   updateProviderDependentControls();
 
@@ -1914,7 +1921,7 @@ function renderLocalSettings(payload) {
       workspaceItems = result.options?.workspaces || workspaceItems;
       renderWorkspaceOptions(workspaceSelect, workspaceItems, result.settings?.workdir || workspaceSelect.value);
       switchThreadProvider(providerSelect.value);
-      setSettingsStatus(status, result.restartRequired ? "保存しました。再起動で反映します。" : "保存しました。", result.restartRequired ? "warning" : "");
+      setSettingsStatus(status, result.restartRequired ? "保存しました。作業ディレクトリやモデルは再起動で既定に反映します。" : "保存しました。", result.restartRequired ? "warning" : "");
       addStatus("起動設定を保存しました。");
     } catch (error) {
       setSettingsStatus(status, error.message, "error");
@@ -2026,7 +2033,7 @@ async function showModels() {
   clearPanel("モデル", "models");
   addPanelRow("読み込み中...");
   try {
-    const result = await apiGet("/api/models");
+    const result = await apiGet(`/api/models?provider=${encodeURIComponent(currentThreadProvider())}`);
     artifactList.replaceChildren();
     const models = result.data || [];
     for (const candidate of models.slice(0, 24)) {
@@ -2071,9 +2078,10 @@ function startVoiceInput() {
 async function showStatus() {
   clearPanel("バックグラウンド", "status");
   try {
-    const result = await apiGet("/api/status");
+    const result = await apiGet(`/api/status?provider=${encodeURIComponent(currentThreadProvider())}`);
     addPanelRow("UI port", String(result.uiPort));
     addPanelRow("Provider", result.provider || "codex");
+    if (result.defaultProvider && result.defaultProvider !== result.provider) addPanelRow("既定Provider", result.defaultProvider);
     if (result.codexUrl) addPanelRow("Codex app-server", result.codexUrl);
     latestRateLimits = result.rateLimits || null;
     renderRateLimitCard(latestRateLimits);
@@ -2196,7 +2204,7 @@ function closeSocket({ suppressReconnect = true } = {}) {
 }
 
 function canReconnect() {
-  return Boolean(token && document.visibilityState !== "hidden" && currentThreadProvider() === activeProvider);
+  return Boolean(token && document.visibilityState !== "hidden");
 }
 
 function scheduleReconnect(reason = "reconnect", delay = 900) {
@@ -2257,13 +2265,6 @@ function connect({ preserveHistory = false } = {}) {
     return;
   }
   const provider = currentThreadProvider();
-  if (provider !== activeProvider) {
-    closeSocket({ suppressReconnect: true });
-    setReady(false);
-    meta.textContent = `${providerLabel(provider)} は保存後の再起動で接続`;
-    setRunState("disconnected", "Provider再起動待ち");
-    return;
-  }
   closeSocket({ suppressReconnect: true });
   liveTurnActive = false;
   liveOutputGroup = "";
@@ -2277,7 +2278,9 @@ function connect({ preserveHistory = false } = {}) {
 
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   const threadParam = selectedThread ? `&thread=${encodeURIComponent(selectedThread)}` : "";
-  ws = new WebSocket(`${proto}//${location.host}${appPath(`/bridge?token=${encodeURIComponent(token)}${threadParam}`)}`);
+  ws = new WebSocket(
+    `${proto}//${location.host}${appPath(`/bridge?token=${encodeURIComponent(token)}&provider=${encodeURIComponent(provider)}${threadParam}`)}`,
+  );
   const socket = ws;
   connectButton.disabled = true;
   meta.textContent = "接続中";
@@ -2294,15 +2297,6 @@ function connect({ preserveHistory = false } = {}) {
     if (msg.type === "ready") {
       setReady(true);
       setActiveProvider(msg.provider || "codex");
-      if (currentThreadProvider() !== activeProvider) {
-        setReady(false);
-        meta.textContent = `${providerLabel(currentThreadProvider())} は保存後の再起動で接続`;
-        setRunState("disconnected", "Provider再起動待ち");
-        renderHistory([]);
-        loadThreads({ provider: currentThreadProvider(), background: true }).catch(() => {});
-        if (ws) ws.close();
-        return;
-      }
       setSelectedModel(msg.model, { persist: false });
       setWorkspaceMeta({
         repoName: msg.repoName || msg.run?.repoName,
@@ -2394,14 +2388,9 @@ function connect({ preserveHistory = false } = {}) {
     suppressedSocketReconnects.delete(socket);
     if (ws === socket) ws = null;
     releasePendingSubmission("接続が切れたため送信できませんでした。");
-    if (currentThreadProvider() !== activeProvider) {
-      meta.textContent = `${providerLabel(currentThreadProvider())} は保存後の再起動で接続`;
-      setRunState("disconnected", "Provider再起動待ち");
-    } else {
-      meta.textContent = "切断";
-      setRunState("disconnected");
-      if (!shouldSuppressReconnect) scheduleReconnect("WebSocket切断");
-    }
+    meta.textContent = "切断";
+    setRunState("disconnected");
+    if (!shouldSuppressReconnect) scheduleReconnect("WebSocket切断");
   });
 
   socket.addEventListener("error", () => {

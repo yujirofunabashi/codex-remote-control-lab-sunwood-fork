@@ -51,7 +51,7 @@ Example using an existing control socket:
 
 ```bash
 CODEX_APP_SERVER_SOCK=/Users/admin/.codex/app-server-control/app-server-control.sock \
-CODEX_WORKDIR=/Users/admin/Prj/demo \
+PHONE_WORKDIR=/Users/admin/Prj/demo \
 PHONE_TOKEN=demo-test-token \
 npm run phone
 ```
@@ -63,9 +63,8 @@ In this mode, OCdex does not start a new app-server. It uses the app-server behi
 ```bash
 PHONE_UI_PORT=45214 npm run phone
 PHONE_AGENT_PROVIDER=claude npm run phone
-CODEX_WORKDIR=/Users/admin/Prj/some-project npm run phone
+PHONE_WORKDIR=/Users/admin/Prj/some-project npm run phone
 CODEX_MODEL=gpt-5.4 npm run phone
-CLAUDE_WORKDIR=/Users/admin/Prj/some-project npm run phone:claude
 CLAUDE_MODEL=sonnet npm run phone:claude
 CODEX_APP_SERVER_SOCK=/Users/admin/.codex/app-server-control/app-server-control.sock npm run phone
 CODEX_APP_SERVER_URL=ws://127.0.0.1:45213 npm run phone
@@ -76,6 +75,8 @@ PHONE_PUSHOVER_TOKEN=app-token PHONE_PUSHOVER_USER=user-key npm run phone
 PHONE_DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/... npm run phone
 PHONE_NOTIFY_TIMEOUT_MS=5000 npm run phone
 ```
+
+For parallel operation, treat each `PHONE_UI_PORT` as a fixed workspace slot. Pin the slot with `PHONE_WORKDIR`, and switch Codex or Claude from the browser UI as needed. `PHONE_AGENT_PROVIDER` only sets the default provider for that slot after restart.
 
 Startup notifications are optional. If `PHONE_NTFY_TOPIC` is set, the bridge posts the ready URLs to that ntfy topic. If `PHONE_PUSHOVER_TOKEN` and `PHONE_PUSHOVER_USER` are set, it sends the same URLs through Pushover. If `PHONE_DISCORD_WEBHOOK_URL` is set, it posts them to Discord. `npm run phone` loads local `.env` values before reading these variables. `PHONE_NTFY_SERVER` defaults to `https://ntfy.sh` and must use HTTPS. Notification requests time out after `PHONE_NOTIFY_TIMEOUT_MS`, which defaults to 5000 ms. When a LAN IPv4 URL is available, the message includes the tokenized bridge URL, so use a private/protected topic, account, or channel and keep notification credentials out of Git. If no LAN IPv4 URL is detected, the notification omits provider link fields and tells you to check the host console.
 

@@ -367,13 +367,15 @@ const phoneAppShortName = process.env.PHONE_APP_SHORT_NAME || `${defaultAppShort
 const codexPort = Number(process.env.CODEX_APP_SERVER_PORT || 45213);
 const codexSocketPath = process.env.CODEX_APP_SERVER_SOCK || "";
 const codexUrl = process.env.CODEX_APP_SERVER_URL || (codexSocketPath ? "ws://codex-app-server/rpc" : `ws://127.0.0.1:${codexPort}`);
-const shouldStartCodexServer = isCodexProvider && !process.env.CODEX_APP_SERVER_URL && !codexSocketPath;
-const modelEnvKey = isClaudeProvider ? "CLAUDE_MODEL" : "CODEX_MODEL";
+const shouldStartCodexServer = !process.env.CODEX_APP_SERVER_URL && !codexSocketPath;
 const workdirEnvKey = isClaudeProvider ? "CLAUDE_WORKDIR" : "CODEX_WORKDIR";
-const historySyncEnvKey = isClaudeProvider ? "CLAUDE_HISTORY_SYNC" : "CODEX_HISTORY_SYNC";
 const workdir = process.env.PHONE_WORKDIR || process.env[workdirEnvKey] || process.env.CODEX_WORKDIR || root;
-const model = process.env.PHONE_MODEL || process.env[modelEnvKey] || (isClaudeProvider ? "sonnet" : process.env.CODEX_MODEL || "gpt-5.4");
-const historySyncEnabled = isCodexProvider && isHistorySyncEnabled(process.env);
+const providerModels = {
+  codex: modelFromEnv(process.env, "codex"),
+  claude: modelFromEnv(process.env, "claude"),
+};
+const model = providerModels[agentProvider] || defaultModelForProvider(agentProvider);
+const historySyncEnabled = isHistorySyncEnabled(process.env);
 const tokenPath = path.join(root, ".phone-token");
 const workspacePrefsPath = path.join(root, ".phone-workspaces.json");
 const rateLimitCacheTtlMs = positiveNumber(process.env.PHONE_RATE_LIMIT_CACHE_TTL_MS, 5 * 60 * 1000);
@@ -461,12 +463,25 @@ function modelOptionsForProvider(provider) {
   return provider === "claude" ? claudeModelOptions : codexModelOptions;
 }
 
+function modelForProvider(provider) {
+  const normalizedProvider = normalizeProvider(provider);
+  return providerModels[normalizedProvider] || defaultModelForProvider(normalizedProvider);
+}
+
+function historySyncEnabledForProvider(provider) {
+  return normalizeProvider(provider) === "codex" && historySyncEnabled;
+}
+
 function modelFromEnv(env, provider, fallback = defaultModelForProvider(provider)) {
   return env.PHONE_MODEL || env[modelEnvKeyForProvider(provider)] || (provider === "codex" ? env.CODEX_MODEL : undefined) || fallback;
 }
 
 function workdirFromEnv(env, provider, fallback = workdir) {
   return env.PHONE_WORKDIR || env[workdirEnvKeyForProvider(provider)] || env.CODEX_WORKDIR || fallback;
+}
+
+function bridgeMapKey(provider, baseKey) {
+  return `${normalizeProvider(provider)}:${baseKey}`;
 }
 
 function getToken() {
@@ -661,7 +676,7 @@ function localSettingsPayload() {
   const providerPinned = ["PHONE_AGENT_PROVIDER", "AGENT_PROVIDER", "PHONE_AGENT_PROVIDER_DEFAULT"].some(hasLaunchEnv);
   const settingsProvider = providerPinned ? agentProvider : savedProvider;
   const modelPinned = ["PHONE_MODEL", modelEnvKeyForProvider(settingsProvider), ...(settingsProvider === "codex" ? ["CODEX_MODEL"] : [])].some(hasLaunchEnv);
-  const workdirPinned = ["PHONE_WORKDIR", workdirEnvKeyForProvider(settingsProvider), "CODEX_WORKDIR"].some(hasLaunchEnv);
+  const workdirPinned = hasLaunchEnv("PHONE_WORKDIR");
   const historyPinned = historySyncEnvKeyForProvider(settingsProvider) ? hasLaunchEnv(historySyncEnvKeyForProvider(settingsProvider)) : false;
   const portPinned = hasLaunchEnv("PHONE_UI_PORT");
   const hostPinned = hasLaunchEnv("PHONE_UI_HOST");
@@ -669,10 +684,10 @@ function localSettingsPayload() {
   const savedPort = Number(envValues.PHONE_UI_PORT || uiPort);
   const savedHost = envValues.PHONE_UI_HOST || uiHost;
   const savedModel = modelFromEnv(envValues, settingsProvider, settingsProvider === agentProvider ? model : defaultModelForProvider(settingsProvider));
-  const savedWorkdir = workdirFromEnv(envValues, settingsProvider, workdir);
+  const savedWorkdir = envValues.PHONE_WORKDIR || workdirFromEnv(envValues, settingsProvider, workdir);
   const settingsModel = modelPinned && settingsProvider === agentProvider ? model : savedModel;
   const settingsWorkdir = workdirPinned && settingsProvider === agentProvider ? workdir : savedWorkdir;
-  const settingsHistorySyncEnabled = historyPinned && settingsProvider === agentProvider ? historySyncEnabled : savedHistorySyncEnabled;
+  const settingsHistorySyncEnabled = historyPinned && settingsProvider === agentProvider ? historySyncEnabledForProvider(settingsProvider) : savedHistorySyncEnabled;
   const settingsPort = portPinned ? uiPort : savedPort;
   const settingsHost = hostPinned ? uiHost : savedHost;
   return {
@@ -688,7 +703,7 @@ function localSettingsPayload() {
       provider: agentProvider,
       model,
       workdir,
-      historySyncEnabled,
+      historySyncEnabled: historySyncEnabledForProvider(agentProvider),
       uiPort,
       uiHost,
     },
@@ -706,7 +721,6 @@ function localSettingsPayload() {
       workspaces: workspaceOptions(),
     },
     restartRequired:
-      (!providerPinned && savedProvider !== agentProvider) ||
       (!modelPinned && settingsProvider === agentProvider && savedModel !== model) ||
       (!workdirPinned && settingsProvider === agentProvider && savedWorkdir !== workdir) ||
       (!historyPinned && settingsProvider === agentProvider && savedHistorySyncEnabled !== historySyncEnabled),
@@ -756,12 +770,13 @@ function preferredBridgeUrl(urls = notificationBridgeUrls) {
   }) || urls[0] || "";
 }
 
-function bridgeUrlForThread(threadId) {
+function bridgeUrlForThread(threadId, provider = agentProvider) {
   const base = preferredBridgeUrl();
   if (!base) return "";
   try {
     const url = new URL(base);
     if (threadId) url.searchParams.set("thread", threadId);
+    url.searchParams.set("provider", normalizeProvider(provider));
     return url.toString();
   } catch {
     return base;
@@ -776,16 +791,16 @@ function logNotifyResults(context, results) {
   }
 }
 
-function notifyRunEvent(status, { threadId, turnId, message } = {}) {
+function notifyRunEvent(status, { provider = agentProvider, threadId, turnId, message, model: eventModel = modelForProvider(provider) } = {}) {
   notifyTaskEvent({
     status,
-    provider: agentProvider,
+    provider: normalizeProvider(provider),
     threadId,
     turnId,
-    model,
+    model: eventModel,
     workdir,
     message,
-    url: bridgeUrlForThread(threadId),
+    url: bridgeUrlForThread(threadId, provider),
   }).then((results) => logNotifyResults(`task ${status}`, results));
 }
 
@@ -1680,7 +1695,7 @@ function claudeThreadListPayload() {
       if (session) byId.set(session.summary.id, session.summary);
     }
   }
-  for (const thread of localThreadList()) {
+  for (const thread of localThreadList("claude")) {
     const existing = byId.get(thread.id);
     byId.set(thread.id, {
       ...existing,
@@ -1691,15 +1706,18 @@ function claudeThreadListPayload() {
   }
   return {
     provider: "claude",
-    activeProvider: agentProvider,
+    activeProvider: "claude",
     data: Array.from(byId.values()).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)),
   };
 }
 
 class SharedBridge {
-  constructor(requestedThreadId, bridgeKey) {
+  constructor(requestedThreadId, baseBridgeKey) {
+    this.provider = "codex";
+    this.model = modelForProvider(this.provider);
     this.requestedThreadId = requestedThreadId;
-    this.bridgeKey = bridgeKey;
+    this.baseBridgeKey = baseBridgeKey;
+    this.bridgeKey = bridgeMapKey(this.provider, baseBridgeKey);
     this.clients = new Set();
     this.nextId = 1;
     this.pending = new Map();
@@ -1732,9 +1750,9 @@ class SharedBridge {
 
   readyPayload() {
     return {
-      provider: agentProvider,
+      provider: this.provider,
       threadId: this.threadId,
-      model,
+      model: this.model,
       workdir,
       ...currentWorkspaceMeta(),
       shared: true,
@@ -1845,18 +1863,20 @@ class SharedBridge {
   }
 
   promoteBridgeKey() {
-    if (!shouldPromoteBridgeKey({ bridgeKey: this.bridgeKey, threadId: this.threadId })) return;
+    if (!shouldPromoteBridgeKey({ bridgeKey: this.baseBridgeKey, threadId: this.threadId })) return;
     const previousKey = this.bridgeKey;
-    if (bridges.has(this.threadId) && bridges.get(this.threadId) !== this) return;
+    const nextKey = bridgeMapKey(this.provider, this.threadId);
+    if (bridges.has(nextKey) && bridges.get(nextKey) !== this) return;
     if (bridges.get(previousKey) !== this) return;
-    this.bridgeKey = this.threadId;
+    this.baseBridgeKey = this.threadId;
+    this.bridgeKey = nextKey;
     bridges.delete(previousKey);
     bridges.set(this.bridgeKey, this);
   }
 
   requestNewThread(statusText = "新しいthreadを開始中...") {
     const id = this.request("thread/start", {
-      model,
+      model: this.model,
       cwd: workdir,
       approvalPolicy: "on-request",
       sandbox: "workspace-write",
@@ -1870,7 +1890,8 @@ class SharedBridge {
     this.requestedThreadId = null;
     const previousKey = this.bridgeKey;
     if (bridges.get(previousKey) === this) bridges.delete(previousKey);
-    this.bridgeKey = `new:${crypto.randomUUID()}`;
+    this.baseBridgeKey = `new:${crypto.randomUUID()}`;
+    this.bridgeKey = bridgeMapKey(this.provider, this.baseBridgeKey);
     bridges.set(this.bridgeKey, this);
     this.requestNewThread("新しいthreadを開始中...");
   }
@@ -1887,7 +1908,7 @@ class SharedBridge {
       }
       const id = this.request("thread/resume", {
         threadId: this.requestedThreadId,
-        model,
+        model: this.model,
         cwd: workdir,
         approvalPolicy: "on-request",
         sandbox: "workspace-write",
@@ -1934,6 +1955,8 @@ class SharedBridge {
           this.setBridgeRunState(error.retrying ? "running" : "error", error.retrying ? "再試行中" : "開始に失敗");
           if (!error.retrying) {
             notifyRunEvent("failed", {
+              provider: this.provider,
+              model: this.model,
               threadId: this.threadId,
               message: error.text,
             });
@@ -1997,7 +2020,12 @@ class SharedBridge {
         this.streamingStarted = false;
         this.setBridgeRunState(wasInterrupted ? "interrupted" : "done", wasInterrupted ? "中断しました" : "完了しました", completedTurnId);
         this.emit("turn", { status: "completed", turnId: completedTurnId, run: this.runPayload() });
-        notifyRunEvent(wasInterrupted ? "interrupted" : "completed", { threadId: this.threadId, turnId: completedTurnId });
+        notifyRunEvent(wasInterrupted ? "interrupted" : "completed", {
+          provider: this.provider,
+          model: this.model,
+          threadId: this.threadId,
+          turnId: completedTurnId,
+        });
         this.syncHistory("turn completed");
         this.startNextQueuedTurn();
         this.scheduleIdleDispose();
@@ -2008,6 +2036,8 @@ class SharedBridge {
         this.setBridgeRunState("approval", "承認待ち", this.activeTurnId);
         this.emit("approval", { request: msg });
         notifyRunEvent("approval", {
+          provider: this.provider,
+          model: this.model,
           threadId: this.threadId,
           turnId: this.activeTurnId,
           message: msg.method,
@@ -2026,6 +2056,8 @@ class SharedBridge {
         this.setBridgeRunState("error", "エラー", this.activeTurnId);
         this.emit("error", { text: error.text });
         notifyRunEvent("failed", {
+          provider: this.provider,
+          model: this.model,
           threadId: this.threadId,
           turnId: this.activeTurnId,
           message: error.text,
@@ -2048,6 +2080,8 @@ class SharedBridge {
       }
       if (this.activeTurnId) {
         notifyRunEvent("failed", {
+          provider: this.provider,
+          model: this.model,
           threadId: this.threadId,
           turnId: this.activeTurnId,
           message: error.message,
@@ -2138,12 +2172,13 @@ class SharedBridge {
   }
 
   syncHistory(reason) {
-    if (!this.threadId || !historySyncEnabled) return;
+    const enabled = historySyncEnabledForProvider(this.provider);
+    if (!this.threadId || !enabled) return;
     runHistorySync({
       threadId: this.threadId,
       workdir,
       request: appServerRequest,
-      enabled: historySyncEnabled,
+      enabled,
     })
       .then((result) => {
         if (!result.skipped) this.emit("status", { text: `履歴同期を更新しました (${reason})` });
@@ -2178,7 +2213,7 @@ class SharedBridge {
       threadId: this.threadId,
       input,
     };
-    if (options.model) params.model = options.model;
+    params.model = options.model || this.model;
     if (options.approvalPolicy) params.approvalPolicy = options.approvalPolicy;
     if (options.sandboxMode) params.sandboxPolicy = sandboxPolicyForMode(options.sandboxMode);
     const id = this.request("turn/start", {
@@ -2227,9 +2262,12 @@ function summarizeClaudeAttachmentPrompt(text, savedAttachments) {
 }
 
 class ClaudeBridge {
-  constructor(requestedThreadId, bridgeKey) {
+  constructor(requestedThreadId, baseBridgeKey) {
+    this.provider = "claude";
+    this.model = modelForProvider(this.provider);
     this.requestedThreadId = requestedThreadId;
-    this.bridgeKey = bridgeKey;
+    this.baseBridgeKey = baseBridgeKey;
+    this.bridgeKey = bridgeMapKey(this.provider, baseBridgeKey);
     this.clients = new Set();
     this.threadId = requestedThreadId || `claude:${crypto.randomUUID()}`;
     this.claudeSessionId = requestedThreadId && !requestedThreadId.startsWith("claude:") ? requestedThreadId : null;
@@ -2258,9 +2296,9 @@ class ClaudeBridge {
 
   readyPayload() {
     return {
-      provider: agentProvider,
+      provider: this.provider,
       threadId: this.threadId,
-      model,
+      model: this.model,
       workdir,
       ...currentWorkspaceMeta(),
       shared: true,
@@ -2337,12 +2375,14 @@ class ClaudeBridge {
   }
 
   promoteBridgeKey() {
-    if (!this.claudeSessionId || this.bridgeKey === this.claudeSessionId) return;
+    if (!this.claudeSessionId || this.baseBridgeKey === this.claudeSessionId) return;
     const previousKey = this.bridgeKey;
-    if (bridges.has(this.claudeSessionId) && bridges.get(this.claudeSessionId) !== this) return;
+    const nextKey = bridgeMapKey(this.provider, this.claudeSessionId);
+    if (bridges.has(nextKey) && bridges.get(nextKey) !== this) return;
     if (bridges.get(previousKey) !== this) return;
     this.threadId = this.claudeSessionId;
-    this.bridgeKey = this.claudeSessionId;
+    this.baseBridgeKey = this.claudeSessionId;
+    this.bridgeKey = nextKey;
     bridges.delete(previousKey);
     bridges.set(this.bridgeKey, this);
     this.emit("ready", this.readyPayload());
@@ -2419,7 +2459,7 @@ class ClaudeBridge {
       "--verbose",
       "--include-partial-messages",
       "--model",
-      options.model || model,
+      options.model || this.model,
       "--permission-mode",
       claudePermissionMode(options),
     ];
@@ -2508,6 +2548,8 @@ class ClaudeBridge {
       this.setBridgeRunState("error", "起動に失敗", this.activeTurnId);
       this.emit("error", { text: `Claudeを起動できませんでした: ${error.message}` });
       notifyRunEvent("failed", {
+        provider: this.provider,
+        model: this.model,
         threadId: this.threadId,
         turnId,
         message: error.message,
@@ -2524,18 +2566,20 @@ class ClaudeBridge {
         if (assistantText.trim()) this.appendHistory({ type: "assistant", text: assistantText, outputGroup: turnId });
         this.setBridgeRunState("done", "完了しました", turnId);
         this.emit("turn", { status: "completed", turnId, run: this.runPayload() });
-        notifyRunEvent("completed", { threadId: this.threadId, turnId });
+        notifyRunEvent("completed", { provider: this.provider, model: this.model, threadId: this.threadId, turnId });
       } else if (wasInterrupted) {
         if (assistantText.trim()) this.appendHistory({ type: "assistant", text: assistantText, outputGroup: turnId });
         this.setBridgeRunState("interrupted", "中断しました", turnId);
         this.emit("turn", { status: "completed", turnId, run: this.runPayload() });
-        notifyRunEvent("interrupted", { threadId: this.threadId, turnId });
+        notifyRunEvent("interrupted", { provider: this.provider, model: this.model, threadId: this.threadId, turnId });
       } else {
         const reason = signal ? `signal=${signal}` : `code=${code}`;
         const message = `Claude process exited (${reason})${stderrBuffer.trim() ? `: ${stderrBuffer.trim().slice(-1000)}` : ""}`;
         this.setBridgeRunState("error", "エラー", turnId);
         this.emit("error", { text: message });
         notifyRunEvent("failed", {
+          provider: this.provider,
+          model: this.model,
           threadId: this.threadId,
           turnId,
           message,
@@ -2556,31 +2600,35 @@ class ClaudeBridge {
   }
 }
 
-function getBridge(threadId, connectionId = crypto.randomUUID()) {
+function getBridge(threadId, provider = agentProvider, connectionId = crypto.randomUUID()) {
+  const requestedProvider = normalizeProvider(provider);
   if (!threadId) {
     for (const [key, bridge] of bridges.entries()) {
+      if (bridge.provider !== requestedProvider) continue;
       if (bridge.requestedThreadId) continue;
       if (typeof bridge.isReusable !== "function" || bridge.isReusable()) return bridge;
       if (typeof bridge.dispose === "function") bridge.dispose();
       bridges.delete(key);
     }
   }
-  const key = bridgeKeyForRequest(threadId, connectionId);
+  const baseKey = bridgeKeyForRequest(threadId, connectionId);
+  const key = bridgeMapKey(requestedProvider, baseKey);
   const existing = bridges.get(key);
   if (existing && typeof existing.isReusable === "function" && !existing.isReusable()) {
     existing.dispose();
     bridges.delete(key);
   }
-  if (!bridges.has(key)) bridges.set(key, isClaudeProvider ? new ClaudeBridge(threadId, key) : new SharedBridge(threadId, key));
+  if (!bridges.has(key)) bridges.set(key, requestedProvider === "claude" ? new ClaudeBridge(threadId, baseKey) : new SharedBridge(threadId, baseKey));
   return bridges.get(key);
 }
 
-async function bindBrowser(browser, phoneToken, threadId) {
+async function bindBrowser(browser, phoneToken, threadId, provider = agentProvider) {
+  const requestedProvider = normalizeProvider(provider);
   browser.isAlive = true;
   browser.on("pong", () => {
     browser.isAlive = true;
   });
-  if (shouldStartCodexServer) {
+  if (requestedProvider === "codex" && shouldStartCodexServer) {
     try {
       await ensureCodexServerRunning();
     } catch (error) {
@@ -2592,7 +2640,7 @@ async function bindBrowser(browser, phoneToken, threadId) {
     }
   }
   if (browser.readyState !== WebSocket.OPEN) return;
-  const bridge = getBridge(threadId);
+  const bridge = getBridge(threadId, requestedProvider);
   bridge.addClient(browser);
 
   browser.on("message", (data) => {
@@ -2619,26 +2667,29 @@ function bridgeSummaries() {
     threadId: bridge.threadId,
     clients: bridge.clients.size,
     ready: bridge.ready,
-    provider: agentProvider,
+    provider: bridge.provider || agentProvider,
     run: typeof bridge.runPayload === "function" ? bridge.runPayload() : null,
   }));
 }
 
-function localThreadList() {
-  return Array.from(bridges.values()).map((bridge) => {
-    const userEntry = [...bridge.history].reverse().find((entry) => entry.type === "user");
-    const preview = userEntry?.text || bridge.threadId;
-    const updatedAt = Date.now();
-    return {
-      id: bridge.threadId,
-      name: preview.split("\n").find(Boolean) || bridge.threadId,
-      preview,
-      cwd: workdir,
-      provider: agentProvider,
-      updatedAt,
-      updated_at: updatedAt,
-    };
-  });
+function localThreadList(provider = "") {
+  const requestedProvider = provider ? normalizeProvider(provider) : "";
+  return Array.from(bridges.values())
+    .filter((bridge) => !requestedProvider || bridge.provider === requestedProvider)
+    .map((bridge) => {
+      const userEntry = [...bridge.history].reverse().find((entry) => entry.type === "user");
+      const preview = userEntry?.text || bridge.threadId;
+      const updatedAt = Date.now();
+      return {
+        id: bridge.threadId,
+        name: preview.split("\n").find(Boolean) || bridge.threadId,
+        preview,
+        cwd: workdir,
+        provider: bridge.provider || agentProvider,
+        updatedAt,
+        updated_at: updatedAt,
+      };
+    });
 }
 
 async function codexThreadListPayload(requestedProvider) {
@@ -2652,16 +2703,22 @@ async function codexThreadListPayload(requestedProvider) {
   const data = Array.isArray(result.data)
     ? result.data.map((thread) => ({ ...thread, provider: requestedProvider }))
     : result.data;
-  return { ...result, provider: requestedProvider, activeProvider: agentProvider, data };
+  return { ...result, provider: requestedProvider, activeProvider: requestedProvider, data };
 }
 
-function findBridgeByThreadId(threadId) {
-  return Array.from(bridges.values()).find((bridge) => bridge.threadId === threadId || bridge.bridgeKey === threadId);
+function findBridgeByThreadId(threadId, provider = "") {
+  const requestedProvider = provider ? normalizeProvider(provider) : "";
+  return Array.from(bridges.values()).find(
+    (bridge) =>
+      (!requestedProvider || bridge.provider === requestedProvider) &&
+      (bridge.threadId === threadId || bridge.baseBridgeKey === threadId || bridge.bridgeKey === threadId),
+  );
 }
 
-function localModelList() {
+function localModelList(provider = agentProvider) {
+  const requestedProvider = normalizeProvider(provider);
   return {
-    data: modelOptions.map((item) => ({
+    data: modelOptionsForProvider(requestedProvider).map((item) => ({
       id: item,
       model: item,
       displayName: item,
@@ -2681,11 +2738,12 @@ async function main() {
     if (url.pathname === "/api/info") {
       sendJson(res, 200, {
         provider: agentProvider,
+        providers: ["codex", "claude"],
         model,
         workdir,
         app: { id: phoneAppId, name: phoneAppName, shortName: phoneAppShortName },
-        codexUrl: isCodexProvider ? codexUrl : null,
-        codexSocketPath: isCodexProvider ? codexSocketPath || null : null,
+        codexUrl,
+        codexSocketPath: codexSocketPath || null,
         managedCodexServer,
         tokenRequired: true,
       });
@@ -2709,18 +2767,15 @@ async function main() {
       try {
         sendJson(res, 200, await codexThreadListPayload(requestedProvider));
       } catch (error) {
-        if (requestedProvider !== agentProvider) {
-          sendJson(res, 200, { provider: requestedProvider, activeProvider: agentProvider, data: [], unavailable: error.message });
-          return;
-        }
         sendJson(res, 500, { error: error.message });
       }
       return;
     }
     if (url.pathname === "/api/models") {
       if (!requireToken(url, phoneToken, res)) return;
-      if (isClaudeProvider) {
-        sendJson(res, 200, localModelList());
+      const requestedProvider = normalizeProvider(url.searchParams.get("provider") || agentProvider);
+      if (requestedProvider === "claude") {
+        sendJson(res, 200, localModelList(requestedProvider));
         return;
       }
       try {
@@ -2733,7 +2788,8 @@ async function main() {
     }
     if (url.pathname === "/api/plugins") {
       if (!requireToken(url, phoneToken, res)) return;
-      if (isClaudeProvider) {
+      const requestedProvider = normalizeProvider(url.searchParams.get("provider") || agentProvider);
+      if (requestedProvider === "claude") {
         sendJson(res, 200, { data: [] });
         return;
       }
@@ -2756,9 +2812,10 @@ async function main() {
     }
     if (url.pathname === "/api/config") {
       if (!requireToken(url, phoneToken, res)) return;
-      if (isClaudeProvider) {
+      const requestedProvider = normalizeProvider(url.searchParams.get("provider") || agentProvider);
+      if (requestedProvider === "claude") {
         sendJson(res, 200, {
-          config: { config: { model, cwd: workdir, provider: agentProvider } },
+          config: { config: { model: modelForProvider(requestedProvider), cwd: workdir, provider: requestedProvider } },
           auth: { authMethod: "claude-cli" },
           errors: [],
         });
@@ -2817,7 +2874,7 @@ async function main() {
           const requestedProvider = Object.prototype.hasOwnProperty.call(body, "provider") ? normalizeProvider(body.provider) : agentProvider;
           if (Object.prototype.hasOwnProperty.call(body, "provider")) updates.PHONE_AGENT_PROVIDER = requestedProvider;
           if (Object.prototype.hasOwnProperty.call(body, "model")) updates[modelEnvKeyForProvider(requestedProvider)] = validateModel(body.model);
-          if (Object.prototype.hasOwnProperty.call(body, "workdir")) updates[workdirEnvKeyForProvider(requestedProvider)] = rememberWorkspace(body.workdir);
+          if (Object.prototype.hasOwnProperty.call(body, "workdir")) updates.PHONE_WORKDIR = rememberWorkspace(body.workdir);
           if (requestedProvider === "codex" && Object.prototype.hasOwnProperty.call(body, "historySyncEnabled")) {
             updates.CODEX_HISTORY_SYNC = body.historySyncEnabled ? "1" : "0";
           }
@@ -2870,17 +2927,19 @@ async function main() {
     if (url.pathname === "/api/status") {
       if (!requireToken(url, phoneToken, res)) return;
       const refreshRateLimits = url.searchParams.get("refreshRateLimits") === "1";
+      const requestedProvider = normalizeProvider(url.searchParams.get("provider") || agentProvider);
       sendJson(res, 200, {
-        provider: agentProvider,
+        provider: requestedProvider,
+        defaultProvider: agentProvider,
         workdir,
         ...currentWorkspaceMeta(),
-        model,
+        model: modelForProvider(requestedProvider),
         app: { id: phoneAppId, name: phoneAppName, shortName: phoneAppShortName },
-        codexUrl: isCodexProvider ? codexUrl : null,
-        codexSocketPath: isCodexProvider ? codexSocketPath || null : null,
+        codexUrl,
+        codexSocketPath: codexSocketPath || null,
         managedCodexServer,
-        historySyncEnabled,
-        rateLimits: await rateLimitSnapshot({ provider: agentProvider, refresh: refreshRateLimits }),
+        historySyncEnabled: historySyncEnabledForProvider(requestedProvider),
+        rateLimits: await rateLimitSnapshot({ provider: requestedProvider, refresh: refreshRateLimits }),
         uiPort,
         codexPort,
         bridges: bridgeSummaries(),
@@ -2889,7 +2948,8 @@ async function main() {
     }
     if (url.pathname === "/api/history-sync") {
       if (!requireToken(url, phoneToken, res)) return;
-      if (isClaudeProvider) {
+      const requestedProvider = normalizeProvider(url.searchParams.get("provider") || agentProvider);
+      if (requestedProvider === "claude") {
         sendJson(res, 200, { skipped: true, reason: "history sync is only available for the Codex provider" });
         return;
       }
@@ -2903,7 +2963,7 @@ async function main() {
           threadId,
           workdir,
           request: appServerRequest,
-          enabled: historySyncEnabled,
+          enabled: historySyncEnabledForProvider(requestedProvider),
         });
         sendJson(res, 200, result);
       } catch (error) {
@@ -2914,16 +2974,16 @@ async function main() {
     if (url.pathname === "/api/thread") {
       if (!requireToken(url, phoneToken, res)) return;
       const threadId = url.searchParams.get("thread");
-      const requestedProvider = normalizeProvider(url.searchParams.get("provider") || agentProvider);
+      const requestedProvider = normalizeProvider(url.searchParams.get("provider") || (threadId?.startsWith("claude:") ? "claude" : agentProvider));
       if (!threadId) {
         sendJson(res, 400, { error: "thread is required" });
         return;
       }
       if (requestedProvider === "claude") {
-        const bridge = findBridgeByThreadId(threadId);
+        const bridge = findBridgeByThreadId(threadId, requestedProvider);
         sendJson(res, 200, {
           provider: requestedProvider,
-          activeProvider: agentProvider,
+          activeProvider: requestedProvider,
           threadId,
           history: bridge?.history?.length ? bridge.history : claudeHistoryForSession(threadId),
         });
@@ -2932,20 +2992,16 @@ async function main() {
       try {
         const snapshot = await readThreadSnapshot({
           threadId,
-          liveBridge: findLiveBridge(bridges, threadId),
+          liveBridge: findBridgeByThreadId(threadId, requestedProvider) || findLiveBridge(bridges, threadId),
           request: appServerRequest,
-          model,
+          model: modelForProvider(requestedProvider),
           workdir,
           historyFromThread,
         });
-        sendJson(res, 200, { provider: requestedProvider, activeProvider: agentProvider, ...snapshot });
+        sendJson(res, 200, { provider: requestedProvider, activeProvider: requestedProvider, ...snapshot });
       } catch (error) {
-        if (requestedProvider !== agentProvider) {
-          sendJson(res, 200, { provider: requestedProvider, activeProvider: agentProvider, threadId, history: [], unavailable: error.message });
-          return;
-        }
         if (isMissingThreadError(error)) {
-          sendJson(res, 200, { provider: requestedProvider, activeProvider: agentProvider, threadId, history: [] });
+          sendJson(res, 200, { provider: requestedProvider, activeProvider: requestedProvider, threadId, history: [] });
           return;
         }
         sendJson(res, 500, { error: error.message });
@@ -3035,8 +3091,9 @@ async function main() {
       return;
     }
     const threadId = url.searchParams.get("thread") || null;
+    const requestedProvider = normalizeProvider(url.searchParams.get("provider") || (threadId?.startsWith("claude:") ? "claude" : agentProvider));
     wss.handleUpgrade(req, socket, head, (ws) => {
-      bindBrowser(ws, phoneToken, threadId).catch((error) => {
+      bindBrowser(ws, phoneToken, threadId, requestedProvider).catch((error) => {
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: "error", text: error.message }));
           ws.close();
@@ -3054,12 +3111,12 @@ async function main() {
     for (const url of urls) console.log(`  ${url}`);
     console.log("");
     console.log(`Workdir: ${workdir}`);
-    console.log(`Provider: ${agentProvider}`);
-    console.log(`Model:   ${model}`);
+    console.log(`Default provider: ${agentProvider}`);
+    console.log(`Default model:    ${model}`);
     console.log(`App:     ${phoneAppName} (${phoneAppId})`);
     console.log(`Bridge:  ${uiHost}:${uiPort}`);
-    if (isCodexProvider) console.log(`Codex:   ${managedCodexServer ? codexUrl : codexSocketPath || codexUrl}`);
-    else console.log(`Claude:  ${claudeBin}`);
+    console.log(`Codex:   ${managedCodexServer ? codexUrl : codexSocketPath || codexUrl}`);
+    console.log(`Claude:  ${claudeBin}`);
     console.log("Open the same URL from PC and phone to share one bridge thread.");
     console.log("Press Ctrl+C to stop.");
 
