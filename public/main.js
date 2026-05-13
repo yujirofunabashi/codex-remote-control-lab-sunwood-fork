@@ -130,6 +130,8 @@ let settingsRenderSeq = 0;
 let artifactItems = [];
 let activeArtifactPath = "";
 let latestRateLimits = null;
+let selectedExtensionView = localStorage.getItem("codexPhoneExtensionView") || "plugins";
+let extensionPanelState = null;
 const currentWorkspace = {
   repoName: "",
   workspaceLocation: "",
@@ -1450,11 +1452,28 @@ function pluginDisplayName(plugin) {
   return summary.interface?.displayName || summary.name || summary.id || "プラグイン";
 }
 
-function pluginStatus(plugin) {
+function pluginStatusKey(plugin) {
   const summary = plugin?.summary || plugin || {};
   if (summary.enabled) return "enabled";
   if (summary.installed) return "installed";
-  return summary.availability || summary.installPolicy || "available";
+  return String(summary.availability || summary.installPolicy || "available").toLowerCase();
+}
+
+function pluginStatusLabel(status) {
+  const value = String(status || "").toLowerCase();
+  if (value === "enabled") return "有効";
+  if (value === "installed") return "インストール済み";
+  if (value === "available") return "利用可";
+  return value ? value : "利用可";
+}
+
+function skillSourceLabel(source) {
+  const value = String(source || "").trim();
+  if (value.startsWith("plugin:")) return "プラグイン由来";
+  if (value === "project") return "プロジェクト";
+  if (value === "user") return "ユーザー";
+  if (value === "codex") return "Codex";
+  return value || "スキル";
 }
 
 function collectPluginRows(result) {
@@ -1463,20 +1482,158 @@ function collectPluginRows(result) {
   for (const marketplace of marketplaces) {
     const plugins = marketplace.plugins || marketplace.entries || [];
     for (const plugin of plugins) {
+      const summary = plugin?.summary || plugin || {};
+      const status = pluginStatusKey(plugin);
       rows.push({
+        kind: "plugin",
         name: pluginDisplayName(plugin),
-        detail: pluginStatus(plugin),
+        detail: summary.description || summary.interface?.description || "",
+        status,
       });
     }
   }
-  return rows;
+  return rows.sort((a, b) => a.name.localeCompare(b.name));
 }
 
 function collectSkillRows(result) {
-  return (result.skills || result.data || []).map((skill) => ({
-    name: skill.name || skill.id || "スキル",
-    detail: skill.description || skill.source || skill.path || "",
-  }));
+  return (result.skills || result.data || [])
+    .map((skill) => {
+      const source = skillSourceLabel(skill.source);
+      return {
+        kind: "skill",
+        name: skill.name || skill.id || "スキル",
+        detail: skill.description || skill.path || "",
+        status: source,
+      };
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function normalizeExtensionView(view) {
+  return view === "skills" ? "skills" : "plugins";
+}
+
+function extensionViewLabel(view) {
+  return view === "skills" ? "スキル" : "プラグイン";
+}
+
+function extensionCountLabel(state) {
+  if (!state) return "読み込み中";
+  if (state.error) return "エラー";
+  if (!state.rows) return "読み込み中";
+  return `${state.rows.length}件`;
+}
+
+function countBy(items, keyFn) {
+  const counts = new Map();
+  for (const item of items || []) {
+    const key = keyFn(item);
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  return counts;
+}
+
+function extensionSummary(view, state) {
+  if (!state) return `${extensionViewLabel(view)}を読み込み中です`;
+  if (state.error) return `${extensionViewLabel(view)}を読み込めませんでした`;
+  if (!state.rows) return `${extensionViewLabel(view)}を読み込み中です`;
+  if (!state.rows.length) return `${extensionViewLabel(view)}は見つかりませんでした`;
+  if (view === "plugins") {
+    const counts = countBy(state.rows, (row) => pluginStatusLabel(row.status));
+    const parts = [`${state.rows.length}件`];
+    for (const label of ["有効", "インストール済み", "利用可"]) {
+      const count = counts.get(label) || 0;
+      if (count) parts.push(`${label} ${count}`);
+    }
+    return parts.join(" / ");
+  }
+  const counts = countBy(state.rows, (row) => row.status);
+  const sources = Array.from(counts.entries())
+    .slice(0, 3)
+    .map(([name, count]) => `${name} ${count}`)
+    .join(" / ");
+  return sources ? `${state.rows.length}件 / ${sources}` : `${state.rows.length}件`;
+}
+
+function addExtensionSwitch() {
+  const switcher = document.createElement("div");
+  switcher.className = "extension-switch";
+  switcher.setAttribute("role", "tablist");
+  switcher.setAttribute("aria-label", "プラグインとスキルを切り替え");
+  for (const view of ["plugins", "skills"]) {
+    const state = extensionPanelState?.[view];
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = view === selectedExtensionView ? "active" : "";
+    button.setAttribute("role", "tab");
+    button.setAttribute("aria-selected", String(view === selectedExtensionView));
+    button.innerHTML = `<strong>${escapeHtml(extensionViewLabel(view))}</strong><span>${escapeHtml(extensionCountLabel(state))}</span>`;
+    button.addEventListener("click", () => {
+      selectedExtensionView = view;
+      localStorage.setItem("codexPhoneExtensionView", view);
+      renderExtensionPanel();
+    });
+    switcher.appendChild(button);
+  }
+  artifactList.appendChild(switcher);
+}
+
+function addExtensionSummary(view, state) {
+  const summary = document.createElement("div");
+  summary.className = "extension-summary";
+  summary.textContent = extensionSummary(view, state);
+  artifactList.appendChild(summary);
+}
+
+function addExtensionRow(item) {
+  const row = document.createElement("div");
+  row.className = "artifact-row has-badge extension-row";
+
+  const badge = document.createElement("span");
+  badge.className = `artifact-type-badge ${item.kind === "skill" ? "skill" : "plugin"}`;
+  badge.textContent = item.kind === "skill" ? "SKL" : "PLG";
+
+  const main = document.createElement("span");
+  main.className = "artifact-row-main";
+  const name = document.createElement("strong");
+  name.textContent = item.name;
+  main.appendChild(name);
+  if (item.detail) {
+    const detail = document.createElement("small");
+    detail.textContent = item.detail;
+    main.appendChild(detail);
+  }
+
+  const meta = document.createElement("span");
+  meta.className = "extension-row-meta";
+  meta.textContent = item.kind === "plugin" ? pluginStatusLabel(item.status) : item.status;
+
+  row.append(badge, main, meta);
+  artifactList.appendChild(row);
+  return row;
+}
+
+function renderExtensionPanel() {
+  artifactList.replaceChildren();
+  artifactList.classList.add("artifact-browser-list");
+  const view = normalizeExtensionView(selectedExtensionView);
+  selectedExtensionView = view;
+  const state = extensionPanelState?.[view] || { rows: null, error: "" };
+  addExtensionSwitch();
+  addExtensionSummary(view, state);
+  if (state.error) {
+    addPanelRow("読み込みに失敗しました", state.error);
+    return;
+  }
+  if (!state.rows) {
+    addPanelRow("読み込み中...");
+    return;
+  }
+  if (!state.rows.length) {
+    addPanelRow(`${extensionViewLabel(view)}は見つかりませんでした`, "利用できる項目があるとここに表示されます");
+    return;
+  }
+  for (const row of state.rows) addExtensionRow(row);
 }
 
 function renderArtifactIndex(items) {
@@ -1522,25 +1679,27 @@ function showToolError(name, error) {
 
 async function showPlugins() {
   clearPanel("プラグイン / スキル", "extensions");
-  addPanelRow("読み込み中...");
+  extensionPanelState = {
+    plugins: { rows: null, error: "" },
+    skills: { rows: null, error: "" },
+  };
+  renderExtensionPanel();
   const [pluginsResult, skillsResult] = await Promise.allSettled([apiGet("/api/plugins"), apiGet("/api/skills")]);
-  artifactList.replaceChildren();
 
   if (pluginsResult.status === "fulfilled") {
-    renderPanelSection("プラグイン", collectPluginRows(pluginsResult.value), "プラグインは見つかりませんでした");
+    extensionPanelState.plugins.rows = collectPluginRows(pluginsResult.value);
   } else {
-    addPanelSectionTitle("プラグイン");
-    addPanelRow("読み込みに失敗しました", pluginsResult.reason.message);
+    extensionPanelState.plugins.error = pluginsResult.reason.message;
     addEntry("error", `プラグイン: ${pluginsResult.reason.message}`);
   }
 
   if (skillsResult.status === "fulfilled") {
-    renderPanelSection("スキル", collectSkillRows(skillsResult.value), "スキルは見つかりませんでした");
+    extensionPanelState.skills.rows = collectSkillRows(skillsResult.value);
   } else {
-    addPanelSectionTitle("スキル");
-    addPanelRow("読み込みに失敗しました", skillsResult.reason.message);
+    extensionPanelState.skills.error = skillsResult.reason.message;
     addEntry("error", `スキル: ${skillsResult.reason.message}`);
   }
+  renderExtensionPanel();
 }
 
 async function showAutomations() {
