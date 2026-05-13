@@ -1487,23 +1487,54 @@ html[data-provider="claude"] .model-button {
 
 .interrupt-button {
   position: relative;
-  display: grid;
-  place-items: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
   flex: 0 0 auto;
-  width: 36px;
+  min-width: 64px;
   height: 36px;
-  border: 1px solid color-mix(in srgb, var(--error) 32%, var(--line));
-  border-radius: 50%;
-  padding: 0;
-  background: color-mix(in srgb, var(--error) 10%, var(--card));
-  color: var(--error);
+  border: 1px solid var(--warning-line);
+  border-radius: 999px;
+  padding: 0 10px;
+  background: var(--warning-bg);
+  color: var(--warning-text);
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0;
 }
 
 .interrupt-icon {
-  width: 12px;
-  height: 12px;
-  border-radius: 3px;
-  background: currentColor;
+  position: relative;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  border: 2px solid currentColor;
+  background: transparent;
+  clip-path: polygon(30% 0, 70% 0, 100% 30%, 100% 70%, 70% 100%, 30% 100%, 0 70%, 0 30%);
+}
+
+.interrupt-icon::before,
+.interrupt-icon::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  top: 50%;
+  border-top: 2px solid currentColor;
+}
+
+.interrupt-icon::before {
+  transform: translateY(-50%) rotate(45deg);
+}
+
+.interrupt-icon::after {
+  transform: translateY(-50%) rotate(-45deg);
+}
+
+.interrupt-label {
+  line-height: 1;
+  white-space: nowrap;
 }
 
 .interrupt-button:disabled {
@@ -2753,7 +2784,6 @@ body.prompt-modal-open {
 
   .thinking-button,
   .expand-button,
-  .interrupt-button,
   .voice-button {
     width: 28px;
   }
@@ -2791,14 +2821,14 @@ body.prompt-modal-open {
   }
 
   .interrupt-button {
-    width: 32px;
+    min-width: 58px;
     height: 32px;
+    padding: 0 8px;
   }
 
   .interrupt-icon {
-    width: 10px;
-    height: 10px;
-    border-radius: 3px;
+    width: 16px;
+    height: 16px;
   }
 
   .send-icon {
@@ -3063,13 +3093,19 @@ body.prompt-modal-open {
     font-size: 13px;
   }
 
-  .expand-button,
-  .interrupt-button {
+  .expand-button {
     width: 26px;
   }
 
   .interrupt-button {
-    height: 26px;
+    min-width: 30px;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+  }
+
+  .interrupt-label {
+    display: none;
   }
 
   .thread-time {

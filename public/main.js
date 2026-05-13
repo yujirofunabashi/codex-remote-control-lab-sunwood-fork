@@ -159,10 +159,15 @@ const terminalRunStates = new Set(["ready", "done", "interrupted", "disconnected
 function updateInterruptButton() {
   if (!interruptButton) return;
   const visible = interruptibleRunStates.has(currentRunState);
-  interruptButton.classList.toggle("hidden", !visible);
-  interruptButton.disabled =
+  const disabled =
     !visible || currentRunState === "interrupting" || interruptRequestPending || !ws || ws.readyState !== WebSocket.OPEN;
-  interruptButton.title = interruptButton.disabled && visible ? "中断要求を送信中です" : "処理を中断";
+  let label = "現在の処理を中断";
+  if (visible && (currentRunState === "interrupting" || interruptRequestPending)) label = "中断要求を送信中です";
+  else if (visible && (!ws || ws.readyState !== WebSocket.OPEN)) label = "接続後に処理を中断";
+  interruptButton.classList.toggle("hidden", !visible);
+  interruptButton.disabled = disabled;
+  interruptButton.title = label;
+  interruptButton.setAttribute("aria-label", label);
 }
 
 function setRunState(state, label) {
