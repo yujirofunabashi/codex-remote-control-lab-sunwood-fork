@@ -4,7 +4,7 @@ const http = require("http");
 const net = require("net");
 const os = require("os");
 const path = require("path");
-const { spawn } = require("child_process");
+const { execFileSync, spawn } = require("child_process");
 const WebSocket = require("ws");
 const { bridgeKeyForRequest, shouldDisposeIdleBridge, shouldPromoteBridgeKey } = require("./bridge-state");
 const { isHistorySyncEnabled, runHistorySync } = require("./history-sync");
@@ -406,6 +406,25 @@ const staticMimeTypes = new Map([
   [".svg", "image/svg+xml"],
   [".webmanifest", "application/manifest+json"],
 ]);
+
+function gitOutput(args) {
+  try {
+    return execFileSync("git", ["-C", workdir, ...args], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 1000,
+    }).trim();
+  } catch {
+    return "";
+  }
+}
+
+function currentGitBranch() {
+  const branch = gitOutput(["rev-parse", "--abbrev-ref", "HEAD"]);
+  if (branch && branch !== "HEAD") return branch;
+  const commit = gitOutput(["rev-parse", "--short", "HEAD"]);
+  return commit ? `detached:${commit}` : "";
+}
 
 function modelEnvKeyForProvider(provider) {
   return provider === "claude" ? "CLAUDE_MODEL" : "CODEX_MODEL";
@@ -1702,6 +1721,7 @@ class SharedBridge {
       threadId: this.threadId,
       model,
       workdir,
+      gitBranch: currentGitBranch(),
       shared: true,
       clients: this.clients.size,
       history: this.history,
@@ -1711,19 +1731,23 @@ class SharedBridge {
 
   runPayload() {
     if (this.activeTurnId) {
-      if (this.runState?.state === "interrupting") return this.runState;
+      if (this.runState?.state === "interrupting") return { ...this.runState, gitBranch: currentGitBranch() };
       return {
         state: this.streamingStarted ? "streaming" : "running",
         label: this.streamingStarted ? "回答生成中" : "Agent 処理中",
         turnId: this.activeTurnId,
         updatedAt: Date.now(),
+        gitBranch: currentGitBranch(),
       };
     }
-    return this.runState || { state: "ready", label: "未実行・送信できます", turnId: null, updatedAt: Date.now() };
+    return {
+      ...(this.runState || { state: "ready", label: "未実行・送信できます", turnId: null, updatedAt: Date.now() }),
+      gitBranch: currentGitBranch(),
+    };
   }
 
   setBridgeRunState(state, label, turnId = this.activeTurnId || null) {
-    const next = { state, label, turnId, updatedAt: Date.now() };
+    const next = { state, label, turnId, updatedAt: Date.now(), gitBranch: currentGitBranch() };
     const previous = this.runState || {};
     this.runState = next;
     if (previous.state !== state || previous.label !== label || previous.turnId !== turnId) {
@@ -2223,6 +2247,7 @@ class ClaudeBridge {
       threadId: this.threadId,
       model,
       workdir,
+      gitBranch: currentGitBranch(),
       shared: true,
       clients: this.clients.size,
       history: this.history,
@@ -2232,19 +2257,23 @@ class ClaudeBridge {
 
   runPayload() {
     if (this.activeTurnId || this.activeProcess) {
-      if (this.runState?.state === "interrupting") return this.runState;
+      if (this.runState?.state === "interrupting") return { ...this.runState, gitBranch: currentGitBranch() };
       return {
         state: this.streamingStarted ? "streaming" : "running",
         label: this.streamingStarted ? "回答生成中" : "Agent 処理中",
         turnId: this.activeTurnId,
         updatedAt: Date.now(),
+        gitBranch: currentGitBranch(),
       };
     }
-    return this.runState || { state: "ready", label: "未実行・送信できます", turnId: null, updatedAt: Date.now() };
+    return {
+      ...(this.runState || { state: "ready", label: "未実行・送信できます", turnId: null, updatedAt: Date.now() }),
+      gitBranch: currentGitBranch(),
+    };
   }
 
   setBridgeRunState(state, label, turnId = this.activeTurnId || null) {
-    const next = { state, label, turnId, updatedAt: Date.now() };
+    const next = { state, label, turnId, updatedAt: Date.now(), gitBranch: currentGitBranch() };
     const previous = this.runState || {};
     this.runState = next;
     if (previous.state !== state || previous.label !== label || previous.turnId !== turnId) {
@@ -2829,6 +2858,7 @@ async function main() {
       sendJson(res, 200, {
         provider: agentProvider,
         workdir,
+        gitBranch: currentGitBranch(),
         model,
         app: { id: phoneAppId, name: phoneAppName, shortName: phoneAppShortName },
         codexUrl: isCodexProvider ? codexUrl : null,

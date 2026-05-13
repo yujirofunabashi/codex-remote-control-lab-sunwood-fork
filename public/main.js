@@ -40,6 +40,8 @@ const threadSearch = document.querySelector("#threadSearch");
 const threadTitle = document.querySelector("#threadTitle");
 const composer = document.querySelector("#composer");
 const promptInput = document.querySelector("#prompt");
+const branchIndicator = document.querySelector("#branchIndicator");
+const branchName = document.querySelector("#branchName");
 const sendButton = document.querySelector("#send");
 const interruptButton = document.querySelector("#interruptRun");
 const promptModal = document.querySelector("#promptModal");
@@ -384,6 +386,7 @@ function addRateLimitPanelRows(rateLimits) {
 
 async function refreshRateLimits() {
   const result = await apiGet("/api/status?refreshRateLimits=1");
+  setCurrentBranch(result.gitBranch);
   latestRateLimits = result.rateLimits || null;
   renderRateLimitCard(latestRateLimits);
   return latestRateLimits;
@@ -953,6 +956,16 @@ async function copyTextToClipboard(text) {
 
 function addStatus(text) {
   addStatusGroupItem(text);
+}
+
+function setCurrentBranch(branch) {
+  if (!branchIndicator || !branchName) return;
+  const name = String(branch || "").trim();
+  branchName.textContent = name || "--";
+  branchIndicator.classList.toggle("empty", !name);
+  const label = name ? `現在のブランチ: ${name}` : "現在のブランチを取得できません";
+  branchIndicator.title = label;
+  branchIndicator.setAttribute("aria-label", label);
 }
 
 function setReady(ready) {
@@ -1881,6 +1894,8 @@ async function showStatus() {
     addRateLimitPanelRows(latestRateLimits);
     addPanelRow("履歴同期", result.historySyncEnabled ? "有効" : "無効");
     addPanelRow("作業ディレクトリ", result.workdir);
+    addPanelRow("Git branch", result.gitBranch || "--");
+    setCurrentBranch(result.gitBranch);
     for (const bridge of result.bridges || []) {
       addPanelRow(bridge.threadId || "thread準備中", `${bridge.clients}端末 / ${bridge.ready ? "ready" : "starting"}`);
     }
@@ -2101,6 +2116,7 @@ function connect({ preserveHistory = false } = {}) {
         return;
       }
       setSelectedModel(msg.model, { persist: false });
+      setCurrentBranch(msg.gitBranch || msg.run?.gitBranch);
       syncReadyThread(msg.threadId);
       renderHistoryIfChanged(msg.history || []);
       meta.textContent = `${msg.model}  •  ${msg.clients}端末  •  ${msg.workdir}`;
@@ -2109,6 +2125,7 @@ function connect({ preserveHistory = false } = {}) {
       return;
     }
     if (msg.type === "runState") {
+      if (Object.prototype.hasOwnProperty.call(msg, "gitBranch")) setCurrentBranch(msg.gitBranch);
       applyServerRunState(msg);
       return;
     }

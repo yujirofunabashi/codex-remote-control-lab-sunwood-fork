@@ -1181,6 +1181,43 @@ textarea::placeholder {
   color: color-mix(in srgb, var(--muted) 78%, transparent);
 }
 
+.composer-branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: calc(100% - 28px);
+  min-height: 24px;
+  margin: 0 14px 2px;
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--line));
+  border-radius: 999px;
+  padding: 3px 9px;
+  background: var(--soft);
+  color: var(--nav-muted);
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0;
+  line-height: 1.2;
+  vertical-align: top;
+}
+
+.composer-branch.empty {
+  opacity: 0.62;
+}
+
+.branch-prefix {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.branch-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--nav-text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .composer-footer {
   display: flex;
   align-items: center;
@@ -2757,6 +2794,14 @@ body.prompt-modal-open {
     color: var(--text);
     font-size: 16px;
     line-height: 1.42;
+  }
+
+  .composer-branch {
+    max-width: calc(100% - 20px);
+    min-height: 22px;
+    margin: 0 10px 2px;
+    padding: 3px 8px;
+    font-size: 11px;
   }
 
   .composer-footer {
