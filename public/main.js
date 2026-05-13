@@ -41,6 +41,7 @@ const threadTitle = document.querySelector("#threadTitle");
 const composer = document.querySelector("#composer");
 const promptInput = document.querySelector("#prompt");
 const sendButton = document.querySelector("#send");
+const interruptButton = document.querySelector("#interruptRun");
 const promptModal = document.querySelector("#promptModal");
 const promptModalInput = document.querySelector("#promptModalInput");
 const closePromptModalButton = document.querySelector("#closePromptModalButton");
@@ -125,6 +126,8 @@ let settingsRenderSeq = 0;
 let artifactItems = [];
 let activeArtifactPath = "";
 let latestRateLimits = null;
+let currentRunState = "connecting";
+let interruptRequestPending = false;
 let accessMode = {
   label: "フルアクセス",
   approvalPolicy: "never",
@@ -143,26 +146,48 @@ const runStateText = {
   running: "Agent 処理中",
   streaming: "回答生成中",
   approval: "承認待ち",
+  interrupting: "中断中",
+  interrupted: "中断しました",
   syncing: "履歴同期中",
   done: "完了しました",
   disconnected: "切断",
   error: "エラー",
 };
+const interruptibleRunStates = new Set(["running", "streaming", "approval", "interrupting"]);
+const terminalRunStates = new Set(["ready", "done", "interrupted", "disconnected", "error"]);
+
+function updateInterruptButton() {
+  if (!interruptButton) return;
+  const visible = interruptibleRunStates.has(currentRunState);
+  interruptButton.classList.toggle("hidden", !visible);
+  interruptButton.disabled =
+    !visible || currentRunState === "interrupting" || interruptRequestPending || !ws || ws.readyState !== WebSocket.OPEN;
+  interruptButton.title = interruptButton.disabled && visible ? "中断要求を送信中です" : "処理を中断";
+}
 
 function setRunState(state, label) {
   if (!runState || !runStateLabel) return;
   const nextLabel = label || runStateText[state] || state;
-  if (runState.dataset.state === state && runStateLabel.textContent === nextLabel) return;
-  runState.dataset.state = state;
-  runStateLabel.textContent = nextLabel;
+  currentRunState = state;
+  if (terminalRunStates.has(state)) interruptRequestPending = false;
+  if (runState.dataset.state !== state || runStateLabel.textContent !== nextLabel) {
+    runState.dataset.state = state;
+    runStateLabel.textContent = nextLabel;
+  }
+  updateInterruptButton();
 }
 
 function applyServerRunState(run = {}) {
   const state = run.state || "ready";
-  const activeStates = new Set(["running", "streaming", "approval", "syncing"]);
+  if (terminalRunStates.has(state)) interruptRequestPending = false;
+  if (state !== "approval" && pendingApproval) {
+    pendingApproval = null;
+    approval.classList.add("hidden");
+  }
+  const activeStates = new Set(["running", "streaming", "approval", "syncing", "interrupting"]);
   liveTurnActive = activeStates.has(state);
   if (liveTurnActive && run.turnId) liveOutputGroup = run.turnId;
-  if (!liveTurnActive && (state === "done" || state === "ready" || state === "error")) {
+  if (!liveTurnActive && (state === "done" || state === "ready" || state === "interrupted" || state === "error")) {
     assistantEntry = null;
     if (state !== "streaming") liveOutputGroup = "";
   }
@@ -931,6 +956,7 @@ function setReady(ready) {
   promptInput.disabled = false;
   composer.dataset.ready = ready ? "true" : "false";
   sendButton.title = pendingSubmission ? "送信確認中です" : ready ? "送信" : "接続後に送信できます";
+  updateInterruptButton();
 }
 
 function clientMessageId() {
@@ -2147,6 +2173,8 @@ function connect({ preserveHistory = false } = {}) {
 
   socket.addEventListener("close", () => {
     setReady(false);
+    interruptRequestPending = false;
+    updateInterruptButton();
     connectButton.disabled = false;
     const shouldSuppressReconnect = suppressedSocketReconnects.has(socket);
     suppressedSocketReconnects.delete(socket);
@@ -2163,6 +2191,8 @@ function connect({ preserveHistory = false } = {}) {
   });
 
   socket.addEventListener("error", () => {
+    interruptRequestPending = false;
+    updateInterruptButton();
     setRunState("disconnected", "接続エラー");
     releasePendingSubmission("接続エラーで送信できませんでした。");
     if (!suppressedSocketReconnects.has(socket)) scheduleReconnect("WebSocketエラー");
@@ -2210,6 +2240,26 @@ composer.addEventListener("submit", (event) => {
   } catch (error) {
     releasePendingSubmission("送信できませんでした。");
     addEntry("error", `送信に失敗しました: ${error.message}`);
+  }
+});
+
+interruptButton.addEventListener("click", () => {
+  if (!interruptibleRunStates.has(currentRunState) || interruptRequestPending) return;
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    addStatus("未接続のため中断要求を送信できません。");
+    scheduleReconnect("中断前の再接続", 120);
+    return;
+  }
+  interruptRequestPending = true;
+  pendingApproval = null;
+  approval.classList.add("hidden");
+  setRunState("interrupting", "中断要求を送信中");
+  try {
+    ws.send(JSON.stringify({ type: "interrupt", token }));
+  } catch (error) {
+    interruptRequestPending = false;
+    updateInterruptButton();
+    addEntry("error", `中断要求の送信に失敗しました: ${error.message}`);
   }
 });
 

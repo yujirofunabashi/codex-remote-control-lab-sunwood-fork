@@ -40,6 +40,7 @@
   --state-ready: #266b42;
   --state-running: #0b65c2;
   --state-approval: #8f4c00;
+  --state-interrupted: #6d5c00;
   --keyboard-inset: 0px;
 }
 
@@ -80,6 +81,7 @@
   --state-ready: #5eead4;
   --state-running: #7dd3fc;
   --state-approval: #fbbf24;
+  --state-interrupted: #facc15;
 }
 
 :root[data-theme="botanical"] {
@@ -119,6 +121,7 @@
   --state-ready: #326b3c;
   --state-running: #2f6f9f;
   --state-approval: #765016;
+  --state-interrupted: #75601d;
 }
 
 * {
@@ -1011,6 +1014,7 @@ body.hide-artifacts .artifact-panel {
 
 .run-state[data-state="running"],
 .run-state[data-state="streaming"],
+.run-state[data-state="interrupting"],
 .run-state[data-state="syncing"],
 .run-state[data-state="connecting"] {
   border-color: color-mix(in srgb, var(--state-running) 30%, var(--line));
@@ -1024,6 +1028,12 @@ body.hide-artifacts .artifact-panel {
   background: color-mix(in srgb, var(--state-approval) 9%, var(--card));
 }
 
+.run-state[data-state="interrupted"] {
+  border-color: color-mix(in srgb, var(--state-interrupted) 34%, var(--line));
+  color: var(--state-interrupted);
+  background: color-mix(in srgb, var(--state-interrupted) 8%, var(--card));
+}
+
 .run-state[data-state="error"],
 .run-state[data-state="disconnected"] {
   border-color: color-mix(in srgb, var(--error) 34%, var(--line));
@@ -1033,6 +1043,7 @@ body.hide-artifacts .artifact-panel {
 
 .run-state[data-state="running"] .run-state-dot,
 .run-state[data-state="streaming"] .run-state-dot,
+.run-state[data-state="interrupting"] .run-state-dot,
 .run-state[data-state="syncing"] .run-state-dot,
 .run-state[data-state="connecting"] .run-state-dot {
   animation: run-state-pulse 980ms ease-in-out infinite;
@@ -1203,6 +1214,7 @@ textarea::placeholder {
 .model-button,
 .thinking-button,
 .expand-button,
+.interrupt-button,
 .voice-button {
   min-height: 34px;
   border: 0;
@@ -1471,6 +1483,35 @@ html[data-provider="claude"] .model-button {
   background: var(--button);
   color: var(--button-text);
   font-size: 0;
+}
+
+.interrupt-button {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  border: 1px solid color-mix(in srgb, var(--error) 32%, var(--line));
+  border-radius: 50%;
+  padding: 0;
+  background: color-mix(in srgb, var(--error) 10%, var(--card));
+  color: var(--error);
+}
+
+.interrupt-icon {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  background: currentColor;
+}
+
+.interrupt-button:disabled {
+  opacity: 0.48;
+}
+
+.interrupt-button.hidden {
+  display: none;
 }
 
 .send-button::before {
@@ -2704,6 +2745,7 @@ body.prompt-modal-open {
   .model-button,
   .thinking-button,
   .expand-button,
+  .interrupt-button,
   .voice-button {
     min-height: 30px;
     font-size: 15px;
@@ -2711,6 +2753,7 @@ body.prompt-modal-open {
 
   .thinking-button,
   .expand-button,
+  .interrupt-button,
   .voice-button {
     width: 28px;
   }
@@ -2745,6 +2788,17 @@ body.prompt-modal-open {
     width: 32px;
     height: 32px;
     border-radius: 50%;
+  }
+
+  .interrupt-button {
+    width: 32px;
+    height: 32px;
+  }
+
+  .interrupt-icon {
+    width: 10px;
+    height: 10px;
+    border-radius: 3px;
   }
 
   .send-icon {
@@ -3004,12 +3058,18 @@ body.prompt-modal-open {
   .model-button,
   .thinking-button,
   .expand-button,
+  .interrupt-button,
   .voice-button {
     font-size: 13px;
   }
 
-  .expand-button {
+  .expand-button,
+  .interrupt-button {
     width: 26px;
+  }
+
+  .interrupt-button {
+    height: 26px;
   }
 
   .thread-time {
