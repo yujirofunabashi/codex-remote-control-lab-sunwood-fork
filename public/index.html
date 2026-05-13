@@ -93,10 +93,6 @@
               <input id="fileInput" class="hidden" type="file" accept="image/*,audio/*,.m4a,.mp3,.wav,.aac,.flac,.ogg,.webm,.mp4" multiple />
               <div id="attachments" class="attachments" aria-live="polite"></div>
               <textarea id="prompt" rows="3" placeholder="フォローアップの変更を求める"></textarea>
-              <div id="branchIndicator" class="composer-branch empty" aria-live="polite" aria-label="現在のブランチを取得できません">
-                <span class="branch-prefix">branch</span>
-                <span id="branchName" class="branch-name">--</span>
-              </div>
               <div class="composer-footer">
                 <div class="composer-left">
                   <button type="button" class="ghost-button" id="addButton" aria-label="添付を追加" title="添付を追加">＋</button>
@@ -141,6 +137,17 @@
                 <button type="button" class="model-menu-row submenu-row" id="moreModelsButton">その他のモデル<span class="chevron">›</span></button>
               </div>
             </form>
+            <div id="workspaceIndicator" class="workspace-strip empty" aria-live="polite" aria-label="作業場所を取得できません">
+              <div class="workspace-place">
+                <span id="workspaceRepo" class="workspace-repo">--</span>
+                <span class="workspace-separator" aria-hidden="true">/</span>
+                <span id="workspaceLocation" class="workspace-location">--</span>
+              </div>
+              <div class="workspace-branch">
+                <span class="workspace-label">branch</span>
+                <span id="branchName" class="branch-name">--</span>
+              </div>
+            </div>
             <section class="prompt-modal hidden" id="promptModal" role="dialog" aria-modal="true" aria-labelledby="promptModalTitle">
               <div class="prompt-modal-card">
                 <header class="prompt-modal-header">

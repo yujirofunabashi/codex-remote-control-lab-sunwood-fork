@@ -426,6 +426,21 @@ function currentGitBranch() {
   return commit ? `detached:${commit}` : "";
 }
 
+function displayPath(value) {
+  return String(value || "").split(path.sep).join("/");
+}
+
+function currentWorkspaceMeta() {
+  const gitRoot = gitOutput(["rev-parse", "--show-toplevel"]);
+  const repoName = path.basename(gitRoot || workdir);
+  const relative = gitRoot ? displayPath(path.relative(gitRoot, workdir)) : "";
+  return {
+    gitBranch: currentGitBranch(),
+    repoName,
+    workspaceLocation: gitRoot ? relative || "." : displayPath(workdir),
+  };
+}
+
 function modelEnvKeyForProvider(provider) {
   return provider === "claude" ? "CLAUDE_MODEL" : "CODEX_MODEL";
 }
@@ -1721,7 +1736,7 @@ class SharedBridge {
       threadId: this.threadId,
       model,
       workdir,
-      gitBranch: currentGitBranch(),
+      ...currentWorkspaceMeta(),
       shared: true,
       clients: this.clients.size,
       history: this.history,
@@ -1731,23 +1746,23 @@ class SharedBridge {
 
   runPayload() {
     if (this.activeTurnId) {
-      if (this.runState?.state === "interrupting") return { ...this.runState, gitBranch: currentGitBranch() };
+      if (this.runState?.state === "interrupting") return { ...this.runState, ...currentWorkspaceMeta() };
       return {
         state: this.streamingStarted ? "streaming" : "running",
         label: this.streamingStarted ? "回答生成中" : "Agent 処理中",
         turnId: this.activeTurnId,
         updatedAt: Date.now(),
-        gitBranch: currentGitBranch(),
+        ...currentWorkspaceMeta(),
       };
     }
     return {
       ...(this.runState || { state: "ready", label: "未実行・送信できます", turnId: null, updatedAt: Date.now() }),
-      gitBranch: currentGitBranch(),
+      ...currentWorkspaceMeta(),
     };
   }
 
   setBridgeRunState(state, label, turnId = this.activeTurnId || null) {
-    const next = { state, label, turnId, updatedAt: Date.now(), gitBranch: currentGitBranch() };
+    const next = { state, label, turnId, updatedAt: Date.now(), ...currentWorkspaceMeta() };
     const previous = this.runState || {};
     this.runState = next;
     if (previous.state !== state || previous.label !== label || previous.turnId !== turnId) {
@@ -2247,7 +2262,7 @@ class ClaudeBridge {
       threadId: this.threadId,
       model,
       workdir,
-      gitBranch: currentGitBranch(),
+      ...currentWorkspaceMeta(),
       shared: true,
       clients: this.clients.size,
       history: this.history,
@@ -2257,23 +2272,23 @@ class ClaudeBridge {
 
   runPayload() {
     if (this.activeTurnId || this.activeProcess) {
-      if (this.runState?.state === "interrupting") return { ...this.runState, gitBranch: currentGitBranch() };
+      if (this.runState?.state === "interrupting") return { ...this.runState, ...currentWorkspaceMeta() };
       return {
         state: this.streamingStarted ? "streaming" : "running",
         label: this.streamingStarted ? "回答生成中" : "Agent 処理中",
         turnId: this.activeTurnId,
         updatedAt: Date.now(),
-        gitBranch: currentGitBranch(),
+        ...currentWorkspaceMeta(),
       };
     }
     return {
       ...(this.runState || { state: "ready", label: "未実行・送信できます", turnId: null, updatedAt: Date.now() }),
-      gitBranch: currentGitBranch(),
+      ...currentWorkspaceMeta(),
     };
   }
 
   setBridgeRunState(state, label, turnId = this.activeTurnId || null) {
-    const next = { state, label, turnId, updatedAt: Date.now(), gitBranch: currentGitBranch() };
+    const next = { state, label, turnId, updatedAt: Date.now(), ...currentWorkspaceMeta() };
     const previous = this.runState || {};
     this.runState = next;
     if (previous.state !== state || previous.label !== label || previous.turnId !== turnId) {
@@ -2858,7 +2873,7 @@ async function main() {
       sendJson(res, 200, {
         provider: agentProvider,
         workdir,
-        gitBranch: currentGitBranch(),
+        ...currentWorkspaceMeta(),
         model,
         app: { id: phoneAppId, name: phoneAppName, shortName: phoneAppShortName },
         codexUrl: isCodexProvider ? codexUrl : null,

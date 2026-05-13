@@ -1107,7 +1107,7 @@ body.hide-artifacts .artifact-panel {
   background: var(--composer-bg);
   box-shadow: var(--composer-shadow);
   overflow: visible;
-  margin-bottom: max(20px, env(safe-area-inset-bottom));
+  margin-bottom: 6px;
 }
 
 .attachments {
@@ -1181,41 +1181,72 @@ textarea::placeholder {
   color: color-mix(in srgb, var(--muted) 78%, transparent);
 }
 
-.composer-branch {
-  display: inline-flex;
+.workspace-strip {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 6px;
-  max-width: calc(100% - 28px);
-  min-height: 24px;
-  margin: 0 14px 2px;
-  border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--line));
-  border-radius: 999px;
-  padding: 3px 9px;
-  background: var(--soft);
+  gap: 12px;
+  flex: 0 0 auto;
+  width: min(860px, calc(100% - 48px));
+  max-width: 100%;
+  min-width: 0;
+  min-height: 20px;
+  margin: 0 auto max(20px, env(safe-area-inset-bottom));
+  padding: 0 6px;
   color: var(--nav-muted);
   font-size: 12px;
   font-weight: 650;
   letter-spacing: 0;
   line-height: 1.2;
-  vertical-align: top;
 }
 
-.composer-branch.empty {
+.workspace-strip.empty {
   opacity: 0.62;
 }
 
-.branch-prefix {
+.workspace-place,
+.workspace-branch {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.workspace-place {
+  gap: 5px;
+}
+
+.workspace-branch {
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.workspace-label,
+.workspace-separator {
   flex: 0 0 auto;
   color: var(--muted);
   font-weight: 600;
 }
 
+.workspace-repo,
+.workspace-location,
 .branch-name {
   min-width: 0;
   overflow: hidden;
   color: var(--nav-text);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.workspace-repo {
+  flex: 0 2 auto;
+}
+
+.workspace-location {
+  flex: 1 1 auto;
+}
+
+.branch-name {
+  max-width: min(260px, 34vw);
 }
 
 .composer-footer {
@@ -2740,7 +2771,7 @@ body.prompt-modal-open {
     max-width: calc(100% - 18px);
     min-width: 0;
     min-height: 84px;
-    margin-bottom: max(7px, env(safe-area-inset-bottom));
+    margin-bottom: 4px;
     border-radius: 18px;
   }
 
@@ -2749,6 +2780,10 @@ body.prompt-modal-open {
   }
 
   body.keyboard-open .composer {
+    margin-bottom: 4px;
+  }
+
+  body.keyboard-open .workspace-strip {
     margin-bottom: max(10px, env(safe-area-inset-bottom));
   }
 
@@ -2796,12 +2831,21 @@ body.prompt-modal-open {
     line-height: 1.42;
   }
 
-  .composer-branch {
-    max-width: calc(100% - 20px);
+  .workspace-strip {
+    width: calc(100% - 18px);
+    max-width: calc(100% - 18px);
     min-height: 22px;
-    margin: 0 10px 2px;
-    padding: 3px 8px;
+    margin-bottom: max(7px, env(safe-area-inset-bottom));
+    padding: 0 3px;
     font-size: 11px;
+  }
+
+  .workspace-branch {
+    gap: 5px;
+  }
+
+  .branch-name {
+    max-width: 34vw;
   }
 
   .composer-footer {
