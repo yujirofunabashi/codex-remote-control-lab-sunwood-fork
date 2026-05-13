@@ -965,6 +965,14 @@ function addStatus(text) {
   addStatusGroupItem(text);
 }
 
+function compactWorkspaceLocation(location) {
+  const value = String(location || "").trim();
+  if (!value || value === ".") return value;
+  const parts = value.split("/").filter(Boolean);
+  if (parts.length <= 2) return value;
+  return `.../${parts.slice(-2).join("/")}`;
+}
+
 function setWorkspaceMeta(meta = {}) {
   if (!workspaceIndicator || !workspaceRepo || !workspaceLocation || !branchName) return;
   if (Object.prototype.hasOwnProperty.call(meta, "repoName")) currentWorkspace.repoName = String(meta.repoName || "").trim();
@@ -975,9 +983,10 @@ function setWorkspaceMeta(meta = {}) {
 
   const repo = currentWorkspace.repoName;
   const location = currentWorkspace.workspaceLocation;
+  const displayLocation = compactWorkspaceLocation(location);
   const branch = currentWorkspace.gitBranch;
   workspaceRepo.textContent = repo || "--";
-  workspaceLocation.textContent = location || "--";
+  workspaceLocation.textContent = displayLocation || "--";
   branchName.textContent = branch || "--";
   const empty = !repo && !location && !branch;
   workspaceIndicator.classList.toggle("empty", empty);

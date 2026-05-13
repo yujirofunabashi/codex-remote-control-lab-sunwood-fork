@@ -1238,7 +1238,9 @@ textarea::placeholder {
 }
 
 .workspace-repo {
-  flex: 0 2 auto;
+  flex: 0 1 auto;
+  min-width: 96px;
+  max-width: 32%;
 }
 
 .workspace-location {
@@ -1246,7 +1248,7 @@ textarea::placeholder {
 }
 
 .branch-name {
-  max-width: min(260px, 34vw);
+  max-width: min(220px, 30vw);
 }
 
 .composer-footer {
@@ -2844,8 +2846,13 @@ body.prompt-modal-open {
     gap: 5px;
   }
 
+  .workspace-repo {
+    min-width: 86px;
+    max-width: 34%;
+  }
+
   .branch-name {
-    max-width: 34vw;
+    max-width: 30vw;
   }
 
   .composer-footer {
