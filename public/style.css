@@ -548,29 +548,20 @@ button.project-heading.active {
 .mobile-toggle-icon {
   position: absolute;
   inset: 8px 9px;
-  border: 2px solid currentColor;
-  border-radius: 4px;
+  border: 1.4px solid currentColor;
+  border-radius: 4.5px;
+  overflow: hidden;
 }
 
 .mobile-toggle-icon::before {
   content: "";
   position: absolute;
-  top: 3px;
-  bottom: 3px;
-  left: 7px;
-  border-left: 2px solid currentColor;
-}
-
-.mobile-toggle-icon::after {
-  content: "";
-  position: absolute;
-  top: 50%;
-  right: 3px;
-  width: 5px;
-  height: 5px;
-  border-top: 2px solid currentColor;
-  border-right: 2px solid currentColor;
-  transform: translateY(-50%) rotate(45deg);
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 6px;
+  background: currentColor;
+  opacity: 0.82;
 }
 
 .title-stack {
@@ -1232,28 +1223,18 @@ textarea::placeholder {
   position: relative;
 }
 
-.expand-button::before,
-.expand-button::after {
-  content: "";
-  position: absolute;
-  width: 9px;
-  height: 9px;
-  border-color: currentColor;
-  opacity: 0.86;
+.expand-icon {
+  width: 18px;
+  height: 18px;
+  opacity: 0.82;
 }
 
-.expand-button::before {
-  top: 8px;
-  right: 8px;
-  border-top: 2px solid;
-  border-right: 2px solid;
-}
-
-.expand-button::after {
-  left: 8px;
-  bottom: 8px;
-  border-left: 2px solid;
-  border-bottom: 2px solid;
+.expand-icon path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .access-button {
@@ -1286,9 +1267,9 @@ textarea::placeholder {
   gap: 6px;
   color: var(--nav-text);
   font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
-  font-size: 15px;
-  font-weight: 480;
-  letter-spacing: 0.005em;
+  font-size: 14px;
+  font-weight: 400;
+  letter-spacing: 0;
   white-space: nowrap;
   max-width: 168px;
   overflow: hidden;
@@ -1497,9 +1478,8 @@ html[data-provider="claude"] .model-button {
 }
 
 .send-icon {
-  width: 24px;
-  height: 24px;
-  transform: translateX(1px) rotate(-8deg);
+  width: 18px;
+  height: 18px;
 }
 
 .send-icon path {
