@@ -16,17 +16,30 @@ test("slotSettingValue prefers a port-scoped value over a shared env value", () 
   assert.equal(slotSettingValue(env, "PHONE_WORKDIR", 45224), "/Users/minijiro/slot-45224");
 });
 
-test("slotSettingValue keeps explicit launch env ahead of port-scoped saved settings", () => {
+test("slotSettingValue keeps port-scoped settings ahead of shared launch env", () => {
   const env = {
-    PHONE_WORKDIR: "/Users/minijiro/launch",
-    PHONE_WORKDIR_45224: "/Users/minijiro/saved-slot",
+    PHONE_WORKDIR: "/Users/minijiro/shared-launch",
+    PHONE_WORKDIR_45224: "/Users/minijiro/slot",
   };
 
   assert.equal(
     slotSettingValue(env, "PHONE_WORKDIR", 45224, {
       launchEnvKeys: new Set(["PHONE_WORKDIR"]),
     }),
-    "/Users/minijiro/launch",
+    "/Users/minijiro/slot",
+  );
+});
+
+test("slotSettingValue uses shared launch env when there is no port-scoped value", () => {
+  const env = {
+    PHONE_WORKDIR: "/Users/minijiro/shared-launch",
+  };
+
+  assert.equal(
+    slotSettingValue(env, "PHONE_WORKDIR", 45224, {
+      launchEnvKeys: new Set(["PHONE_WORKDIR"]),
+    }),
+    "/Users/minijiro/shared-launch",
   );
 });
 

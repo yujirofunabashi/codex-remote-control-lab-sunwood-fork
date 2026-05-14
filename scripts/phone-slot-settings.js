@@ -28,6 +28,18 @@ function settingEnvKeysForSlot(baseKey, port, fallbackKeys = []) {
 
 function slotSettingValue(env, baseKey, port, { launchEnvKeys, fallbackKeys = [], fallback } = {}) {
   const keys = uniq([baseKey, ...fallbackKeys]);
+  const scopedKeys = keys.map((key) => slotEnvKey(key, port));
+  if (launchEnvKeys) {
+    const scopedLaunchValue = firstEnvValue(
+      env,
+      scopedKeys.filter((key) => launchEnvKeys.has(key)),
+    );
+    if (scopedLaunchValue !== undefined) return scopedLaunchValue;
+  }
+
+  const scopedValue = firstEnvValue(env, scopedKeys);
+  if (scopedValue !== undefined) return scopedValue;
+
   if (launchEnvKeys) {
     const launchValue = firstEnvValue(
       env,
@@ -35,12 +47,6 @@ function slotSettingValue(env, baseKey, port, { launchEnvKeys, fallbackKeys = []
     );
     if (launchValue !== undefined) return launchValue;
   }
-
-  const scopedValue = firstEnvValue(
-    env,
-    keys.map((key) => slotEnvKey(key, port)),
-  );
-  if (scopedValue !== undefined) return scopedValue;
 
   const globalValue = firstEnvValue(env, keys);
   return globalValue !== undefined ? globalValue : fallback;

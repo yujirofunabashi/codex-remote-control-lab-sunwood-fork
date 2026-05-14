@@ -723,7 +723,6 @@ function localSettingsPayload() {
   const providerPinned = settingPinned("PHONE_AGENT_PROVIDER", ["AGENT_PROVIDER", "PHONE_AGENT_PROVIDER_DEFAULT"]);
   const settingsProvider = providerPinned ? agentProvider : savedProvider;
   const modelPinned = settingPinned("PHONE_MODEL", [modelEnvKeyForProvider(settingsProvider), ...(settingsProvider === "codex" ? ["CODEX_MODEL"] : [])]);
-  const workdirPinned = settingPinned("PHONE_WORKDIR", [workdirEnvKeyForProvider(settingsProvider), "CODEX_WORKDIR"]);
   const historyPinned = historySyncEnvKeyForProvider(settingsProvider) ? settingPinned(historySyncEnvKeyForProvider(settingsProvider)) : false;
   const portPinned = hasLaunchEnv("PHONE_UI_PORT");
   const hostPinned = hasLaunchEnv("PHONE_UI_HOST");
@@ -733,7 +732,7 @@ function localSettingsPayload() {
   const savedModel = modelFromEnv(envValues, settingsProvider, settingsProvider === agentProvider ? model : defaultModelForProvider(settingsProvider));
   const savedWorkdir = workdirFromEnv(envValues, settingsProvider, workdir);
   const settingsModel = modelPinned && settingsProvider === agentProvider ? model : savedModel;
-  const settingsWorkdir = workdirPinned && settingsProvider === agentProvider ? workdir : savedWorkdir;
+  const settingsWorkdir = savedWorkdir;
   const settingsHistorySyncEnabled = historyPinned && settingsProvider === agentProvider ? historySyncEnabledForProvider(settingsProvider) : savedHistorySyncEnabled;
   const settingsPort = portPinned ? uiPort : savedPort;
   const settingsHost = hostPinned ? uiHost : savedHost;
@@ -769,7 +768,7 @@ function localSettingsPayload() {
     },
     restartRequired:
       (!modelPinned && settingsProvider === agentProvider && savedModel !== model) ||
-      (!workdirPinned && settingsProvider === agentProvider && savedWorkdir !== workdir) ||
+      (settingsProvider === agentProvider && savedWorkdir !== workdir) ||
       (!historyPinned && settingsProvider === agentProvider && savedHistorySyncEnabled !== historySyncEnabled),
     networkRestartRequired: (!portPinned && savedPort !== uiPort) || (!hostPinned && savedHost !== uiHost),
   };
