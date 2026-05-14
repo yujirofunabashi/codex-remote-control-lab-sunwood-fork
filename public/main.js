@@ -324,11 +324,12 @@ function urlWithBridgeToken(url, entry = activeBridge()) {
   return target.href;
 }
 
-function wsUrlForBridge(entry = activeBridge(), provider = currentThreadProvider(), threadId = selectedThread) {
+function wsUrlForBridge(entry = activeBridge(), provider = currentThreadProvider(), threadId = selectedThread, options = {}) {
   const target = new URL(urlWithBridgeToken("/bridge", entry));
   target.protocol = target.protocol === "https:" ? "wss:" : "ws:";
   target.searchParams.set("provider", provider || "codex");
   if (threadId) target.searchParams.set("thread", threadId);
+  if (options.fresh) target.searchParams.set("fresh", "1");
   return target.href;
 }
 
@@ -2036,7 +2037,7 @@ function renderThreadList() {
   newProject.type = "button";
   newProject.className = selectedThread ? "project-heading new-project" : "project-heading new-project active";
   newProject.innerHTML = `<span class="project-folder"></span><span>New ${providerLabel(provider)} thread</span>`;
-  newProject.addEventListener("click", () => selectThread(""));
+  newProject.addEventListener("click", startNewThread);
   threadList.appendChild(newProject);
 
   const groups = visibleThreadGroups();
@@ -3155,7 +3156,7 @@ function syncReadyThread(threadId) {
   renderTerminalTranscript();
 }
 
-function selectThread(threadId) {
+function selectThread(threadId, options = {}) {
   saveScrollPositions();
   saveDraftForActiveThread();
   threadSwitchBusy = true;
@@ -3171,13 +3172,17 @@ function selectThread(threadId) {
   setSidebarVisible(false);
   closeThreadSwitcher();
   restoreScrollPositions();
-  connect();
+  connect({ freshThread: options.fresh === true });
   if (selectedThread) refreshSelectedThread();
   window.setTimeout(() => {
     threadSwitchBusy = false;
     updateThreadNavigation();
     updateHeaderStatus();
   }, 420);
+}
+
+function startNewThread() {
+  selectThread("", { fresh: true });
 }
 
 function showRightPanel() {
@@ -4211,7 +4216,7 @@ async function uploadFile(file) {
   };
 }
 
-function connect({ preserveHistory = false } = {}) {
+function connect({ preserveHistory = false, freshThread = false } = {}) {
   const bridge = activeBridge();
   const bridgeToken = effectiveBridgeToken(bridge);
   const bridgeId = activeBridgeId;
@@ -4232,7 +4237,7 @@ function connect({ preserveHistory = false } = {}) {
   const selected = threadCache.find((thread) => thread.id === selectedThread);
   setThreadHeading(selected ? titleForThread(selected) : "新しい共有thread");
 
-  ws = new WebSocket(wsUrlForBridge(bridge, provider, selectedThread));
+  ws = new WebSocket(wsUrlForBridge(bridge, provider, selectedThread, { fresh: freshThread && !selectedThread }));
   const socket = ws;
   connectButton.disabled = true;
   meta.textContent = "接続中";
@@ -4484,7 +4489,7 @@ declineButton.addEventListener("click", () => {
   setRunState("running", "拒否済み・処理中");
 });
 
-newThreadButton.addEventListener("click", () => selectThread(""));
+newThreadButton.addEventListener("click", startNewThread);
 prevThreadButton.addEventListener("click", () => selectAdjacentThread(-1));
 nextThreadButton.addEventListener("click", () => selectAdjacentThread(1));
 searchButton.addEventListener("click", () => {

@@ -1,5 +1,6 @@
-function bridgeKeyForRequest(threadId, connectionId) {
+function bridgeKeyForRequest(threadId, connectionId, options = {}) {
   if (threadId) return threadId;
+  if (options.fresh) return `new:${connectionId || "fresh"}`;
   return "new:shared";
 }
 

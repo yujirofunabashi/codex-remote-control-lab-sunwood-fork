@@ -2941,9 +2941,9 @@ class ClaudeBridge {
   }
 }
 
-function getBridge(threadId, provider = agentProvider, connectionId = crypto.randomUUID()) {
+function getBridge(threadId, provider = agentProvider, connectionId = crypto.randomUUID(), options = {}) {
   const requestedProvider = normalizeProvider(provider);
-  if (!threadId) {
+  if (!threadId && !options.fresh) {
     for (const [key, bridge] of bridges.entries()) {
       if (bridge.provider !== requestedProvider) continue;
       if (bridge.requestedThreadId) continue;
@@ -2952,7 +2952,7 @@ function getBridge(threadId, provider = agentProvider, connectionId = crypto.ran
       bridges.delete(key);
     }
   }
-  const baseKey = bridgeKeyForRequest(threadId, connectionId);
+  const baseKey = bridgeKeyForRequest(threadId, connectionId, options);
   const key = bridgeMapKey(requestedProvider, baseKey);
   const existing = bridges.get(key);
   if (existing && typeof existing.isReusable === "function" && !existing.isReusable()) {
@@ -2963,7 +2963,7 @@ function getBridge(threadId, provider = agentProvider, connectionId = crypto.ran
   return bridges.get(key);
 }
 
-async function bindBrowser(browser, phoneToken, threadId, provider = agentProvider) {
+async function bindBrowser(browser, phoneToken, threadId, provider = agentProvider, options = {}) {
   const requestedProvider = normalizeProvider(provider);
   browser.isAlive = true;
   browser.on("pong", () => {
@@ -2981,7 +2981,7 @@ async function bindBrowser(browser, phoneToken, threadId, provider = agentProvid
     }
   }
   if (browser.readyState !== WebSocket.OPEN) return;
-  const bridge = getBridge(threadId, requestedProvider);
+  const bridge = getBridge(threadId, requestedProvider, crypto.randomUUID(), options);
   bridge.addClient(browser);
 
   browser.on("message", (data) => {
@@ -3482,6 +3482,7 @@ async function main() {
       return;
     }
     const threadId = url.searchParams.get("thread") || null;
+    const fresh = url.searchParams.get("fresh") === "1";
     let requestedProvider;
     try {
       requestedProvider = normalizeProvider(url.searchParams.get("provider") || (threadId?.startsWith("claude:") ? "claude" : agentProvider));
@@ -3491,7 +3492,7 @@ async function main() {
       return;
     }
     wss.handleUpgrade(req, socket, head, (ws) => {
-      bindBrowser(ws, phoneToken, threadId, requestedProvider).catch((error) => {
+      bindBrowser(ws, phoneToken, threadId, requestedProvider, { fresh }).catch((error) => {
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: "error", text: error.message }));
           ws.close();

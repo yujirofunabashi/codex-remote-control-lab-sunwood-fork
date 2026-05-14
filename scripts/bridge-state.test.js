@@ -9,6 +9,12 @@ test("new thread bridge requests share the startup URL bridge", () => {
   assert.equal(bridgeKeyForRequest("", "a"), bridgeKeyForRequest("", "b"));
 });
 
+test("explicit fresh new thread requests get their own bridge key", () => {
+  assert.equal(bridgeKeyForRequest("", "a", { fresh: true }), "new:a");
+  assert.equal(bridgeKeyForRequest("", "a", { fresh: true }), bridgeKeyForRequest("", "a", { fresh: true }));
+  assert.notEqual(bridgeKeyForRequest("", "a", { fresh: true }), bridgeKeyForRequest("", "b", { fresh: true }));
+});
+
 test("existing thread bridge requests keep the thread id as the shared key", () => {
   assert.equal(bridgeKeyForRequest("thread-123", "ignored"), "thread-123");
 });
