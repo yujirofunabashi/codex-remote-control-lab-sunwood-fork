@@ -9,6 +9,7 @@ const WebSocket = require("ws");
 const { bridgeKeyForRequest, shouldDisposeIdleBridge, shouldPromoteBridgeKey } = require("./bridge-state");
 const { isHistorySyncEnabled, runHistorySync } = require("./history-sync");
 const { bridgeUrls, notifyBridgeUrls, notifyTaskEvent } = require("./phone-notify");
+const { settingEnvKeysForSlot, slotEnvKey, slotSettingValue } = require("./phone-slot-settings");
 const { findLiveBridge, readThreadSnapshot } = require("./thread-read");
 
 const root = path.resolve(__dirname, "..");
@@ -358,7 +359,13 @@ const envPath = path.join(root, ".env");
 const claudeProjectsRoot = path.join(os.homedir(), ".claude", "projects");
 const uiPort = Number(process.env.PHONE_UI_PORT || 45214);
 const uiHost = process.env.PHONE_UI_HOST || "0.0.0.0";
-const agentProvider = normalizeProvider(process.env.PHONE_AGENT_PROVIDER || process.env.AGENT_PROVIDER || process.env.PHONE_AGENT_PROVIDER_DEFAULT || "codex");
+const agentProvider = normalizeProvider(
+  slotSettingValue(process.env, "PHONE_AGENT_PROVIDER", uiPort, {
+    launchEnvKeys,
+    fallbackKeys: ["AGENT_PROVIDER", "PHONE_AGENT_PROVIDER_DEFAULT"],
+    fallback: "codex",
+  }),
+);
 const isCodexProvider = agentProvider === "codex";
 const isClaudeProvider = agentProvider === "claude";
 const phoneAppId = appIdSlug(process.env.PHONE_APP_ID, `${agentProvider}-${uiPort}`);
@@ -368,14 +375,13 @@ const codexPort = Number(process.env.CODEX_APP_SERVER_PORT || 45213);
 const codexSocketPath = process.env.CODEX_APP_SERVER_SOCK || "";
 const codexUrl = process.env.CODEX_APP_SERVER_URL || (codexSocketPath ? "ws://codex-app-server/rpc" : `ws://127.0.0.1:${codexPort}`);
 const shouldStartCodexServer = !process.env.CODEX_APP_SERVER_URL && !codexSocketPath;
-const workdirEnvKey = isClaudeProvider ? "CLAUDE_WORKDIR" : "CODEX_WORKDIR";
-const workdir = process.env.PHONE_WORKDIR || process.env[workdirEnvKey] || process.env.CODEX_WORKDIR || root;
+const workdir = workdirFromEnv(process.env, agentProvider, root, { launchEnvKeys });
 const providerModels = {
-  codex: modelFromEnv(process.env, "codex"),
-  claude: modelFromEnv(process.env, "claude"),
+  codex: modelFromEnv(process.env, "codex", defaultModelForProvider("codex"), { launchEnvKeys }),
+  claude: modelFromEnv(process.env, "claude", defaultModelForProvider("claude"), { launchEnvKeys }),
 };
 const model = providerModels[agentProvider] || defaultModelForProvider(agentProvider);
-const historySyncEnabled = isHistorySyncEnabled(process.env);
+const historySyncEnabled = historySyncEnabledFromEnv(process.env, { launchEnvKeys });
 const tokenPath = path.join(root, ".phone-token");
 const workspacePrefsPath = path.join(root, ".phone-workspaces.json");
 const rateLimitCacheTtlMs = positiveNumber(process.env.PHONE_RATE_LIMIT_CACHE_TTL_MS, 5 * 60 * 1000);
@@ -472,12 +478,34 @@ function historySyncEnabledForProvider(provider) {
   return normalizeProvider(provider) === "codex" && historySyncEnabled;
 }
 
-function modelFromEnv(env, provider, fallback = defaultModelForProvider(provider)) {
-  return env.PHONE_MODEL || env[modelEnvKeyForProvider(provider)] || (provider === "codex" ? env.CODEX_MODEL : undefined) || fallback;
+function modelFromEnv(env, provider, fallback = defaultModelForProvider(provider), options = {}) {
+  const providerKey = modelEnvKeyForProvider(provider);
+  const fallbackKeys = provider === "codex" ? [providerKey, "CODEX_MODEL"] : [providerKey];
+  return slotSettingValue(env, "PHONE_MODEL", uiPort, {
+    launchEnvKeys: options.launchEnvKeys,
+    fallbackKeys,
+    fallback,
+  });
 }
 
-function workdirFromEnv(env, provider, fallback = workdir) {
-  return env.PHONE_WORKDIR || env[workdirEnvKeyForProvider(provider)] || env.CODEX_WORKDIR || fallback;
+function workdirFromEnv(env, provider, fallback = workdir, options = {}) {
+  return slotSettingValue(env, "PHONE_WORKDIR", uiPort, {
+    launchEnvKeys: options.launchEnvKeys,
+    fallbackKeys: [workdirEnvKeyForProvider(provider), "CODEX_WORKDIR"],
+    fallback,
+  });
+}
+
+function historySyncEnabledFromEnv(env, options = {}) {
+  return isHistorySyncEnabled({
+    CODEX_HISTORY_SYNC: slotSettingValue(env, "CODEX_HISTORY_SYNC", uiPort, {
+      launchEnvKeys: options.launchEnvKeys,
+    }),
+  });
+}
+
+function settingPinned(baseKey, fallbackKeys = []) {
+  return settingEnvKeysForSlot(baseKey, uiPort, fallbackKeys).some(hasLaunchEnv);
 }
 
 function bridgeMapKey(provider, baseKey) {
@@ -672,19 +700,24 @@ function workspaceOptions() {
 
 function localSettingsPayload() {
   const envValues = parseEnvValues(envPath);
-  const savedProvider = normalizeProvider(envValues.PHONE_AGENT_PROVIDER || agentProvider);
-  const providerPinned = ["PHONE_AGENT_PROVIDER", "AGENT_PROVIDER", "PHONE_AGENT_PROVIDER_DEFAULT"].some(hasLaunchEnv);
+  const savedProvider = normalizeProvider(
+    slotSettingValue(envValues, "PHONE_AGENT_PROVIDER", uiPort, {
+      fallbackKeys: ["AGENT_PROVIDER", "PHONE_AGENT_PROVIDER_DEFAULT"],
+      fallback: agentProvider,
+    }),
+  );
+  const providerPinned = settingPinned("PHONE_AGENT_PROVIDER", ["AGENT_PROVIDER", "PHONE_AGENT_PROVIDER_DEFAULT"]);
   const settingsProvider = providerPinned ? agentProvider : savedProvider;
-  const modelPinned = ["PHONE_MODEL", modelEnvKeyForProvider(settingsProvider), ...(settingsProvider === "codex" ? ["CODEX_MODEL"] : [])].some(hasLaunchEnv);
-  const workdirPinned = hasLaunchEnv("PHONE_WORKDIR");
-  const historyPinned = historySyncEnvKeyForProvider(settingsProvider) ? hasLaunchEnv(historySyncEnvKeyForProvider(settingsProvider)) : false;
+  const modelPinned = settingPinned("PHONE_MODEL", [modelEnvKeyForProvider(settingsProvider), ...(settingsProvider === "codex" ? ["CODEX_MODEL"] : [])]);
+  const workdirPinned = settingPinned("PHONE_WORKDIR", [workdirEnvKeyForProvider(settingsProvider), "CODEX_WORKDIR"]);
+  const historyPinned = historySyncEnvKeyForProvider(settingsProvider) ? settingPinned(historySyncEnvKeyForProvider(settingsProvider)) : false;
   const portPinned = hasLaunchEnv("PHONE_UI_PORT");
   const hostPinned = hasLaunchEnv("PHONE_UI_HOST");
-  const savedHistorySyncEnabled = settingsProvider === "codex" ? isHistorySyncEnabled({ CODEX_HISTORY_SYNC: envValues.CODEX_HISTORY_SYNC }) : false;
+  const savedHistorySyncEnabled = settingsProvider === "codex" ? historySyncEnabledFromEnv(envValues) : false;
   const savedPort = Number(envValues.PHONE_UI_PORT || uiPort);
   const savedHost = envValues.PHONE_UI_HOST || uiHost;
   const savedModel = modelFromEnv(envValues, settingsProvider, settingsProvider === agentProvider ? model : defaultModelForProvider(settingsProvider));
-  const savedWorkdir = envValues.PHONE_WORKDIR || workdirFromEnv(envValues, settingsProvider, workdir);
+  const savedWorkdir = workdirFromEnv(envValues, settingsProvider, workdir);
   const settingsModel = modelPinned && settingsProvider === agentProvider ? model : savedModel;
   const settingsWorkdir = workdirPinned && settingsProvider === agentProvider ? workdir : savedWorkdir;
   const settingsHistorySyncEnabled = historyPinned && settingsProvider === agentProvider ? historySyncEnabledForProvider(settingsProvider) : savedHistorySyncEnabled;
@@ -2872,11 +2905,13 @@ async function main() {
           const body = await readJsonBody(req);
           const updates = {};
           const requestedProvider = Object.prototype.hasOwnProperty.call(body, "provider") ? normalizeProvider(body.provider) : agentProvider;
-          if (Object.prototype.hasOwnProperty.call(body, "provider")) updates.PHONE_AGENT_PROVIDER = requestedProvider;
-          if (Object.prototype.hasOwnProperty.call(body, "model")) updates[modelEnvKeyForProvider(requestedProvider)] = validateModel(body.model);
-          if (Object.prototype.hasOwnProperty.call(body, "workdir")) updates.PHONE_WORKDIR = rememberWorkspace(body.workdir);
+          if (Object.prototype.hasOwnProperty.call(body, "provider")) updates[slotEnvKey("PHONE_AGENT_PROVIDER", uiPort)] = requestedProvider;
+          if (Object.prototype.hasOwnProperty.call(body, "model")) {
+            updates[slotEnvKey(modelEnvKeyForProvider(requestedProvider), uiPort)] = validateModel(body.model);
+          }
+          if (Object.prototype.hasOwnProperty.call(body, "workdir")) updates[slotEnvKey("PHONE_WORKDIR", uiPort)] = rememberWorkspace(body.workdir);
           if (requestedProvider === "codex" && Object.prototype.hasOwnProperty.call(body, "historySyncEnabled")) {
-            updates.CODEX_HISTORY_SYNC = body.historySyncEnabled ? "1" : "0";
+            updates[slotEnvKey("CODEX_HISTORY_SYNC", uiPort)] = body.historySyncEnabled ? "1" : "0";
           }
           writeEnvValues(updates);
           sendJson(res, 200, { ok: true, ...localSettingsPayload() });
