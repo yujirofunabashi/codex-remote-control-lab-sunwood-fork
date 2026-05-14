@@ -78,7 +78,8 @@ function taskNotificationMessage(event = {}) {
   if (event.model) lines.push(`Model: ${event.model}`);
   if (event.workdir) lines.push(`Workdir: ${event.workdir}`);
   if (event.message) lines.push("", String(event.message));
-  if (event.url) lines.push("", event.url);
+  if (Array.isArray(event.urls) && event.urls.length) lines.push("", "Links:", ...event.urls);
+  else if (event.url) lines.push("", event.url);
   return lines.join("\n");
 }
 

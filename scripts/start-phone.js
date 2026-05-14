@@ -830,6 +830,21 @@ function bridgeUrlForThread(threadId, provider = agentProvider) {
   }
 }
 
+function bridgeUrlsForThread(threadId, provider = agentProvider) {
+  return notificationBridgeUrls
+    .map((base) => {
+      try {
+        const url = new URL(base);
+        if (threadId) url.searchParams.set("thread", threadId);
+        url.searchParams.set("provider", normalizeProvider(provider));
+        return url.toString();
+      } catch {
+        return "";
+      }
+    })
+    .filter(Boolean);
+}
+
 function logNotifyResults(context, results) {
   if (!results.length) return;
   for (const result of results) {
@@ -848,6 +863,7 @@ function notifyRunEvent(status, { provider = agentProvider, threadId, turnId, me
     workdir,
     message,
     url: bridgeUrlForThread(threadId, provider),
+    urls: bridgeUrlsForThread(threadId, provider),
   })
     .then((results) => logNotifyResults(`task ${status}`, results))
     .catch((error) => console.warn(`[notify] task ${status} error: ${error.message}`));
@@ -1675,10 +1691,8 @@ function claudeSessionFilePath(sessionId) {
   return target;
 }
 
-function readClaudeSessionFile(filePath) {
-  if (!filePath || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) return null;
+function parseClaudeSessionFile(filePath, stat, text) {
   const sessionId = path.basename(filePath, ".jsonl");
-  const stat = fs.statSync(filePath);
   const history = [];
   let title = "";
   let firstUserText = "";
@@ -1687,7 +1701,7 @@ function readClaudeSessionFile(filePath) {
   let createdAt = Number.POSITIVE_INFINITY;
   let updatedAt = stat.mtimeMs;
 
-  for (const line of fs.readFileSync(filePath, "utf8").split(/\r?\n/)) {
+  for (const line of text.split(/\r?\n/)) {
     if (!line.trim()) continue;
     let item;
     try {
@@ -1703,16 +1717,16 @@ function readClaudeSessionFile(filePath) {
       updatedAt = Math.max(updatedAt, timestamp);
     }
     if (item.type !== "user" && item.type !== "assistant") continue;
-    const text = textFromClaudeContent(item.message?.content);
-    if (!text.trim()) continue;
+    const contentText = textFromClaudeContent(item.message?.content);
+    if (!contentText.trim()) continue;
     const role = item.message?.role === "assistant" || item.type === "assistant" ? "assistant" : "user";
     if (role === "user") {
-      if (!firstUserText) firstUserText = text;
-      lastUserText = text;
+      if (!firstUserText) firstUserText = contentText;
+      lastUserText = contentText;
     }
     history.push({
       type: role === "assistant" ? "assistant" : "user",
-      text,
+      text: contentText,
       outputGroup: item.uuid || item.requestId || sessionId,
     });
   }
@@ -1735,6 +1749,24 @@ function readClaudeSessionFile(filePath) {
   };
 }
 
+function readClaudeSessionFile(filePath) {
+  if (!filePath || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) return null;
+  const stat = fs.statSync(filePath);
+  return parseClaudeSessionFile(filePath, stat, fs.readFileSync(filePath, "utf8"));
+}
+
+async function readClaudeSessionFileAsync(filePath) {
+  if (!filePath) return null;
+  try {
+    const stat = await fs.promises.stat(filePath);
+    if (!stat.isFile()) return null;
+    const text = await fs.promises.readFile(filePath, "utf8");
+    return parseClaudeSessionFile(filePath, stat, text);
+  } catch {
+    return null;
+  }
+}
+
 function readClaudeSession(sessionId) {
   return readClaudeSessionFile(claudeSessionFilePath(sessionId));
 }
@@ -1743,15 +1775,20 @@ function claudeHistoryForSession(sessionId) {
   return readClaudeSession(sessionId)?.history || [];
 }
 
-function claudeThreadListPayload() {
+async function claudeThreadListPayload() {
   const byId = new Map();
   const dir = claudeProjectDirFor();
-  if (fs.existsSync(dir)) {
-    for (const fileName of fs.readdirSync(dir)) {
-      if (!fileName.endsWith(".jsonl")) continue;
-      const session = readClaudeSessionFile(path.join(dir, fileName));
-      if (session) byId.set(session.summary.id, session.summary);
-    }
+  let fileNames = [];
+  try {
+    fileNames = await fs.promises.readdir(dir);
+  } catch {
+    fileNames = [];
+  }
+  const sessions = await Promise.all(
+    fileNames.filter((fileName) => fileName.endsWith(".jsonl")).map((fileName) => readClaudeSessionFileAsync(path.join(dir, fileName))),
+  );
+  for (const session of sessions) {
+    if (session) byId.set(session.summary.id, session.summary);
   }
   for (const thread of localThreadList("claude")) {
     const existing = byId.get(thread.id);
@@ -2861,7 +2898,7 @@ async function main() {
       const requestedProvider = queryProvider(url, res);
       if (!requestedProvider) return;
       if (requestedProvider === "claude") {
-        sendJson(res, 200, claudeThreadListPayload());
+        sendJson(res, 200, await claudeThreadListPayload());
         return;
       }
       try {

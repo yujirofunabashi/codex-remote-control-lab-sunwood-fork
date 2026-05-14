@@ -976,9 +976,13 @@ function addStatus(text) {
 function compactWorkspaceLocation(location) {
   const value = String(location || "").trim();
   if (!value || value === ".") return value;
-  const parts = value.split("/").filter(Boolean);
+  const normalized = value.replace(/\\/g, "/");
+  const driveMatch = normalized.match(/^([A-Za-z]:)(?:\/|$)/);
+  const prefix = driveMatch ? `${driveMatch[1]}/` : normalized.startsWith("~/") ? "~/" : normalized.startsWith("/") ? "/" : "";
+  const rest = prefix ? normalized.slice(prefix.length) : normalized;
+  const parts = rest.split("/").filter(Boolean);
   if (parts.length <= 2) return value;
-  return `.../${parts.slice(-2).join("/")}`;
+  return `${prefix}.../${parts.slice(-2).join("/")}`;
 }
 
 function setWorkspaceMeta(meta = {}) {

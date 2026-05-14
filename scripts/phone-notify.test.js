@@ -152,6 +152,20 @@ test("taskNotificationMessage includes failure details", () => {
   );
 });
 
+test("taskNotificationMessage can include multiple task links", () => {
+  const message = taskNotificationMessage({
+    status: "approval",
+    provider: "codex",
+    urls: ["http://192.168.11.8:45214/?token=secret", "http://100.64.0.1:45214/?token=secret"],
+    url: "http://192.168.11.8:45214/?token=secret",
+  });
+
+  assert.match(message, /Links:/);
+  assert.match(message, /http:\/\/192\.168\.11\.8:45214/);
+  assert.match(message, /http:\/\/100\.64\.0\.1:45214/);
+  assert.equal(message.match(/http:\/\//g).length, 2);
+});
+
 test("notifyBridgeUrls rejects non-Discord webhook URLs", async () => {
   const results = await notifyBridgeUrls(["http://192.168.11.8:45214/?token=secret"], {
     env: { PHONE_DISCORD_WEBHOOK_URL: "https://example.com/webhook" },
