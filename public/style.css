@@ -202,6 +202,128 @@ button {
   padding: 0 4px;
 }
 
+.fleet-sidebar {
+  display: grid;
+  gap: 8px;
+}
+
+.fleet-current,
+.bridge-fleet-row {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 48px;
+  border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
+  border-radius: 12px;
+  padding: 8px 9px;
+  background: color-mix(in srgb, var(--card) 82%, transparent);
+  color: var(--nav-text);
+  text-align: left;
+}
+
+.fleet-current:hover,
+.bridge-fleet-row:hover {
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--line));
+  background: color-mix(in srgb, var(--accent) 7%, var(--card));
+}
+
+.fleet-current-dot,
+.bridge-pill-dot,
+.bridge-row-dot {
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--card);
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow: 0 0 0 1px var(--line);
+}
+
+.fleet-current-main,
+.bridge-row-main,
+.bridge-pill-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.fleet-current-main strong,
+.bridge-row-main strong,
+.bridge-pill-main strong,
+.fleet-current-main small,
+.bridge-row-main small,
+.bridge-pill-main small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fleet-current-main small,
+.bridge-row-main small,
+.bridge-pill-main small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.fleet-current-badges,
+.bridge-row-badges {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.fleet-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0 6px;
+  background: var(--soft);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.fleet-badge.running {
+  border-color: color-mix(in srgb, var(--state-running) 38%, var(--line));
+  color: var(--state-running);
+}
+
+.fleet-badge.approval {
+  border-color: color-mix(in srgb, var(--state-approval) 38%, var(--line));
+  color: var(--state-approval);
+}
+
+.fleet-badge.error {
+  border-color: color-mix(in srgb, var(--error) 42%, var(--line));
+  color: var(--error);
+}
+
+.bridge-fleet-list {
+  display: grid;
+  gap: 6px;
+  max-height: 170px;
+  overflow: auto;
+}
+
+.bridge-fleet-row {
+  min-height: 44px;
+  border-radius: 11px;
+  padding: 7px 8px;
+}
+
+.bridge-fleet-row.active {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
+  box-shadow: inset 3px 0 0 var(--bridge-color, var(--accent));
+}
+
+.add-bridge-command {
+  min-height: 38px;
+}
+
 .window-actions {
   display: inline-flex;
   align-items: center;
@@ -570,7 +692,7 @@ button.project-heading.active {
 
 .titlebar {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto auto auto;
   align-items: center;
   gap: 12px;
   width: 100%;
@@ -579,6 +701,33 @@ button.project-heading.active {
   padding: 0 18px;
   border-bottom: 1px solid var(--line);
   overflow: hidden;
+}
+
+.bridge-pill {
+  display: inline-grid;
+  grid-template-columns: 13px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  min-width: 118px;
+  max-width: 210px;
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0 10px;
+  background: color-mix(in srgb, var(--card) 88%, var(--bridge-color, var(--accent)));
+  color: var(--text);
+  text-align: left;
+}
+
+.bridge-pill[data-state="approval"] {
+  border-color: color-mix(in srgb, var(--state-approval) 42%, var(--line));
+  background: color-mix(in srgb, var(--state-approval) 10%, var(--card));
+}
+
+.bridge-pill[data-state="error"],
+.bridge-pill[data-state="disconnected"] {
+  border-color: color-mix(in srgb, var(--error) 38%, var(--line));
+  background: color-mix(in srgb, var(--error) 8%, var(--card));
 }
 
 .mobile-toggle {
@@ -753,7 +902,8 @@ p {
 }
 
 .thread-color-popover,
-.thread-switcher {
+.thread-switcher,
+.bridge-fleet-sheet {
   position: fixed;
   top: 60px;
   right: 14px;
@@ -767,6 +917,171 @@ p {
   background: var(--card);
   color: var(--text);
   box-shadow: 0 24px 60px color-mix(in srgb, var(--text) 16%, transparent);
+}
+
+.bridge-fleet-sheet {
+  left: 306px;
+  right: 18px;
+  width: auto;
+  max-height: min(82vh, 760px);
+}
+
+.bridge-fleet-header,
+.bridge-fleet-panel-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.bridge-fleet-header {
+  margin-bottom: 12px;
+}
+
+.bridge-fleet-header small {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.bridge-fleet-header button {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--soft);
+  color: var(--muted);
+  font-size: 22px;
+}
+
+.bridge-fleet-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.05fr) minmax(220px, 1fr);
+  gap: 12px;
+}
+
+.bridge-fleet-panel {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 10px;
+  background: color-mix(in srgb, var(--soft) 62%, transparent);
+}
+
+.bridge-fleet-panel-title {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+
+.bridge-fleet-sheet-list,
+.global-approval-inbox,
+.global-running-monitor {
+  display: grid;
+  gap: 8px;
+}
+
+.bridge-sheet-card,
+.global-approval-card,
+.global-monitor-row {
+  display: grid;
+  gap: 7px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px;
+  background: var(--card);
+}
+
+.bridge-sheet-card.active {
+  border-color: color-mix(in srgb, var(--bridge-color, var(--accent)) 48%, var(--line));
+  box-shadow: inset 4px 0 0 var(--bridge-color, var(--accent));
+}
+
+.bridge-sheet-card-header,
+.global-monitor-row-header {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.bridge-card-actions,
+.global-approval-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.bridge-card-actions button,
+.global-approval-actions button,
+.bridge-add-actions button {
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0 10px;
+  background: var(--button);
+  color: var(--button-text);
+  font-weight: 760;
+}
+
+.bridge-card-actions button.secondary,
+.global-approval-actions button.secondary,
+.bridge-add-actions button.secondary {
+  background: var(--card);
+  color: var(--text);
+}
+
+.global-approval-card {
+  border-color: color-mix(in srgb, var(--state-approval) 34%, var(--line));
+  background: var(--warning-bg);
+}
+
+.global-approval-card pre {
+  max-height: 118px;
+  overflow: auto;
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--warning-text);
+  font-size: 12px;
+}
+
+.add-bridge-panel textarea {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px;
+  background: var(--field);
+  color: var(--text);
+  resize: vertical;
+}
+
+.bridge-remember-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.bridge-add-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.bridge-add-status {
+  margin: 0;
+  color: var(--muted);
+  white-space: normal;
 }
 
 .thread-color-popover-header,
@@ -1730,6 +2045,30 @@ body.terminal-nowrap .terminal-detail {
   border-radius: 14px;
   background: var(--warning-bg);
   box-shadow: 0 14px 32px color-mix(in srgb, var(--state-approval) 12%, transparent);
+}
+
+.global-approval-banner {
+  flex: 0 0 auto;
+  width: min(860px, calc(100% - 48px));
+  margin: 12px auto 0;
+  border: 1px solid color-mix(in srgb, var(--state-approval) 42%, var(--line));
+  border-radius: 14px;
+  padding: 10px 12px;
+  background: var(--warning-bg);
+  color: var(--warning-text);
+  font-size: 13px;
+  font-weight: 760;
+}
+
+.global-approval-banner button {
+  min-height: 32px;
+  margin-left: 8px;
+  border: 1px solid var(--warning-line);
+  border-radius: 999px;
+  padding: 0 10px;
+  background: var(--card);
+  color: var(--warning-text);
+  font-weight: 800;
 }
 
 .approval-header {
@@ -3799,7 +4138,7 @@ body.prompt-modal-open {
     grid-template-columns: auto minmax(0, 1fr) auto auto;
     grid-template-areas:
       "drawer title color actions"
-      "nav pill pill pill";
+      "nav bridge pill pill";
     align-items: center;
     row-gap: 6px;
     width: 100%;
@@ -3842,6 +4181,14 @@ body.prompt-modal-open {
     grid-area: color;
   }
 
+  .bridge-pill {
+    grid-area: bridge;
+    min-width: 0;
+    max-width: 100%;
+    min-height: 30px;
+    padding-inline: 8px;
+  }
+
   .thread-position-pill {
     grid-area: pill;
     justify-self: start;
@@ -3856,6 +4203,25 @@ body.prompt-modal-open {
 
   #meta {
     max-width: 100%;
+  }
+
+  .bridge-fleet-sheet {
+    top: auto;
+    right: 8px;
+    bottom: calc(8px + env(safe-area-inset-bottom));
+    left: 8px;
+    width: auto;
+    max-height: min(86dvh, 720px);
+    border-radius: 20px;
+  }
+
+  .bridge-fleet-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .global-approval-banner {
+    width: min(100% - 20px, 860px);
+    margin-top: 8px;
   }
 
   input,

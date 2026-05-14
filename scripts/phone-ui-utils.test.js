@@ -3,16 +3,24 @@ const assert = require("node:assert/strict");
 
 const {
   capTerminalHistory,
+  bridgeIdFromBaseUrl,
+  bridgeThreadKey,
   compactWorkspacePath,
   contrastColorFor,
   fallbackThreadColor,
   keyIntentText,
+  maskToken,
+  normalizeBridgeBaseUrl,
+  normalizeBridgeEntry,
   normalizeTerminalEntry,
+  parseBridgeUrl,
   redactSensitiveText,
+  removeBridgeFromRegistry,
   safeJsonParse,
   sameWorkspaceThreadRecord,
   sanitizeHexColor,
   shouldConfirmDangerousKey,
+  upsertBridgeRegistry,
   visibleTerminalEntries,
   workspaceKeyForThreadRecord,
 } = require("../public/phone-ui-utils");
@@ -76,4 +84,25 @@ test("redactSensitiveText masks bridge tokens and auth-like secrets", () => {
   const redacted = redactSensitiveText("http://x/?token=secret123456 PHONE_TOKEN=abcdef123456 token: abcdef1234567890 authorization: Bearer abcdef1234567890");
   assert.doesNotMatch(redacted, /secret123456|abcdef1234567890/);
   assert.match(redacted, /\[redacted\]/);
+});
+
+test("bridge URL helpers parse tokenized URLs and host port token lines", () => {
+  assert.equal(normalizeBridgeBaseUrl("http://192.168.1.20:45224/?token=secret"), "http://192.168.1.20:45224");
+  assert.deepEqual(parseBridgeUrl("http://192.168.1.20:45224/?token=secret").token, "secret");
+  assert.deepEqual(parseBridgeUrl("192.168.1.20 45234 tok123").baseUrl, "http://192.168.1.20:45234");
+  assert.equal(maskToken("secret123456"), "sec...456");
+  assert.equal(maskToken("http://x/?token=secret123456"), "http://x/?token=sec...456");
+});
+
+test("bridge registry helpers dedupe by base URL and keep thread keys bridge scoped", () => {
+  const first = normalizeBridgeEntry({ baseUrl: "http://127.0.0.1:45214/?token=a", label: "A", token: "a" }, { now: 1 });
+  const second = normalizeBridgeEntry({ baseUrl: "http://127.0.0.1:45214", label: "A2", token: "b" }, { now: 2 });
+  assert.equal(first.id, bridgeIdFromBaseUrl("http://127.0.0.1:45214"));
+  let registry = upsertBridgeRegistry({ version: 1, bridges: [] }, first);
+  registry = upsertBridgeRegistry(registry, second);
+  assert.equal(registry.bridges.length, 1);
+  assert.equal(registry.bridges[0].label, "A2");
+  assert.equal(registry.bridges[0].token, "b");
+  assert.equal(bridgeThreadKey(first.id, "thread-123"), `${first.id}::thread-123`);
+  assert.equal(removeBridgeFromRegistry(registry, first.id).bridges.length, 0);
 });

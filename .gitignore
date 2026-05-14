@@ -10,5 +10,7 @@ docs/.vitepress/cache/
 .worktrees/
 .phone-token
 .phone-workspaces.json
+.phone-bridges.local.json
+.phone-fleet.local.json
 .phone-rate-limits*.json
 .uploads/

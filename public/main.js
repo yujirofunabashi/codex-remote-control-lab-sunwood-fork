@@ -102,9 +102,31 @@ const approveButton = document.querySelector("#approve");
 const declineButton = document.querySelector("#decline");
 const quickActions = document.querySelector("#quickActions");
 const toastStack = document.querySelector("#toastStack");
+const bridgePill = document.querySelector("#bridgePill");
+const bridgePillLabel = document.querySelector("#bridgePillLabel");
+const bridgePillMeta = document.querySelector("#bridgePillMeta");
+const fleetDashboardButton = document.querySelector("#fleetDashboardButton");
+const fleetCurrentLabel = document.querySelector("#fleetCurrentLabel");
+const fleetCurrentMeta = document.querySelector("#fleetCurrentMeta");
+const fleetCurrentBadges = document.querySelector("#fleetCurrentBadges");
+const bridgeFleetList = document.querySelector("#bridgeFleetList");
+const bridgeFleetSheet = document.querySelector("#bridgeFleetSheet");
+const closeBridgeFleetButton = document.querySelector("#closeBridgeFleet");
+const bridgeFleetSummary = document.querySelector("#bridgeFleetSummary");
+const bridgeFleetSheetList = document.querySelector("#bridgeFleetSheetList");
+const globalApprovalInbox = document.querySelector("#globalApprovalInbox");
+const globalRunningMonitor = document.querySelector("#globalRunningMonitor");
+const globalApprovalBanner = document.querySelector("#globalApprovalBanner");
+const addBridgeButton = document.querySelector("#addBridgeButton");
+const bridgeAddInput = document.querySelector("#bridgeAddInput");
+const bridgeRememberToken = document.querySelector("#bridgeRememberToken");
+const bridgeAddClear = document.querySelector("#bridgeAddClear");
+const bridgeAddSubmit = document.querySelector("#bridgeAddSubmit");
+const bridgeAddStatus = document.querySelector("#bridgeAddStatus");
 
 const params = new URLSearchParams(location.search);
-const token = params.get("token") || "";
+const initialToken = params.get("token") || "";
+let token = initialToken;
 const preserveBookmarkEntryUrl = location.pathname.replace(/\/+$/, "").endsWith("/bookmark");
 let selectedThread = preserveBookmarkEntryUrl ? "" : params.get("thread") || "";
 try {
@@ -155,6 +177,170 @@ function writeJsonStorage(key, value) {
   }
 }
 
+function writeSessionJsonStorage(key, value) {
+  try {
+    sessionStorage.setItem(key, uiUtils.safeJsonStringify ? uiUtils.safeJsonStringify(value) : JSON.stringify(value));
+  } catch {
+    // Session-only bridge tokens are best effort.
+  }
+}
+
+function homeBridgeBaseUrl() {
+  return `${location.origin}${appBasePath}`;
+}
+
+function normalizeBridgeEntry(entry, options = {}) {
+  if (uiUtils.normalizeBridgeEntry) return uiUtils.normalizeBridgeEntry(entry, options);
+  return entry;
+}
+
+function bridgeIdFromBaseUrl(baseUrl) {
+  if (uiUtils.bridgeIdFromBaseUrl) return uiUtils.bridgeIdFromBaseUrl(baseUrl);
+  return String(baseUrl || "home").replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "") || "home";
+}
+
+function bridgeThreadKey(bridgeId, threadId) {
+  if (uiUtils.bridgeThreadKey) return uiUtils.bridgeThreadKey(bridgeId, threadId);
+  return `${bridgeId || "home"}::${threadId || "new"}`;
+}
+
+function bridgeColorFor(entry = {}) {
+  return sanitizeHexColor(entry.color) || fallbackThreadColor(`bridge:${entry.id || entry.baseUrl || "home"}`);
+}
+
+function maskToken(value) {
+  if (uiUtils.maskToken) return uiUtils.maskToken(value);
+  const text = String(value || "");
+  return text ? `${text.slice(0, 3)}...${text.slice(-3)}` : "";
+}
+
+function saveBridgeSessionTokens() {
+  writeSessionJsonStorage(bridgeSessionTokensStorageKey, bridgeSessionTokens);
+}
+
+function effectiveBridgeToken(entry = {}) {
+  return String(entry.token || bridgeSessionTokens[entry.id] || (entry.id === homeBridgeId ? initialToken : "") || "");
+}
+
+function persistBridgeRegistry() {
+  bridgeRegistry = {
+    version: 1,
+    bridges: (bridgeRegistry.bridges || []).map((entry) => ({
+      ...entry,
+      token: entry.rememberToken === false ? "" : String(entry.token || ""),
+    })),
+  };
+  writeJsonStorage(bridgeRegistryStorageKey, bridgeRegistry);
+}
+
+function updateActiveBridgeStorage() {
+  try {
+    localStorage.setItem(activeBridgeStorageKey, activeBridgeId || "");
+  } catch {
+    // Ignore storage failures.
+  }
+  writeJsonStorage(bridgeViewStateStorageKey, bridgeViewState);
+}
+
+const homeBridgeId = bridgeIdFromBaseUrl(homeBridgeBaseUrl()) || "home";
+
+function ensureHomeBridge() {
+  const home = normalizeBridgeEntry(
+    {
+      id: homeBridgeId,
+      label: "Home bridge",
+      baseUrl: homeBridgeBaseUrl(),
+      token: "",
+      port: Number(location.port || 0) || null,
+      rememberToken: false,
+    },
+    { fallbackOrigin: location.origin },
+  );
+  if (!home) return;
+  if (initialToken) bridgeSessionTokens[home.id] = initialToken;
+  const existing = (bridgeRegistry.bridges || []).find((bridge) => bridge.id === home.id || bridge.baseUrl === home.baseUrl);
+  if (!existing) bridgeRegistry = { ...bridgeRegistry, version: 1, bridges: [home, ...(bridgeRegistry.bridges || [])] };
+  else {
+    bridgeRegistry = {
+      ...bridgeRegistry,
+      version: 1,
+      bridges: (bridgeRegistry.bridges || []).map((bridge) =>
+        bridge.id === existing.id ? { ...bridge, ...home, label: bridge.label || home.label, color: bridge.color || home.color } : bridge,
+      ),
+    };
+  }
+  persistBridgeRegistry();
+  saveBridgeSessionTokens();
+}
+
+function bridgeById(bridgeId = activeBridgeId) {
+  return (bridgeRegistry.bridges || []).find((bridge) => bridge.id === bridgeId) || null;
+}
+
+function activeBridge() {
+  return bridgeById(activeBridgeId) || bridgeById(homeBridgeId) || (bridgeRegistry.bridges || [])[0] || null;
+}
+
+function getBridgeState(bridgeId = activeBridgeId) {
+  const id = bridgeId || homeBridgeId;
+  if (!bridgeStates.has(id)) {
+    bridgeStates.set(id, {
+      connected: false,
+      reconnecting: false,
+      runState: "connecting",
+      info: null,
+      status: null,
+      threadCache: [],
+      selectedThread: "",
+      pendingApproval: null,
+      artifactItems: [],
+      unreadChat: 0,
+      unreadTerminal: 0,
+      lastEventAt: 0,
+      lastError: "",
+      currentWorkspace: { repoName: "", workspaceLocation: "", gitBranch: "" },
+      activeProvider: "codex",
+      threadProvider: "",
+      threadProviderExplicit: false,
+    });
+  }
+  return bridgeStates.get(id);
+}
+
+function bridgeAbsoluteUrl(path, entry = activeBridge()) {
+  const bridge = entry || activeBridge();
+  if (!bridge) return appPath(path);
+  const raw = String(path || "");
+  if (/^[a-z][a-z0-9+.-]*:/i.test(raw)) return raw;
+  const base = String(bridge.baseUrl || homeBridgeBaseUrl()).replace(/\/+$/, "");
+  return `${base}${raw.startsWith("/") ? raw : `/${raw}`}`;
+}
+
+function urlWithBridgeToken(url, entry = activeBridge()) {
+  const bridge = entry || activeBridge();
+  const target = new URL(bridgeAbsoluteUrl(url, bridge), location.href);
+  const bridgeToken = effectiveBridgeToken(bridge);
+  if (bridgeToken) target.searchParams.set("token", bridgeToken);
+  return target.href;
+}
+
+function wsUrlForBridge(entry = activeBridge(), provider = currentThreadProvider(), threadId = selectedThread) {
+  const target = new URL(urlWithBridgeToken("/bridge", entry));
+  target.protocol = target.protocol === "https:" ? "wss:" : "ws:";
+  target.searchParams.set("provider", provider || "codex");
+  if (threadId) target.searchParams.set("thread", threadId);
+  return target.href;
+}
+
+function setBridgeToken(entry, nextToken, rememberToken = true) {
+  const tokenValue = String(nextToken || "");
+  if (!entry?.id) return entry;
+  if (rememberToken) delete bridgeSessionTokens[entry.id];
+  else bridgeSessionTokens[entry.id] = tokenValue;
+  saveBridgeSessionTokens();
+  return { ...entry, token: rememberToken ? tokenValue : "", rememberToken };
+}
+
 function setSidebarVisible(visible) {
   document.body.classList.toggle("show-sidebar", visible);
   mobileThreadsButton.setAttribute("aria-expanded", visible ? "true" : "false");
@@ -183,6 +369,10 @@ const chatScrollStorageKey = "codexPhoneChatScroll:v1";
 const quickActionsStorageKey = "codexPhoneQuickActions:v1";
 const firstUseHintsStorageKey = "codexPhoneFirstUseHints:v1";
 const terminalFocusSessionKey = "codexPhoneTerminalFocus:v1";
+const bridgeRegistryStorageKey = "codexPhoneBridgeRegistry:v1";
+const activeBridgeStorageKey = "codexPhoneActiveBridgeId:v1";
+const bridgeSessionTokensStorageKey = "codexPhoneBridgeSessionTokens:v1";
+const bridgeViewStateStorageKey = "codexPhoneBridgeViewState:v1";
 const terminalHistoryLimit = 300;
 const threadColorPalette = [
   "#ff5d22",
@@ -201,9 +391,19 @@ let threadDrafts = readJsonStorage(threadDraftStorageKey, {});
 let terminalScrollPositions = readJsonStorage(terminalScrollStorageKey, {});
 let chatScrollPositions = readJsonStorage(chatScrollStorageKey, {});
 let firstUseHints = readJsonStorage(firstUseHintsStorageKey, {});
+let bridgeRegistry = readJsonStorage(bridgeRegistryStorageKey, { version: 1, bridges: [] });
+let bridgeViewState = readJsonStorage(bridgeViewStateStorageKey, {});
 let quickActionState = uiUtils.safeJsonParse
   ? uiUtils.safeJsonParse(localStorage.getItem(quickActionsStorageKey), {}, { objectOnly: true })
   : {};
+let bridgeSessionTokens = {};
+try {
+  bridgeSessionTokens = uiUtils.safeJsonParse
+    ? uiUtils.safeJsonParse(sessionStorage.getItem(bridgeSessionTokensStorageKey), {}, { objectOnly: true })
+    : {};
+} catch {
+  bridgeSessionTokens = {};
+}
 
 let ws = null;
 let pendingApproval = null;
@@ -267,11 +467,25 @@ let accessMode = {
   sandboxMode: "danger-full-access",
 };
 let pendingFiles = [];
+const bridgeStates = new Map();
+let activeBridgeId = "";
+let fleetPollTimer = null;
+let fleetRefreshInFlight = false;
 const suppressedSocketReconnects = new WeakSet();
 const apiTimeoutMs = 9000;
 const uploadTimeoutMs = 60_000;
 const resumeRefreshDebounceMs = 1200;
 const staleSocketMs = 45_000;
+
+ensureHomeBridge();
+try {
+  activeBridgeId = params.get("bridge") || localStorage.getItem(activeBridgeStorageKey) || homeBridgeId;
+} catch {
+  activeBridgeId = params.get("bridge") || homeBridgeId;
+}
+if (!bridgeById(activeBridgeId)) activeBridgeId = homeBridgeId;
+token = effectiveBridgeToken(activeBridge()) || token;
+getBridgeState(activeBridgeId).selectedThread = selectedThread;
 
 function sanitizeHexColor(value) {
   if (uiUtils.sanitizeHexColor) return uiUtils.sanitizeHexColor(value);
@@ -316,10 +530,11 @@ function contrastColorFor(hex) {
 
 function threadColorKeyFor(thread) {
   const provider = normalizeProviderName(thread?.provider) || currentThreadProvider();
-  if (thread?.id) return `${provider}:thread:${thread.id}`;
+  const bridgePrefix = activeBridgeId || homeBridgeId || "home";
+  if (thread?.id) return `${bridgePrefix}:${provider}:thread:${thread.id}`;
   const cwd = String(thread?.cwd || currentWorkspace.workspaceLocation || "").trim();
-  if (cwd) return `${provider}:new:${cwd}`;
-  return `${provider}:new:${location.host}${appBasePath || "/"}`;
+  if (cwd) return `${bridgePrefix}:${provider}:new:${cwd}`;
+  return `${bridgePrefix}:${provider}:new:${location.host}${appBasePath || "/"}`;
 }
 
 function currentThreadColorKey() {
@@ -523,6 +738,10 @@ function setRunState(state, label) {
   updateHeaderStatus();
   updateComposerState();
   updateTerminalHeader();
+  const bridgeState = getBridgeState(activeBridgeId);
+  bridgeState.runState = state;
+  bridgeState.lastEventAt = Date.now();
+  renderFleet();
 }
 
 function applyServerRunState(run = {}) {
@@ -1171,9 +1390,7 @@ function setEntryText(body, kind, text) {
 }
 
 function urlWithToken(url) {
-  const target = new URL(appPath(url), location.href);
-  target.searchParams.set("token", token);
-  return target.pathname + target.search;
+  return urlWithBridgeToken(url, activeBridge());
 }
 
 function renderImageGallery(images = []) {
@@ -1397,6 +1614,9 @@ function setWorkspaceMeta(meta = {}) {
 
 function setReady(ready) {
   connectionReady = ready;
+  const bridgeState = getBridgeState(activeBridgeId);
+  bridgeState.connected = ready;
+  bridgeState.lastEventAt = Date.now();
   sendButton.disabled = !ready || Boolean(pendingSubmission);
   promptInput.disabled = false;
   composer.dataset.ready = ready ? "true" : "false";
@@ -1407,6 +1627,7 @@ function setReady(ready) {
   updateHeaderStatus();
   updateComposerState();
   updateTerminalHeader();
+  renderFleet();
 }
 
 function clientMessageId() {
@@ -1957,6 +2178,543 @@ function showToast(text, tone = "") {
   }, 1900);
 }
 
+function runStatePriority(state = "") {
+  if (state === "approval") return 5;
+  if (state === "error" || state === "disconnected") return 4;
+  if (state === "running" || state === "streaming" || state === "syncing" || state === "interrupting") return 3;
+  if (state === "connecting") return 2;
+  return 1;
+}
+
+function bridgeRunSummary(bridgeId) {
+  const state = getBridgeState(bridgeId);
+  const bridgeRuns = Array.isArray(state.status?.bridges) ? state.status.bridges : [];
+  if (!bridgeRuns.length) {
+    return {
+      run: { state: state.runState || (state.connected ? "ready" : "disconnected"), label: state.lastError || runStateShortLabel(state.runState || "ready") },
+      pendingApproval: state.pendingApproval,
+      terminalTail: [],
+      threadId: state.selectedThread || "",
+      provider: state.activeProvider || state.info?.provider || "codex",
+    };
+  }
+  return bridgeRuns.reduce((best, candidate) => {
+    const candidateRun = candidate.run || {};
+    const bestRun = best.run || {};
+    return runStatePriority(candidateRun.state) > runStatePriority(bestRun.state) ? candidate : best;
+  }, bridgeRuns[0]);
+}
+
+function bridgeStateLabel(entry, state = getBridgeState(entry.id)) {
+  const summary = bridgeRunSummary(entry.id);
+  const run = summary.run || {};
+  const connected = state.connected || Boolean(state.status);
+  if (!connected && state.lastError) return "error";
+  if (!connected) return "disconnected";
+  return run.state || "ready";
+}
+
+function bridgeMetaText(entry, state = getBridgeState(entry.id)) {
+  const info = state.info || {};
+  const status = state.status || {};
+  const port = entry.port || info.uiPort || status.uiPort || "";
+  const branch = info.branch || status.gitBranch || "";
+  const dirty = info.dirty === true ? "dirty" : info.dirty === false ? "clean" : "";
+  const cwd = info.cwd || info.workdir || entry.workdir || status.workdir || "";
+  const name = cwd ? cwd.split(/[\\/]/).filter(Boolean).pop() : "";
+  return [port ? `:${port}` : "", branch, dirty, name].filter(Boolean).join(" / ") || "未確認";
+}
+
+function fleetBadge(text, tone = "") {
+  const badge = document.createElement("span");
+  badge.className = tone ? `fleet-badge ${tone}` : "fleet-badge";
+  badge.textContent = text;
+  return badge;
+}
+
+function collectPendingApprovals() {
+  const approvals = [];
+  for (const entry of bridgeRegistry.bridges || []) {
+    const state = getBridgeState(entry.id);
+    const runs = Array.isArray(state.status?.bridges) ? state.status.bridges : [];
+    for (const run of runs) {
+      if (!run.pendingApproval) continue;
+      approvals.push({
+        bridgeId: entry.id,
+        bridge: entry,
+        provider: run.provider || state.info?.provider || "codex",
+        threadId: run.threadId || "",
+        request: run.pendingApproval,
+        run: run.run || {},
+      });
+    }
+    if (state.pendingApproval && !approvals.some((item) => item.bridgeId === entry.id && item.request?.id === state.pendingApproval?.id)) {
+      approvals.push({
+        bridgeId: entry.id,
+        bridge: entry,
+        provider: currentThreadProvider(),
+        threadId: selectedThread,
+        request: state.pendingApproval,
+        run: { state: "approval", label: "承認待ち" },
+      });
+    }
+  }
+  return approvals;
+}
+
+function approvalSummaryText(request = {}) {
+  const method = String(request.method || "approval");
+  const params = request.params || {};
+  const command = params.command || params.cmd || params.description || "";
+  return command ? `${method}: ${String(command).slice(0, 120)}` : method;
+}
+
+function renderFleet() {
+  const entries = bridgeRegistry.bridges || [];
+  const active = activeBridge();
+  const activeState = getBridgeState(activeBridgeId);
+  const activeColor = bridgeColorFor(active || {});
+  document.documentElement.style.setProperty("--bridge-color", activeColor);
+  if (bridgePill) {
+    bridgePill.dataset.state = bridgeStateLabel(active || { id: activeBridgeId }, activeState);
+    bridgePill.style.setProperty("--bridge-color", activeColor);
+  }
+  if (bridgePillLabel) bridgePillLabel.textContent = active?.label || "Home";
+  if (bridgePillMeta) bridgePillMeta.textContent = bridgeMetaText(active || { id: activeBridgeId }, activeState);
+  if (fleetCurrentLabel) fleetCurrentLabel.textContent = active?.label || "Home bridge";
+  if (fleetCurrentMeta) fleetCurrentMeta.textContent = bridgeMetaText(active || { id: activeBridgeId }, activeState);
+  if (fleetCurrentBadges) {
+    fleetCurrentBadges.replaceChildren();
+    const approvals = collectPendingApprovals().length;
+    const running = entries.filter((entry) => ["running", "streaming", "syncing", "interrupting"].includes(bridgeStateLabel(entry))).length;
+    if (running) fleetCurrentBadges.appendChild(fleetBadge(String(running), "running"));
+    if (approvals) fleetCurrentBadges.appendChild(fleetBadge(String(approvals), "approval"));
+  }
+
+  if (bridgeFleetList) {
+    bridgeFleetList.replaceChildren();
+    for (const entry of entries) {
+      const state = getBridgeState(entry.id);
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = entry.id === activeBridgeId ? "bridge-fleet-row active" : "bridge-fleet-row";
+      row.style.setProperty("--bridge-color", bridgeColorFor(entry));
+      row.title = `${entry.label} ${bridgeMetaText(entry, state)}`;
+      const dot = document.createElement("span");
+      dot.className = "bridge-row-dot";
+      dot.style.backgroundColor = bridgeColorFor(entry);
+      const main = document.createElement("span");
+      main.className = "bridge-row-main";
+      const title = document.createElement("strong");
+      title.textContent = entry.label || entry.id;
+      const small = document.createElement("small");
+      small.textContent = bridgeMetaText(entry, state);
+      main.append(title, small);
+      const badges = document.createElement("span");
+      badges.className = "bridge-row-badges";
+      const stateName = bridgeStateLabel(entry, state);
+      if (["running", "streaming", "syncing", "interrupting"].includes(stateName)) badges.appendChild(fleetBadge("run", "running"));
+      if (stateName === "approval") badges.appendChild(fleetBadge("承認", "approval"));
+      if (stateName === "error" || stateName === "disconnected") badges.appendChild(fleetBadge("切断", "error"));
+      row.append(dot, main, badges);
+      row.addEventListener("click", () => setActiveBridge(entry.id));
+      bridgeFleetList.appendChild(row);
+    }
+  }
+
+  renderBridgeFleetSheet();
+  renderGlobalApprovalBanner();
+}
+
+function renderBridgeFleetSheet() {
+  const entries = bridgeRegistry.bridges || [];
+  if (bridgeFleetSummary) {
+    const approvals = collectPendingApprovals().length;
+    bridgeFleetSummary.textContent = `${entries.length} bridge / ${approvals} approval / active ${activeBridge()?.label || "Home"}`;
+  }
+  if (bridgeFleetSheetList) {
+    bridgeFleetSheetList.replaceChildren();
+    for (const entry of entries) {
+      const state = getBridgeState(entry.id);
+      const card = document.createElement("article");
+      card.className = entry.id === activeBridgeId ? "bridge-sheet-card active" : "bridge-sheet-card";
+      card.style.setProperty("--bridge-color", bridgeColorFor(entry));
+      const header = document.createElement("div");
+      header.className = "bridge-sheet-card-header";
+      const dot = document.createElement("span");
+      dot.className = "bridge-row-dot";
+      dot.style.backgroundColor = bridgeColorFor(entry);
+      const main = document.createElement("span");
+      main.className = "bridge-row-main";
+      const title = document.createElement("strong");
+      title.textContent = entry.label || entry.id;
+      const small = document.createElement("small");
+      small.textContent = `${entry.baseUrl} / token ${entry.rememberToken === false ? "session" : "saved"} ${maskToken(effectiveBridgeToken(entry))}`;
+      main.append(title, small);
+      header.append(dot, main, fleetBadge(runStateShortLabel(bridgeStateLabel(entry, state)), bridgeStateLabel(entry, state) === "approval" ? "approval" : ""));
+      const metaLine = document.createElement("small");
+      metaLine.textContent = bridgeMetaText(entry, state);
+      const actions = document.createElement("div");
+      actions.className = "bridge-card-actions";
+      const switchButton = document.createElement("button");
+      switchButton.type = "button";
+      switchButton.textContent = entry.id === activeBridgeId ? "表示中" : "切替";
+      switchButton.disabled = entry.id === activeBridgeId;
+      switchButton.addEventListener("click", () => setActiveBridge(entry.id));
+      const reconnectButton = document.createElement("button");
+      reconnectButton.type = "button";
+      reconnectButton.className = "secondary";
+      reconnectButton.textContent = "再確認";
+      reconnectButton.addEventListener("click", () => refreshBridgeState(entry.id, { force: true }));
+      const openButton = document.createElement("button");
+      openButton.type = "button";
+      openButton.className = "secondary";
+      openButton.textContent = "別タブ";
+      openButton.addEventListener("click", () => window.open(urlWithBridgeToken("/", entry), "_blank", "noopener"));
+      const copyButton = document.createElement("button");
+      copyButton.type = "button";
+      copyButton.className = "secondary";
+      copyButton.textContent = "コピー";
+      copyButton.addEventListener("click", async () => {
+        await copyTextToClipboard(`${entry.label} ${entry.baseUrl} token=${maskToken(effectiveBridgeToken(entry))}`);
+        showToast("masked bridge info をコピーしました。");
+      });
+      const removeButton = document.createElement("button");
+      removeButton.type = "button";
+      removeButton.className = "secondary";
+      removeButton.textContent = "削除";
+      removeButton.disabled = entry.id === homeBridgeId;
+      removeButton.addEventListener("click", () => removeBridge(entry.id));
+      actions.append(switchButton, reconnectButton, openButton, copyButton, removeButton);
+      card.append(header, metaLine, actions);
+      bridgeFleetSheetList.appendChild(card);
+    }
+  }
+  renderGlobalApprovalInbox();
+  renderGlobalRunningMonitor();
+}
+
+function renderGlobalApprovalInbox() {
+  if (!globalApprovalInbox) return;
+  const approvals = collectPendingApprovals();
+  globalApprovalInbox.replaceChildren();
+  if (!approvals.length) {
+    const empty = document.createElement("div");
+    empty.className = "bridge-sheet-card";
+    empty.textContent = "承認待ちはありません。";
+    globalApprovalInbox.appendChild(empty);
+    return;
+  }
+  for (const item of approvals) {
+    const card = document.createElement("article");
+    card.className = "global-approval-card";
+    const title = document.createElement("strong");
+    title.textContent = `${item.bridge.label || item.bridge.id} / ${shortId(item.threadId) || "thread"}`;
+    const summary = document.createElement("small");
+    summary.textContent = approvalSummaryText(item.request);
+    const pre = document.createElement("pre");
+    pre.textContent = JSON.stringify(item.request?.params || item.request || {}, null, 2);
+    const actions = document.createElement("div");
+    actions.className = "global-approval-actions";
+    const reject = document.createElement("button");
+    reject.type = "button";
+    reject.className = "secondary";
+    reject.textContent = "拒否";
+    reject.addEventListener("click", () => sendGlobalApproval(item, "decline"));
+    const approve = document.createElement("button");
+    approve.type = "button";
+    approve.textContent = "承認";
+    approve.addEventListener("click", () => sendGlobalApproval(item, "accept"));
+    actions.append(reject, approve);
+    card.append(title, summary, pre, actions);
+    globalApprovalInbox.appendChild(card);
+  }
+}
+
+function renderGlobalRunningMonitor() {
+  if (!globalRunningMonitor) return;
+  globalRunningMonitor.replaceChildren();
+  for (const entry of bridgeRegistry.bridges || []) {
+    const state = getBridgeState(entry.id);
+    const summary = bridgeRunSummary(entry.id);
+    const row = document.createElement("article");
+    row.className = "global-monitor-row";
+    const header = document.createElement("div");
+    header.className = "global-monitor-row-header";
+    const dot = document.createElement("span");
+    dot.className = "bridge-row-dot";
+    dot.style.backgroundColor = bridgeColorFor(entry);
+    const main = document.createElement("span");
+    main.className = "bridge-row-main";
+    const title = document.createElement("strong");
+    title.textContent = entry.label || entry.id;
+    const small = document.createElement("small");
+    small.textContent = `${runStateShortLabel(summary.run?.state || bridgeStateLabel(entry, state))} / ${formatRelativeTime(state.lastEventAt) || "now"}`;
+    main.append(title, small);
+    header.append(dot, main, fleetBadge(summary.run?.state || bridgeStateLabel(entry, state)));
+    const last = document.createElement("small");
+    const tail = summary.terminalTail || [];
+    last.textContent = tail.length ? tail[tail.length - 1].message : state.lastError || bridgeMetaText(entry, state);
+    row.append(header, last);
+    row.addEventListener("click", () => setActiveBridge(entry.id));
+    globalRunningMonitor.appendChild(row);
+  }
+}
+
+function renderGlobalApprovalBanner() {
+  if (!globalApprovalBanner) return;
+  const approvals = collectPendingApprovals();
+  globalApprovalBanner.classList.toggle("hidden", !approvals.length);
+  globalApprovalBanner.replaceChildren();
+  if (!approvals.length) return;
+  const text = document.createElement("span");
+  text.textContent = `${approvals.length}件の承認待ちがあります。`;
+  const open = document.createElement("button");
+  open.type = "button";
+  open.textContent = "Inbox";
+  open.addEventListener("click", openBridgeFleet);
+  globalApprovalBanner.append(text, open);
+}
+
+async function fetchJsonForBridge(entry, path, options = {}) {
+  const bridgeToken = effectiveBridgeToken(entry);
+  if (!bridgeToken) throw new Error("bridge token is missing");
+  const response = await fetchWithTimeout(urlWithBridgeToken(path, entry), {
+    ...options,
+    headers: {
+      ...(options.headers || {}),
+      ...(options.body ? { "content-type": "application/json" } : {}),
+    },
+  });
+  const result = await response.json().catch(() => ({ error: `${response.status} ${response.statusText}` }));
+  if (!response.ok) throw new Error(result.error || `${response.status} ${response.statusText}`);
+  return result;
+}
+
+async function refreshBridgeState(bridgeId, { force = false } = {}) {
+  const entry = bridgeById(bridgeId);
+  if (!entry) return;
+  const state = getBridgeState(bridgeId);
+  if (!force && state.refreshing) return;
+  state.refreshing = true;
+  try {
+    const info = await fetchJsonForBridge(entry, "/api/bridge/info");
+    state.info = info;
+    if (bridgeId === activeBridgeId) {
+      setWorkspaceMeta({
+        repoName: (info.repoRoot || info.cwd || "").split(/[\\/]/).filter(Boolean).pop(),
+        workspaceLocation: info.cwd || info.workdir || "",
+        gitBranch: info.branch || "",
+      });
+    }
+    state.connected = true;
+    state.lastError = "";
+    state.activeProvider = info.provider || state.activeProvider || "codex";
+    const provider = state.activeProvider || "codex";
+    const status = await fetchJsonForBridge(entry, `/api/status?provider=${encodeURIComponent(provider)}`);
+    state.status = status;
+    state.runState = bridgeRunSummary(bridgeId).run?.state || "ready";
+    state.lastEventAt = Date.now();
+    const updated = {
+      ...entry,
+      label: entry.label === "Home bridge" || !entry.label ? info.label || entry.label : entry.label,
+      group: entry.group || info.group || "",
+      workdir: info.cwd || info.workdir || entry.workdir || "",
+      port: info.uiPort || entry.port || null,
+      color: entry.color || info.color || "",
+      updatedAt: Date.now(),
+    };
+    bridgeRegistry = { ...bridgeRegistry, bridges: (bridgeRegistry.bridges || []).map((bridge) => (bridge.id === bridgeId ? updated : bridge)) };
+    persistBridgeRegistry();
+  } catch (error) {
+    state.connected = false;
+    state.runState = "error";
+    state.lastError = error.message || String(error);
+    state.lastEventAt = Date.now();
+  } finally {
+    state.refreshing = false;
+    renderFleet();
+  }
+}
+
+async function refreshFleet({ force = false } = {}) {
+  if (fleetRefreshInFlight) return;
+  fleetRefreshInFlight = true;
+  try {
+    await Promise.all((bridgeRegistry.bridges || []).map((entry) => refreshBridgeState(entry.id, { force })));
+  } finally {
+    fleetRefreshInFlight = false;
+    renderFleet();
+  }
+}
+
+function captureActiveBridgeState() {
+  if (!activeBridgeId) return;
+  const state = getBridgeState(activeBridgeId);
+  state.threadCache = threadCache;
+  state.selectedThread = selectedThread;
+  state.pendingApproval = pendingApproval;
+  state.artifactItems = artifactItems;
+  state.currentWorkspace = { ...currentWorkspace };
+  state.activeProvider = activeProvider;
+  state.threadProvider = threadProvider;
+  state.threadProviderExplicit = threadProviderExplicit;
+  state.runState = currentRunState;
+  state.connected = connectionReady;
+}
+
+function applyActiveBridgeState(bridgeId) {
+  const state = getBridgeState(bridgeId);
+  const view = bridgeViewState[bridgeId] || {};
+  threadCache = Array.isArray(state.threadCache) ? state.threadCache : [];
+  selectedThread = state.selectedThread || view.selectedThread || "";
+  activeProvider = normalizeProviderName(state.activeProvider || state.info?.provider || view.provider || "codex") || "codex";
+  threadProvider = normalizeProviderName(state.threadProvider || view.provider || activeProvider) || activeProvider;
+  threadProviderExplicit = Boolean(state.threadProviderExplicit || view.provider);
+  pendingApproval = state.pendingApproval || null;
+  artifactItems = Array.isArray(state.artifactItems) ? state.artifactItems : [];
+  Object.assign(currentWorkspace, state.currentWorkspace || {});
+  token = effectiveBridgeToken(activeBridge()) || "";
+  selectedThreadByProvider.clear();
+  if (selectedThread && threadProvider) selectedThreadByProvider.set(threadProvider, selectedThread);
+}
+
+async function setActiveBridge(bridgeId, { silent = false } = {}) {
+  if (!bridgeById(bridgeId) || bridgeId === activeBridgeId) {
+    renderFleet();
+    return;
+  }
+  saveScrollPositions();
+  saveDraftForActiveThread();
+  captureActiveBridgeState();
+  closeSocket({ suppressReconnect: true });
+  activeBridgeId = bridgeId;
+  applyActiveBridgeState(bridgeId);
+  updateUrlThread();
+  lastHistorySignature = "";
+  assistantEntry = null;
+  liveOutputGroup = "";
+  setReady(false);
+  setRunState(getBridgeState(bridgeId).runState || "connecting");
+  renderHistory([]);
+  renderThreadList();
+  renderArtifactIndex(artifactItems);
+  restoreDraftForCurrentThread();
+  applyCurrentThreadAccent();
+  setWorkspaceMeta({});
+  renderTerminalTranscript();
+  renderFleet();
+  if (!silent) showToast(`${activeBridge()?.label || "bridge"} に切り替えました。`);
+  await refreshBridgeState(bridgeId).catch(() => {});
+  loadArtifacts();
+  loadThreads({ background: true }).finally(() => connect());
+}
+
+function removeBridge(bridgeId) {
+  if (bridgeId === homeBridgeId) return;
+  const entry = bridgeById(bridgeId);
+  if (!entry) return;
+  if (!window.confirm(`${entry.label || entry.id} をこの端末から削除します。token も忘れます。`)) return;
+  delete bridgeSessionTokens[bridgeId];
+  saveBridgeSessionTokens();
+  bridgeRegistry = uiUtils.removeBridgeFromRegistry
+    ? uiUtils.removeBridgeFromRegistry(bridgeRegistry, bridgeId)
+    : { ...bridgeRegistry, bridges: (bridgeRegistry.bridges || []).filter((bridge) => bridge.id !== bridgeId) };
+  bridgeStates.delete(bridgeId);
+  persistBridgeRegistry();
+  if (activeBridgeId === bridgeId) setActiveBridge(homeBridgeId, { silent: true });
+  renderFleet();
+}
+
+function openBridgeFleet() {
+  bridgeFleetSheet?.classList.remove("hidden");
+  fleetDashboardButton?.setAttribute("aria-expanded", "true");
+  setSidebarVisible(false);
+  renderFleet();
+}
+
+function closeBridgeFleet() {
+  bridgeFleetSheet?.classList.add("hidden");
+  fleetDashboardButton?.setAttribute("aria-expanded", "false");
+}
+
+async function addBridgeEntriesFromInput() {
+  const lines = String(bridgeAddInput?.value || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (!lines.length) return;
+  bridgeAddSubmit.disabled = true;
+  const remember = bridgeRememberToken?.checked !== false;
+  const results = [];
+  try {
+    for (const line of lines) {
+      const parsed = uiUtils.parseBridgeUrl ? uiUtils.parseBridgeUrl(line, { fallbackOrigin: location.origin }) : null;
+      if (!parsed?.baseUrl || !parsed.token) {
+        results.push(`失敗: URL/token を読めません (${line.slice(0, 40)})`);
+        continue;
+      }
+      let entry = normalizeBridgeEntry({ baseUrl: parsed.baseUrl, token: parsed.token, rememberToken: remember }, { fallbackOrigin: location.origin });
+      entry = setBridgeToken(entry, parsed.token, remember);
+      try {
+        const info = await fetchJsonForBridge(entry, "/api/bridge/info");
+        const previousId = entry.id;
+        entry = {
+          ...entry,
+          id: info.id || entry.id,
+          label: info.label || entry.label,
+          group: info.group || entry.group,
+          workdir: info.cwd || info.workdir || entry.workdir,
+          port: info.uiPort || entry.port,
+          color: entry.color || info.color || "",
+        };
+        if (!remember) {
+          delete bridgeSessionTokens[previousId];
+          bridgeSessionTokens[entry.id] = parsed.token;
+        }
+        bridgeRegistry = uiUtils.upsertBridgeRegistry ? uiUtils.upsertBridgeRegistry(bridgeRegistry, entry) : { ...bridgeRegistry, bridges: [...(bridgeRegistry.bridges || []), entry] };
+        results.push(`追加: ${entry.label}`);
+      } catch (error) {
+        results.push(`失敗: ${entry.baseUrl} ${error.message}`);
+      }
+    }
+    persistBridgeRegistry();
+    saveBridgeSessionTokens();
+    renderFleet();
+    refreshFleet({ force: true });
+  } finally {
+    bridgeAddSubmit.disabled = false;
+    if (bridgeAddStatus) bridgeAddStatus.textContent = results.join(" / ");
+  }
+}
+
+async function sendGlobalApproval(item, decision) {
+  if (decision === "accept" && /command|file|write|edit|apply/i.test(JSON.stringify(item.request || {}))) {
+    if (!window.confirm(`${item.bridge.label || item.bridge.id} の承認を送信します。対象を確認しましたか？`)) return;
+  }
+  try {
+    await fetchJsonForBridge(item.bridge, "/api/approval", {
+      method: "POST",
+      body: JSON.stringify({
+        provider: item.provider,
+        threadId: item.threadId,
+        request: item.request,
+        decision,
+      }),
+    });
+    if (item.bridgeId === activeBridgeId) {
+      appendTerminalEntry({ ts: Date.now(), kind: "approval", message: decision === "accept" ? "approval accepted" : "approval declined" });
+      pendingApproval = null;
+      approval.classList.add("hidden");
+      setRunState("running", decision === "accept" ? "承認済み・処理中" : "拒否済み・処理中");
+    }
+    showToast(decision === "accept" ? "承認を送信しました。" : "拒否を送信しました。", "approval");
+    await refreshBridgeState(item.bridgeId, { force: true });
+  } catch (error) {
+    showToast(`承認操作に失敗しました: ${error.message}`, "approval");
+  }
+}
+
 function selectAdjacentThread(direction, source = "button") {
   if (liveTurnActive || pendingApproval || threadSwitchBusy) {
     showSwipeFeedback(pendingApproval ? "承認待ちのためスレッド切り替えを止めています。" : "実行中はスレッド切り替えを止めています。");
@@ -2204,7 +2962,7 @@ function closeThreadColorPopover() {
 }
 
 function authQuery() {
-  return `token=${encodeURIComponent(token)}`;
+  return `token=${encodeURIComponent(effectiveBridgeToken(activeBridge()))}`;
 }
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = apiTimeoutMs) {
@@ -2224,17 +2982,17 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = apiTimeoutMs) {
   }
 }
 
-async function apiGet(path) {
-  const separator = path.includes("?") ? "&" : "?";
-  const response = await fetchWithTimeout(appPath(`${path}${separator}${authQuery()}`));
+async function apiGet(path, options = {}) {
+  const bridge = bridgeById(options.bridgeId) || activeBridge();
+  const response = await fetchWithTimeout(urlWithBridgeToken(path, bridge));
   const result = await response.json();
   if (!response.ok) throw new Error(result.error || `${response.status} ${response.statusText}`);
   return result;
 }
 
-async function apiPost(path, body = {}) {
-  const separator = path.includes("?") ? "&" : "?";
-  const response = await fetchWithTimeout(appPath(`${path}${separator}${authQuery()}`), {
+async function apiPost(path, body = {}, options = {}) {
+  const bridge = bridgeById(options.bridgeId) || activeBridge();
+  const response = await fetchWithTimeout(urlWithBridgeToken(path, bridge), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -2278,7 +3036,7 @@ function switchThreadProvider(provider, { reload = true } = {}) {
 }
 
 async function loadThreads({ background = false, provider = "" } = {}) {
-  if (!token) return;
+  if (!effectiveBridgeToken(activeBridge())) return;
   const requestedProvider = normalizeProviderName(provider || threadProvider);
   const path = requestedProvider ? `/api/threads?provider=${encodeURIComponent(requestedProvider)}` : "/api/threads";
   try {
@@ -2288,6 +3046,11 @@ async function loadThreads({ background = false, provider = "" } = {}) {
     if (requestedProvider && requestedProvider !== currentThreadProvider()) return;
     if (!threadProviderExplicit) threadProvider = resultProvider;
     threadCache = (result.data || []).map((thread) => normalizeThreadRecord(thread, resultProvider));
+    const state = getBridgeState(activeBridgeId);
+    state.threadCache = threadCache;
+    state.activeProvider = activeProvider;
+    state.threadProvider = threadProvider;
+    state.threadProviderExplicit = threadProviderExplicit;
     renderThreadList();
     applyCurrentThreadAccent();
     showInitialSwipeHint();
@@ -2350,10 +3113,11 @@ function resetMissingSelectedThread(threadId) {
 }
 
 async function loadArtifacts() {
-  if (!token) return;
+  if (!effectiveBridgeToken(activeBridge())) return;
   try {
     const result = await apiGet("/api/artifacts");
     renderArtifactIndex(result.data || []);
+    getBridgeState(activeBridgeId).artifactItems = artifactItems;
   } catch (error) {
     addEntry("error", `artifact一覧を読めませんでした: ${error.message}`);
   }
@@ -2363,9 +3127,15 @@ function updateUrlThread() {
   const next = new URL(location.href);
   if (selectedThread && !preserveBookmarkEntryUrl) next.searchParams.set("thread", selectedThread);
   else next.searchParams.delete("thread");
+  if (activeBridgeId && activeBridgeId !== homeBridgeId) next.searchParams.set("bridge", activeBridgeId);
+  else next.searchParams.delete("bridge");
   if (threadProviderExplicit) next.searchParams.set("provider", currentThreadProvider());
   else next.searchParams.delete("provider");
   history.replaceState(null, "", next);
+  const state = getBridgeState(activeBridgeId);
+  state.selectedThread = selectedThread;
+  bridgeViewState[activeBridgeId] = { ...(bridgeViewState[activeBridgeId] || {}), selectedThread, provider: currentThreadProvider() };
+  updateActiveBridgeStorage();
 }
 
 function syncReadyThread(threadId) {
@@ -3404,6 +4174,7 @@ function recoverFromPageResume(reason = "resume") {
   if (now - lastResumeRefreshAt < resumeRefreshDebounceMs) return;
   lastResumeRefreshAt = now;
   selectedThreadRefreshActive = false;
+  refreshFleet().catch(() => {});
   loadThreads({ background: true }).catch(() => {});
   if (selectedThread) refreshSelectedThread();
   if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
@@ -3441,7 +4212,11 @@ async function uploadFile(file) {
 }
 
 function connect({ preserveHistory = false } = {}) {
-  if (!token) {
+  const bridge = activeBridge();
+  const bridgeToken = effectiveBridgeToken(bridge);
+  const bridgeId = activeBridgeId;
+  token = bridgeToken;
+  if (!bridgeToken) {
     addEntry("error", "URLに token がありません。Mac側に表示されたURLをそのまま開いてください。");
     return;
   }
@@ -3457,22 +4232,22 @@ function connect({ preserveHistory = false } = {}) {
   const selected = threadCache.find((thread) => thread.id === selectedThread);
   setThreadHeading(selected ? titleForThread(selected) : "新しい共有thread");
 
-  const proto = location.protocol === "https:" ? "wss:" : "ws:";
-  const threadParam = selectedThread ? `&thread=${encodeURIComponent(selectedThread)}` : "";
-  ws = new WebSocket(
-    `${proto}//${location.host}${appPath(`/bridge?token=${encodeURIComponent(token)}&provider=${encodeURIComponent(provider)}${threadParam}`)}`,
-  );
+  ws = new WebSocket(wsUrlForBridge(bridge, provider, selectedThread));
   const socket = ws;
   connectButton.disabled = true;
   meta.textContent = "接続中";
 
   socket.addEventListener("open", () => {
+    const state = getBridgeState(bridgeId);
+    state.connected = true;
+    state.lastError = "";
     lastWsMessageAt = Date.now();
     setRunState("connecting", "Agent に接続中");
     addEntry("status", "Macの共有ブリッジへ接続しました。");
   });
 
   socket.addEventListener("message", (event) => {
+    if (bridgeId !== activeBridgeId) return;
     lastWsMessageAt = Date.now();
     const msg = JSON.parse(event.data);
     if (msg.type === "ready") {
@@ -3484,6 +4259,13 @@ function connect({ preserveHistory = false } = {}) {
         workspaceLocation: msg.workspaceLocation || msg.run?.workspaceLocation,
         gitBranch: msg.gitBranch || msg.run?.gitBranch,
       });
+      const state = getBridgeState(bridgeId);
+      state.selectedThread = msg.threadId || selectedThread;
+      state.currentWorkspace = { ...currentWorkspace };
+      state.activeProvider = msg.provider || activeProvider;
+      state.threadProvider = currentThreadProvider();
+      state.runState = msg.run?.state || state.runState || "ready";
+      state.lastEventAt = Date.now();
       syncReadyThread(msg.threadId);
       renderHistoryIfChanged(msg.history || []);
       handleTerminalMessage(msg);
@@ -3538,6 +4320,7 @@ function connect({ preserveHistory = false } = {}) {
     }
     if (msg.type === "approval") {
       pendingApproval = msg.request;
+      getBridgeState(bridgeId).pendingApproval = msg.request;
       setRunState("approval");
       updateThreadNavigation();
       renderApprovalRequest(msg.request);
@@ -3554,6 +4337,7 @@ function connect({ preserveHistory = false } = {}) {
       lastHistorySignature = "";
       assistantEntry = null;
       liveOutputGroup = "";
+      getBridgeState(bridgeId).pendingApproval = null;
       applyServerRunState(msg.run || { state: "done", label: "完了しました", turnId: msg.turnId });
       updateThreadNavigation();
       loadThreads();
@@ -3575,6 +4359,12 @@ function connect({ preserveHistory = false } = {}) {
   });
 
   socket.addEventListener("close", () => {
+    const state = getBridgeState(bridgeId);
+    state.connected = false;
+    state.runState = "disconnected";
+    state.lastEventAt = Date.now();
+    renderFleet();
+    if (bridgeId !== activeBridgeId) return;
     setReady(false);
     interruptRequestPending = false;
     updateInterruptButton();
@@ -3589,6 +4379,13 @@ function connect({ preserveHistory = false } = {}) {
   });
 
   socket.addEventListener("error", () => {
+    const state = getBridgeState(bridgeId);
+    state.connected = false;
+    state.runState = "error";
+    state.lastError = "WebSocket error";
+    state.lastEventAt = Date.now();
+    renderFleet();
+    if (bridgeId !== activeBridgeId) return;
     interruptRequestPending = false;
     updateInterruptButton();
     setRunState("disconnected", "接続エラー");
@@ -3807,6 +4604,15 @@ terminalOps?.addEventListener("click", (event) => {
   if (!keyButton) return;
   handleTerminalKey(keyButton.dataset.terminalKey);
 });
+fleetDashboardButton?.addEventListener("click", openBridgeFleet);
+bridgePill?.addEventListener("click", openBridgeFleet);
+addBridgeButton?.addEventListener("click", openBridgeFleet);
+closeBridgeFleetButton?.addEventListener("click", closeBridgeFleet);
+bridgeAddClear?.addEventListener("click", () => {
+  if (bridgeAddInput) bridgeAddInput.value = "";
+  if (bridgeAddStatus) bridgeAddStatus.textContent = "";
+});
+bridgeAddSubmit?.addEventListener("click", addBridgeEntriesFromInput);
 threadPositionPill?.addEventListener("click", openThreadSwitcher);
 closeThreadSwitcherButton?.addEventListener("click", closeThreadSwitcher);
 headerThreadColorButton?.addEventListener("click", () => openThreadColorPopover());
@@ -3927,12 +4733,18 @@ document.addEventListener("click", (event) => {
   if (!threadSwitcher?.classList.contains("hidden")) {
     if (!threadSwitcher.contains(event.target) && !threadPositionPill?.contains(event.target)) closeThreadSwitcher();
   }
+  if (!bridgeFleetSheet?.classList.contains("hidden")) {
+    if (!bridgeFleetSheet.contains(event.target) && !bridgePill?.contains(event.target) && !fleetDashboardButton?.contains(event.target)) {
+      closeBridgeFleet();
+    }
+  }
 });
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
   if (document.body.classList.contains("terminal-focus-mode")) setTerminalFocusMode(false);
   closeThreadColorPopover();
   closeThreadSwitcher();
+  closeBridgeFleet();
 });
 document.querySelector(".conversation").addEventListener("touchstart", handleSwipeStart, { passive: true });
 document.querySelector(".conversation").addEventListener("touchend", handleSwipeEnd, { passive: true });
@@ -3964,6 +4776,7 @@ document.addEventListener("visibilitychange", () => {
 window.addEventListener("focus", () => recoverFromPageResume("フォーカス復帰"));
 window.addEventListener("online", () => recoverFromPageResume("ネットワーク復帰"));
 
+applyActiveBridgeState(activeBridgeId);
 setReady(false);
 updateModelButton();
 applyCurrentThreadAccent();
@@ -3979,9 +4792,14 @@ try {
 }
 loadArtifacts();
 loadThreads().catch(() => {}).finally(connect);
+renderFleet();
+refreshFleet({ force: true }).catch(() => {});
 setInterval(() => {
   if (document.visibilityState !== "hidden") loadThreads({ background: true });
 }, 10_000);
 setInterval(() => {
   if (document.visibilityState !== "hidden") refreshSelectedThread();
 }, 3_000);
+fleetPollTimer = setInterval(() => {
+  if (document.visibilityState !== "hidden") refreshFleet().catch(() => {});
+}, 7_000);

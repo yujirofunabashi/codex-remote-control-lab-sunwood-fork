@@ -394,6 +394,11 @@ const codexModelOptions = ["gpt-5.5", "gpt-5.4", "gpt-5.3-codex", "gpt-5.3-codex
 const claudeModelOptions = ["sonnet", "opus", "haiku", "claude-sonnet-4-6", "claude-opus-4-5"];
 const modelOptions = isClaudeProvider ? claudeModelOptions : codexModelOptions;
 const bridges = new Map();
+const bridgeStartedAt = Date.now();
+const phoneBridgeId = appIdSlug(process.env.PHONE_BRIDGE_ID, `${path.basename(workdir)}-${uiPort}`);
+const phoneBridgeLabel = String(process.env.PHONE_BRIDGE_LABEL || process.env.PHONE_BRIDGE_REGISTRY_NAME || path.basename(workdir) || phoneAppShortName).trim();
+const phoneBridgeGroup = String(process.env.PHONE_BRIDGE_GROUP || "").trim();
+const phoneBridgeColor = String(process.env.PHONE_BRIDGE_COLOR || "").trim();
 let notificationBridgeUrls = [];
 let codexProcess = null;
 let codexStartPromise = null;
@@ -417,9 +422,9 @@ const staticMimeTypes = new Map([
   [".webmanifest", "application/manifest+json"],
 ]);
 
-function gitOutput(args) {
+function gitOutputFromCwd(cwd, args) {
   try {
-    return execFileSync("git", ["-C", workdir, ...args], {
+    return execFileSync("git", ["-C", cwd, ...args], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 1000,
@@ -429,11 +434,77 @@ function gitOutput(args) {
   }
 }
 
+function gitOutput(args) {
+  return gitOutputFromCwd(workdir, args);
+}
+
 function currentGitBranch() {
   const branch = gitOutput(["rev-parse", "--abbrev-ref", "HEAD"]);
   if (branch && branch !== "HEAD") return branch;
   const commit = gitOutput(["rev-parse", "--short", "HEAD"]);
   return commit ? `detached:${commit}` : "";
+}
+
+function gitStatusSummary(cwd = workdir) {
+  const output = gitOutputFromCwd(cwd, ["status", "--porcelain=v1", "--untracked-files=normal"]);
+  const summary = { modified: 0, added: 0, deleted: 0, renamed: 0, untracked: 0 };
+  for (const line of output.split(/\r?\n/).filter(Boolean)) {
+    const index = line[0] || " ";
+    const worktreeStatus = line[1] || " ";
+    if (line.startsWith("??")) {
+      summary.untracked += 1;
+      continue;
+    }
+    if (index === "A" || worktreeStatus === "A") summary.added += 1;
+    if (index === "D" || worktreeStatus === "D") summary.deleted += 1;
+    if (index === "R" || worktreeStatus === "R") summary.renamed += 1;
+    if (index === "M" || worktreeStatus === "M") summary.modified += 1;
+  }
+  return summary;
+}
+
+function readPackageVersion() {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")).version || "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+}
+
+function bridgeInfoPayload() {
+  const repoRoot = gitOutput(["rev-parse", "--show-toplevel"]) || workdir;
+  const summary = gitStatusSummary(workdir);
+  const dirty = Object.values(summary).some((count) => count > 0);
+  return {
+    id: phoneBridgeId,
+    label: phoneBridgeLabel,
+    group: phoneBridgeGroup,
+    version: readPackageVersion(),
+    startedAt: bridgeStartedAt,
+    uiPort,
+    workdir,
+    cwd: workdir,
+    repoRoot,
+    branch: currentGitBranch() || null,
+    head: gitOutput(["rev-parse", "--short", "HEAD"]) || null,
+    dirty,
+    dirtySummary: summary,
+    provider: agentProvider,
+    providers: ["codex", "claude"],
+    model,
+    modelsByProvider: providerModels,
+    approvalPolicy: "on-request",
+    sandboxMode: "workspace-write",
+    color: phoneBridgeColor || null,
+    app: { id: phoneAppId, name: phoneAppName, shortName: phoneAppShortName },
+    capabilities: {
+      threads: true,
+      terminalHistory: true,
+      artifacts: true,
+      approvals: true,
+      fleet: true,
+    },
+  };
 }
 
 function displayPath(value) {
@@ -1083,6 +1154,16 @@ async function appServerRequest(method, params) {
     await ensureCodexServerRunning();
     return appServerClient.request(method, params);
   }
+}
+
+function applyCors(req, res) {
+  const origin = req.headers.origin;
+  if (!origin) return;
+  res.setHeader("access-control-allow-origin", origin);
+  res.setHeader("vary", "Origin");
+  res.setHeader("access-control-allow-methods", "GET,POST,OPTIONS");
+  res.setHeader("access-control-allow-headers", "content-type,authorization");
+  res.setHeader("access-control-max-age", "600");
 }
 
 function sendJson(res, status, body) {
@@ -1902,6 +1983,7 @@ class SharedBridge {
     this.startupFailed = false;
     this.history = [];
     this.terminalHistory = [];
+    this.pendingApproval = null;
     this.turnQueue = [];
     this.runState = { state: "connecting", label: "接続中", turnId: null, updatedAt: Date.now() };
     this.streamingStarted = false;
@@ -1960,6 +2042,7 @@ class SharedBridge {
   setBridgeRunState(state, label, turnId = this.activeTurnId || null) {
     const next = { state, label, turnId, updatedAt: Date.now(), ...currentWorkspaceMeta() };
     const previous = this.runState || {};
+    if (state !== "approval") this.pendingApproval = null;
     this.runState = next;
     if (previous.state !== state || previous.label !== label || previous.turnId !== turnId) {
       this.emit("runState", next);
@@ -2241,6 +2324,7 @@ class SharedBridge {
       }
 
       if (msg.method && msg.method.endsWith("/requestApproval")) {
+        this.pendingApproval = msg;
         this.setBridgeRunState("approval", "承認待ち", this.activeTurnId);
         this.emit("approval", { request: msg });
         notifyRunEvent("approval", {
@@ -2470,6 +2554,8 @@ class SharedBridge {
       result = accept ? { decision: "accept" } : { decision: "decline" };
     }
     this.upstream.send(JSON.stringify({ id: requestMsg.id, result }));
+    this.pendingApproval = null;
+    this.setBridgeRunState("running", accept ? "承認済み・処理中" : "拒否済み・処理中", this.activeTurnId);
     this.emit("status", { text: accept ? "承認しました" : "拒否しました" });
   }
 }
@@ -2501,6 +2587,7 @@ class ClaudeBridge {
     this.ready = true;
     this.history = this.claudeSessionId ? claudeHistoryForSession(this.claudeSessionId) : [];
     this.terminalHistory = terminalHistoryFromChatHistory(this.history);
+    this.pendingApproval = null;
     this.turnQueue = [];
     this.activeProcess = null;
     const idleState = idleRunStateFromHistory(this.history);
@@ -2556,6 +2643,7 @@ class ClaudeBridge {
   setBridgeRunState(state, label, turnId = this.activeTurnId || null) {
     const next = { state, label, turnId, updatedAt: Date.now(), ...currentWorkspaceMeta() };
     const previous = this.runState || {};
+    if (state !== "approval") this.pendingApproval = null;
     this.runState = next;
     if (previous.state !== state || previous.label !== label || previous.turnId !== turnId) {
       this.emit("runState", next);
@@ -2922,6 +3010,8 @@ function bridgeSummaries() {
     ready: bridge.ready,
     provider: bridge.provider || agentProvider,
     run: typeof bridge.runPayload === "function" ? bridge.runPayload() : null,
+    pendingApproval: bridge.pendingApproval || null,
+    terminalTail: Array.isArray(bridge.terminalHistory) ? bridge.terminalHistory.slice(-12) : [],
   }));
 }
 
@@ -2988,7 +3078,14 @@ async function main() {
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
+    applyCors(req, res);
+    if (req.method === "OPTIONS") {
+      res.writeHead(204, { "cache-control": "no-store" });
+      res.end();
+      return;
+    }
     if (url.pathname === "/api/info") {
+      if (!requireToken(url, phoneToken, res)) return;
       sendJson(res, 200, {
         provider: agentProvider,
         providers: ["codex", "claude"],
@@ -3000,6 +3097,11 @@ async function main() {
         managedCodexServer,
         tokenRequired: true,
       });
+      return;
+    }
+    if (url.pathname === "/api/bridge/info") {
+      if (!requireToken(url, phoneToken, res)) return;
+      sendJson(res, 200, bridgeInfoPayload());
       return;
     }
     if (url.pathname === "/site.webmanifest") {
@@ -3206,6 +3308,28 @@ async function main() {
       });
       return;
     }
+    if (url.pathname === "/api/approval") {
+      if (!requireToken(url, phoneToken, res)) return;
+      if (req.method !== "POST") {
+        sendJson(res, 405, { error: "method not allowed" });
+        return;
+      }
+      try {
+        const body = await readJsonBody(req);
+        const requestedProvider = body.provider ? normalizeProvider(body.provider) : agentProvider;
+        const threadId = String(body.threadId || body.request?.params?.threadId || body.request?.threadId || "").trim();
+        const bridge = threadId ? findBridgeByThreadId(threadId, requestedProvider) : null;
+        if (!bridge) {
+          sendJson(res, 404, { error: "approval bridge not found" });
+          return;
+        }
+        bridge.approval(body.request || bridge.pendingApproval, body.decision === "decline" ? "decline" : "accept");
+        sendJson(res, 200, { ok: true, provider: requestedProvider, threadId });
+      } catch (error) {
+        sendJson(res, 400, { error: error.message });
+      }
+      return;
+    }
     if (url.pathname === "/api/history-sync") {
       if (!requireToken(url, phoneToken, res)) return;
       const requestedProvider = queryProvider(url, res);
@@ -3388,9 +3512,11 @@ async function main() {
     console.log(`Default provider: ${agentProvider}`);
     console.log(`Default model:    ${model}`);
     console.log(`App:     ${phoneAppName} (${phoneAppId})`);
+    console.log(`Bridge label: ${phoneBridgeLabel} (${phoneBridgeId})`);
     console.log(`Bridge:  ${uiHost}:${uiPort}`);
     console.log(`Codex:   ${managedCodexServer ? codexUrl : codexSocketPath || codexUrl}`);
     console.log(`Claude:  ${claudeBin}`);
+    console.log(`Fleet registry entry: ${JSON.stringify({ id: phoneBridgeId, label: phoneBridgeLabel, group: phoneBridgeGroup, baseUrl: `http://LAN-IP:${uiPort}`, token: "***", port: uiPort })}`);
     console.log("Open the same URL from PC and phone to share one bridge thread.");
     console.log("Press Ctrl+C to stop.");
 

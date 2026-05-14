@@ -8,6 +8,7 @@
 - LAN に出る server は phone bridge だけです。
 - page、API、WebSocket bridge request は同じ token を要求します。
 - `.phone-token`、`.uploads/`、`.codex-home*/`、log、session database は Git に入れません。
+- `.phone-fleet.local.json`、`.phone-bridges.local.json`、browser bridge registry state は local-only として扱います。
 - 起動通知の credential と token 付き URL の通知先は、private/protected な account、topic、channel に限定してください。
 
 ## 避けること
@@ -32,3 +33,4 @@
 - terminal を閉じた場合や PC を再起動した場合、bridge は止まります。使うときはもう一度 `npm run phone` を実行します。
 - bridge は root/admin shell ではなく、通常のユーザー権限で実行します。
 - 認証なしの public tunnel や raw port forwarding で bridge を公開しないでください。SSH forwarding、VPN、device authentication 付き mesh network などの trusted access を前に置いてください。
+- fleet UI を任意 URL へ到達できる open proxy にしないでください。cross-bridge の読み取りや approval 操作は token protected で、登録済み/private bridge URL に限定します。

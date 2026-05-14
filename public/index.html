@@ -25,6 +25,21 @@
             <span class="window-chevron right"></span>
           </span>
         </div>
+        <section class="fleet-sidebar" aria-label="Bridge Fleet">
+          <button type="button" class="fleet-current" id="fleetDashboardButton" aria-haspopup="dialog" aria-expanded="false">
+            <span class="fleet-current-dot" aria-hidden="true"></span>
+            <span class="fleet-current-main">
+              <strong id="fleetCurrentLabel">Home bridge</strong>
+              <small id="fleetCurrentMeta">接続準備中</small>
+            </span>
+            <span id="fleetCurrentBadges" class="fleet-current-badges"></span>
+          </button>
+          <div id="bridgeFleetList" class="bridge-fleet-list" aria-label="登録済み bridge"></div>
+          <button type="button" class="nav-command muted add-bridge-command" id="addBridgeButton">
+            <span class="command-icon plus-icon" aria-hidden="true"></span>
+            <span>Bridge を追加</span>
+          </button>
+        </section>
         <nav class="primary-nav">
           <button type="button" class="nav-command new-chat" id="newThread">
             <span class="command-icon plus-icon" aria-hidden="true"></span>
@@ -64,6 +79,13 @@
             <p id="threadSubtitle" class="thread-subtitle">新しい共有thread</p>
             <p id="meta">接続準備中</p>
           </div>
+          <button type="button" class="bridge-pill" id="bridgePill" aria-label="Worktree switchboard を開く" aria-haspopup="dialog">
+            <span class="bridge-pill-dot" aria-hidden="true"></span>
+            <span class="bridge-pill-main">
+              <strong id="bridgePillLabel">Home</strong>
+              <small id="bridgePillMeta">:----</small>
+            </span>
+          </button>
           <button type="button" class="thread-position-pill" id="threadPositionPill" aria-label="スレッド切替を開く" aria-haspopup="dialog">
             <span id="threadPositionText">--/--</span>
             <span id="threadStateText">接続中</span>
@@ -102,9 +124,46 @@
           </header>
           <div id="threadSwitcherList" class="thread-switcher-list"></div>
         </section>
+        <section id="bridgeFleetSheet" class="bridge-fleet-sheet hidden" role="dialog" aria-modal="false" aria-label="Bridge Fleet / Worktree Switchboard">
+          <header class="bridge-fleet-header">
+            <div>
+              <strong>Bridge Fleet</strong>
+              <small id="bridgeFleetSummary">登録済み bridge を監視します</small>
+            </div>
+            <button type="button" id="closeBridgeFleet" aria-label="Bridge Fleet を閉じる">×</button>
+          </header>
+          <div class="bridge-fleet-grid">
+            <section class="bridge-fleet-panel">
+              <div class="bridge-fleet-panel-title">Worktrees</div>
+              <div id="bridgeFleetSheetList" class="bridge-fleet-sheet-list"></div>
+            </section>
+            <section class="bridge-fleet-panel">
+              <div class="bridge-fleet-panel-title">Global approvals</div>
+              <div id="globalApprovalInbox" class="global-approval-inbox"></div>
+            </section>
+            <section class="bridge-fleet-panel">
+              <div class="bridge-fleet-panel-title">Running monitor</div>
+              <div id="globalRunningMonitor" class="global-running-monitor"></div>
+            </section>
+            <section class="bridge-fleet-panel add-bridge-panel">
+              <div class="bridge-fleet-panel-title">Add bridge</div>
+              <textarea id="bridgeAddInput" rows="4" placeholder="http://192.168.x.x:45224/?token=...&#10;または 192.168.x.x 45224 token"></textarea>
+              <label class="bridge-remember-row">
+                <input id="bridgeRememberToken" type="checkbox" checked />
+                <span>この端末に token を保存</span>
+              </label>
+              <div class="bridge-add-actions">
+                <button type="button" class="secondary" id="bridgeAddClear">クリア</button>
+                <button type="button" id="bridgeAddSubmit">接続確認して追加</button>
+              </div>
+              <p id="bridgeAddStatus" class="bridge-add-status"></p>
+            </section>
+          </div>
+        </section>
 
         <div class="content-grid">
           <section class="conversation" aria-label="会話">
+            <section id="globalApprovalBanner" class="global-approval-banner hidden" aria-live="polite"></section>
             <div class="main-view-bar">
               <div class="main-view-toggle" role="group" aria-label="表示モード">
                 <button type="button" id="chatViewButton" class="main-view-button active" data-main-view="chat" aria-pressed="true" aria-selected="true">

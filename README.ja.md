@@ -81,6 +81,9 @@ local smoke test では、WebSocket app-server 経由の `initialize` / `thread/
 
 ```bash
 PHONE_UI_PORT=45214 npm run phone
+PHONE_UI_PORT=45224 PHONE_WORKDIR=/Users/admin/Prj/some-project PHONE_APP_NAME="Slot 45224" PHONE_APP_ID=slot-45224 npm run phone
+PHONE_BRIDGE_ID=work-a PHONE_BRIDGE_LABEL=WorkA PHONE_BRIDGE_GROUP=client PHONE_BRIDGE_COLOR=#2f6f2f npm run phone
+npm run phone:fleet
 CODEX_WORKDIR=/Users/admin/Prj/some-project npm run phone
 CODEX_MODEL=gpt-5.4 npm run phone
 CODEX_APP_SERVER_SOCK=/Users/admin/.codex/app-server-control/app-server-control.sock npm run phone
@@ -93,6 +96,10 @@ PHONE_DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/... npm run phone
 PHONE_NOTIFY_TIMEOUT_MS=5000 npm run phone
 ```
 
+複数 bridge / 複数 worktree を 1 つの browser tab で扱う場合は、Bridge Fleet / Worktree Switchboard を使います。通常通り 1 つ目の bridge URL を開き、ヘッダーまたは sidebar の bridge/worktree pill を押して、残りの `http://192.168.x.x:45224/?token=...` を追加します。active bridge を切り替えると chat / terminal / thread / artifact / approval UI はその bridge の状態へ切り替わり、inactive bridge の稼働・エラー・承認待ちは global monitor / inbox に出ます。
+
+各 bridge は token-protected な `GET /api/bridge/info` で label、port、cwd、branch、dirty summary、model、capabilities を返します。token は UI では mask され、保存する場合は browser localStorage、保存しない場合は sessionStorage に限定されます。`.phone-fleet.local.json` を作って `npm run phone:fleet` を使うと、複数 slot をまとめて起動できます。この local config は Git に入れないでください。
+
 `CODEX_APP_SERVER_SOCK` または `CODEX_APP_SERVER_URL` を指定すると、bridge は新しい app-server を起動せず、既存の headless app-server に接続します。Codex Desktop 本体とライブ同期したい場合は、Desktop の通常ローカル会話画面ではなく、Desktop の Remote Connection と OCdex を同じ headless app-server に接続してください。Desktop の通常ローカル会話画面は専用の `stdio` app-server を使うため、外部 bridge からその画面へ直接ライブ注入する公開経路はありません。
 
 履歴同期は既定で有効です。Web 側の turn 完了後、bridge は `thread/read` と scan-backed な `thread/list` を実行して app-server の履歴/index を温めます。`/api/threads` も state DB 限定ではなく scan-and-repair で取得します。これにより Codex Desktop 側で thread を開き直す/再読込したときに、更新済み session を見つけやすくします。ただし、通常の Desktop 会話画面へライブ注入するものではありません。追加の履歴 refresh を止めたい場合は `CODEX_HISTORY_SYNC=0` を指定します。
@@ -103,6 +110,8 @@ PHONE_NOTIFY_TIMEOUT_MS=5000 npm run phone
 
 - Codex Desktop 風の sidebar / conversation / artifact panel / composer layout
 - 最近の thread 一覧と直接 resume
+- 複数 tokenized bridge URL を 1 tab に登録する Bridge Fleet / Worktree Switchboard
+- 登録済み bridge 全体の global running monitor と global approval inbox
 - thread ごとのアクセント色を browser localStorage に保存し、複数作業を見分けやすくする
 - チャット / ターミナル表示を切り替え、command・file change・承認・error などの監視ログを確認
 - 状態、位置、thread 色、compact path、mini thread switcher をまとめたスマホ向け cockpit header

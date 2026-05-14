@@ -7,6 +7,7 @@ This repository is an experimental local lab. The supported security posture is:
 - keep the Codex app-server bound to `127.0.0.1`
 - expose only the token-protected phone bridge to the LAN
 - treat `.phone-token`, `.uploads/`, `.codex-home*/`, and generated session databases as local-only state
+- treat `.phone-fleet.local.json`, `.phone-bridges.local.json`, and browser bridge registry state as local-only state
 - treat startup notification credentials and tokenized URL messages as private local state
 
 ## Reporting
@@ -20,6 +21,7 @@ If you find a security issue, open a private advisory or contact the repository 
 - Treat printed `?token=...` URLs as private local access keys. Do not publish them in issues, chats, screenshots, or streams.
 - Stop the bridge with `Ctrl+C`; closing the terminal or restarting the PC stops the process.
 - Do not expose the bridge through an unauthenticated public tunnel or raw port forward.
+- Do not add a server-side fleet proxy that can fetch arbitrary URLs; only token-protected registered/private bridge URLs are acceptable.
 - Run the bridge from a normal user account, not a root/admin shell.
 - Send startup notifications only to private/protected notification accounts, topics, or channels.
 - Rotate `PHONE_TOKEN` or delete `.phone-token` after demos on shared networks.

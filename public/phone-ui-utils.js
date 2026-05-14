@@ -110,6 +110,131 @@
       .replace(/\b(token:\s*)[A-Za-z0-9._~+/=-]{12,}/gi, "$1[redacted]");
   }
 
+  function maskToken(value) {
+    const text = String(value || "");
+    if (!text) return "";
+    const mask = (token) => {
+      const secret = String(token || "");
+      if (!secret) return "";
+      if (secret.length <= 8) return "****";
+      return `${secret.slice(0, 3)}...${secret.slice(-3)}`;
+    };
+    if (/[?&]token=/i.test(text)) {
+      return text.replace(/([?&]token=)([^&\s]+)/gi, (_, prefix, secret) => `${prefix}${mask(secret)}`);
+    }
+    return mask(text);
+  }
+
+  function normalizeBridgeBaseUrl(value, fallbackOrigin = "") {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    const withProtocol = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `http://${raw}`;
+    try {
+      const url = new URL(withProtocol, fallbackOrigin || undefined);
+      url.search = "";
+      url.hash = "";
+      let pathname = url.pathname.replace(/\/+$/, "");
+      if (!/^\/(?:abs)?proxy\/\d+(?:\/|$)/.test(pathname)) pathname = "";
+      return `${url.protocol}//${url.host}${pathname}`;
+    } catch {
+      return "";
+    }
+  }
+
+  function bridgeIdFromBaseUrl(baseUrl) {
+    const normalized = normalizeBridgeBaseUrl(baseUrl);
+    return normalized ? `bridge-${hashString(normalized).toString(36)}` : "";
+  }
+
+  function parseBridgeUrl(input, options = {}) {
+    const text = String(input || "").trim();
+    if (!text) return null;
+    let urlText = text;
+    let explicitToken = options.token || "";
+    const parts = text.split(/[,\s]+/).filter(Boolean);
+    if (!/[/?#]/.test(text) && parts.length >= 2) {
+      const host = parts[0];
+      const port = parts.find((part, index) => index > 0 && /^\d{2,5}$/.test(part));
+      const tokenPart = parts.find((part) => !/^\d{2,5}$/.test(part) && part !== host);
+      if (host && port) {
+        urlText = `http://${host}:${port}/`;
+        explicitToken = explicitToken || tokenPart || "";
+      }
+    }
+    if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(urlText)) urlText = `http://${urlText}`;
+    try {
+      const url = new URL(urlText, options.fallbackOrigin || undefined);
+      const token = explicitToken || url.searchParams.get("token") || "";
+      const baseUrl = normalizeBridgeBaseUrl(url.href, options.fallbackOrigin || "");
+      if (!baseUrl) return null;
+      const base = new URL(baseUrl);
+      return {
+        baseUrl,
+        token,
+        host: base.hostname,
+        port: base.port || (base.protocol === "https:" ? "443" : "80"),
+        label: options.label || "",
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  function normalizeBridgeEntry(entry = {}, options = {}) {
+    const parsed = parseBridgeUrl(entry.url || entry.baseUrl || "", {
+      token: entry.token || options.token || "",
+      fallbackOrigin: options.fallbackOrigin || "",
+      label: entry.label || "",
+    });
+    const baseUrl = parsed?.baseUrl || normalizeBridgeBaseUrl(entry.baseUrl || "", options.fallbackOrigin || "");
+    if (!baseUrl) return null;
+    const url = new URL(baseUrl);
+    const id = String(entry.id || bridgeIdFromBaseUrl(baseUrl)).trim();
+    const now = Number(options.now || Date.now());
+    const label =
+      String(entry.label || parsed?.label || entry.workdirLabel || entry.workdirBasename || url.hostname || id).trim() || id;
+    return {
+      id,
+      label,
+      group: String(entry.group || "").trim(),
+      baseUrl,
+      token: String(entry.token || parsed?.token || ""),
+      color: sanitizeHexColor(entry.color) || "",
+      workdir: String(entry.workdir || entry.cwd || "").trim(),
+      port: Number(entry.port || parsed?.port || url.port || 0) || null,
+      rememberToken: entry.rememberToken !== false,
+      createdAt: Number(entry.createdAt || now),
+      updatedAt: now,
+    };
+  }
+
+  function bridgeThreadKey(bridgeId, threadId) {
+    return `${String(bridgeId || "home") || "home"}::${String(threadId || "new") || "new"}`;
+  }
+
+  function upsertBridgeRegistry(registry = {}, entry = {}) {
+    const normalized = normalizeBridgeEntry(entry);
+    if (!normalized) return registry && typeof registry === "object" ? registry : { version: 1, bridges: [] };
+    const current = Array.isArray(registry.bridges) ? registry.bridges : [];
+    const next = [];
+    let inserted = false;
+    for (const bridge of current) {
+      if (bridge.id === normalized.id || normalizeBridgeBaseUrl(bridge.baseUrl) === normalized.baseUrl) {
+        next.push({ ...bridge, ...normalized, createdAt: bridge.createdAt || normalized.createdAt });
+        inserted = true;
+      } else {
+        next.push(bridge);
+      }
+    }
+    if (!inserted) next.push(normalized);
+    return { ...registry, version: 1, bridges: next };
+  }
+
+  function removeBridgeFromRegistry(registry = {}, bridgeId = "") {
+    const current = Array.isArray(registry.bridges) ? registry.bridges : [];
+    return { ...registry, version: 1, bridges: current.filter((bridge) => bridge.id !== bridgeId) };
+  }
+
   function normalizeTerminalKind(kind) {
     const value = String(kind || "").toLowerCase();
     if (terminalKinds.has(value)) return value;
@@ -191,6 +316,14 @@
     workspaceKeyForThreadRecord,
     sameWorkspaceThreadRecord,
     redactSensitiveText,
+    maskToken,
+    normalizeBridgeBaseUrl,
+    bridgeIdFromBaseUrl,
+    parseBridgeUrl,
+    normalizeBridgeEntry,
+    bridgeThreadKey,
+    upsertBridgeRegistry,
+    removeBridgeFromRegistry,
     normalizeTerminalKind,
     inferTerminalKindFromText,
     normalizeTerminalEntry,

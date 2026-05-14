@@ -82,6 +82,8 @@ Useful environment variables:
 ```bash
 PHONE_UI_PORT=45214 npm run phone
 PHONE_UI_PORT=45224 PHONE_WORKDIR=/Users/admin/Prj/some-project PHONE_APP_NAME="Slot 45224" PHONE_APP_ID=slot-45224 npm run phone
+PHONE_BRIDGE_ID=work-a PHONE_BRIDGE_LABEL=WorkA PHONE_BRIDGE_GROUP=client PHONE_BRIDGE_COLOR=#2f6f2f npm run phone
+npm run phone:fleet
 PHONE_AGENT_PROVIDER=claude npm run phone
 PHONE_WORKDIR=/Users/admin/Prj/some-project npm run phone
 CODEX_MODEL=gpt-5.4 npm run phone
@@ -98,6 +100,10 @@ PHONE_NOTIFY_TIMEOUT_MS=5000 npm run phone
 
 To run multiple phone bridges in parallel, start them on different `PHONE_UI_PORT` values and usually pin each port to a different `PHONE_WORKDIR` worktree. The port is the stable workspace slot; the browser UI can switch between Codex and Claude within that slot. Settings saved from the browser UI are stored as port-scoped `.env` keys such as `PHONE_WORKDIR_45224`, so changing one slot does not rewrite every port's default worktree. `PHONE_AGENT_PROVIDER` only chooses the default provider opened after restart. Each bridge has its own active queue and PWA identity, so multiple URLs can be added to the iPhone Home Screen as separate icons. Set `PHONE_APP_NAME`, `PHONE_APP_SHORT_NAME`, and `PHONE_APP_ID` when you want a slot label such as `Slot 45224`. If iOS already cached an older icon, delete that Home Screen icon and add the URL again.
 
+Bridge Fleet / Worktree Switchboard lets one browser tab register several tokenized bridge URLs, switch the active worktree, and monitor running/error/approval state across inactive bridges. Open one bridge as usual, tap the current bridge/worktree pill, and paste other URLs such as `http://192.168.x.x:45224/?token=...`. Tokens are masked in the UI; saved registry state is local to the browser, and session-only tokens stay in `sessionStorage`. Each bridge also exposes token-protected `GET /api/bridge/info` metadata for label, port, cwd, branch, dirty summary, model, and fleet capabilities.
+
+For repeatable local startup, create `.phone-fleet.local.json` and run `npm run phone:fleet`. That file is ignored by Git and should contain only local worktree paths and ports. The launcher starts each bridge with scoped `PHONE_UI_PORT`, `CODEX_APP_SERVER_PORT`, `PHONE_BRIDGE_*`, and `PHONE_WORKDIR` values, then you add the printed tokenized URLs to the Fleet UI.
+
 `CODEX_APP_SERVER_SOCK` or `CODEX_APP_SERVER_URL` makes the bridge attach to an existing headless app-server instead of starting a new one. For live sync with Codex Desktop, use this with a Desktop Remote Connection that points at the same headless app-server. The normal local conversation view in Codex Desktop uses a private `stdio` app-server, so there is no public external route for a bridge to inject live UI updates into that local view.
 
 Set `PHONE_AGENT_PROVIDER=claude` or run `npm run phone:claude` when you want Claude to be the default provider for a slot. The provider can still be changed from the browser UI without changing the slot worktree. Claude turns use `claude -p --output-format stream-json` and resume with Claude's session ID after the first response. Claude mode reads same-workdir Claude Code JSONL sessions for its sidebar and thread resume, but it does not expose Codex thread history, plugin lookups, or live approval callbacks; choose `CLAUDE_PERMISSION_MODE` or the UI permission mode before sending a turn.
@@ -110,6 +116,8 @@ The current phone bridge supports:
 
 - Codex Desktop-like browser layout with a left thread sidebar, central conversation, right artifact panel, and bottom composer
 - recent thread listing and direct thread resume
+- Bridge Fleet / Worktree Switchboard for registering multiple tokenized bridge URLs in one tab
+- global running monitor and global approval inbox across registered bridges
 - per-thread accent colors saved in browser local storage, so concurrent work is easier to distinguish
 - chat / terminal view switching for command, file change, approval, and error monitoring logs
 - a mobile cockpit header with state, position, per-thread color, compact path, and a mini thread switcher

@@ -78,6 +78,32 @@ PHONE_NOTIFY_TIMEOUT_MS=5000 npm run phone
 
 For parallel operation, treat each `PHONE_UI_PORT` as a fixed workspace slot. Pin the slot with `PHONE_WORKDIR`, and switch Codex or Claude from the browser UI as needed. Settings saved from the browser UI use port-scoped `.env` keys such as `PHONE_WORKDIR_45224`, so one slot's worktree choice does not become every port's default. `PHONE_AGENT_PROVIDER` only sets the default provider for that slot after restart.
 
+Bridge Fleet / Worktree Switchboard manages those slots from one browser tab. Start each bridge on a different port, open one tokenized URL, then use the bridge/worktree pill to paste the remaining URLs. The active bridge drives the existing chat, terminal, thread, artifact, model, and approval UI; inactive bridges are polled through token-protected APIs for running state, errors, terminal tail, and approval requests.
+
+Each bridge exposes `GET /api/bridge/info?token=...` for fleet metadata: label, group, port, cwd, repo root, branch, short HEAD, dirty summary, model, and capabilities. The endpoint requires the bridge token and returns no phone token, app-server secret, webhook URL, or shell execution capability.
+
+Optional fleet launcher:
+
+```json
+{
+  "bridges": [
+    {
+      "id": "work-a",
+      "label": "Work A",
+      "workdir": "/Users/admin/Prj/work-a",
+      "phonePort": 45214,
+      "appServerPort": 45213
+    }
+  ]
+}
+```
+
+```bash
+npm run phone:fleet
+```
+
+The repository ignores `.phone-fleet.local.json` and `.phone-bridges.local.json`. Keep those local because they can contain private worktree paths and registry details.
+
 Startup notifications are optional. If `PHONE_NTFY_TOPIC` is set, the bridge posts the ready URLs to that ntfy topic. If `PHONE_PUSHOVER_TOKEN` and `PHONE_PUSHOVER_USER` are set, it sends the same URLs through Pushover. If `PHONE_DISCORD_WEBHOOK_URL` is set, it posts them to Discord. `npm run phone` loads local `.env` values before reading these variables. `PHONE_NTFY_SERVER` defaults to `https://ntfy.sh` and must use HTTPS. Notification requests time out after `PHONE_NOTIFY_TIMEOUT_MS`, which defaults to 5000 ms. When a LAN IPv4 URL is available, the message includes the tokenized bridge URL, so use a private/protected topic, account, or channel and keep notification credentials out of Git. If no LAN IPv4 URL is detected, the notification omits provider link fields and tells you to check the host console.
 
 Rate-limit display supports local, unofficial provider-specific snapshots. For Codex, set `PHONE_CODEX_RATE_LIMIT_REFRESH_COMMAND="node scripts/read-desktop-rate-limits.js"` to let the bridge read the Codex auth file at `~/.codex/auth.json`, call Codex Desktop's usage endpoint, normalize only the displayed remaining percentage/reset fields, and cache that small snapshot in `.phone-rate-limits.json`. The legacy `PHONE_RATE_LIMIT_REFRESH_COMMAND` name is still honored for Codex only, so Claude mode cannot accidentally show Codex limits. The bridge does not cache tokens or raw API responses; failures fall back to the last provider cache or `unavailable`. Set `PHONE_RATE_LIMIT_SOURCE=desktop` only when you intentionally want the older macOS Accessibility fallback against the Codex app UI.
@@ -95,6 +121,8 @@ Claude mode is intentionally narrower than Codex mode. It has Claude Code sessio
 - recent thread list and thread resume
 - phone control of the desktop Codex session
 - PC/mobile continuity through a shared bridge-managed thread
+- Bridge Fleet / Worktree Switchboard for multiple bridge/worktree slots in one tab
+- global running monitor and approval inbox across registered bridges
 - cockpit header with thread position, run state, per-thread accent color, compact cwd, and a mini thread switcher
 - guarded swipe navigation that avoids text inputs, terminal logs, artifact previews, approval cards, and horizontal scrollers
 - chat / terminal view switching with unread badges and preserved drafts/scroll position

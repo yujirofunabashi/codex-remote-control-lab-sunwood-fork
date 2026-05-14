@@ -66,6 +66,12 @@ PHONE_NOTIFY_TIMEOUT_MS=5000 npm run phone
 
 複数ポート運用では、各 `PHONE_UI_PORT` を固定 workspace slot として扱い、`PHONE_WORKDIR` で slot の worktree を指定します。Codex / Claude は browser UI から切り替えられ、`PHONE_AGENT_PROVIDER` は再起動後に最初に開く既定 provider だけを決めます。
 
+Bridge Fleet / Worktree Switchboard を使うと、その複数 slot を 1 つの browser tab で管理できます。bridge を別 port で起動し、1 つ目の tokenized URL を開いてから、bridge/worktree pill で残りの URL を貼り付けます。active bridge は既存の chat、terminal、thread、artifact、model、approval UI をそのまま駆動し、inactive bridge は token-protected API で稼働状態、error、terminal tail、approval request を監視します。
+
+各 bridge は fleet metadata 用に `GET /api/bridge/info?token=...` を公開します。返すのは label、group、port、cwd、repo root、branch、short HEAD、dirty summary、model、capabilities です。この endpoint も token 必須で、phone token、app-server secret、webhook URL、任意 shell 実行口は返しません。
+
+まとめて起動したい場合は local 専用の `.phone-fleet.local.json` を作り、`npm run phone:fleet` を実行します。`.phone-fleet.local.json` と `.phone-bridges.local.json` は Git に入れないでください。private な worktree path や registry 情報を含み得ます。
+
 起動通知は任意です。`PHONE_NTFY_TOPIC` を設定すると ready URL を ntfy topic へ投稿します。`PHONE_PUSHOVER_TOKEN` と `PHONE_PUSHOVER_USER` を設定すると同じ URL を Pushover へ送ります。`PHONE_DISCORD_WEBHOOK_URL` を設定すると Discord へ投稿します。`npm run phone` は local `.env` を読んでから環境変数を参照します。`PHONE_NTFY_SERVER` は既定で `https://ntfy.sh`、HTTPS 必須です。通知 request は `PHONE_NOTIFY_TIMEOUT_MS` で timeout し、既定は 5000 ms です。LAN IPv4 URL がある場合、通知本文には token 付き bridge URL が入るため、private/protected topic、account、channel を使い、通知用 credential は Git に入れないでください。LAN IPv4 URL を検出できない場合は、provider の link field を省略し、host console を確認するよう通知します。
 
 レート制限表示は local の非公式 provider 別 snapshot に対応しています。Codex では `PHONE_CODEX_RATE_LIMIT_REFRESH_COMMAND="node scripts/read-desktop-rate-limits.js"` を設定すると、bridge は Codex auth file `~/.codex/auth.json` を読み、Codex Desktop が使う usage endpoint を呼び、表示に必要な残量 percentage/reset だけを正規化して `.phone-rate-limits.json` に cache します。従来の `PHONE_RATE_LIMIT_REFRESH_COMMAND` も Codex 用としてだけ維持しているため、Claude mode で Codex の制限値が混ざることは避けます。token や raw API response は cache しません。失敗時は前回の provider cache か `unavailable` に fallback します。Codex app UI の macOS Accessibility fallback を明示的に使う場合だけ `PHONE_RATE_LIMIT_SOURCE=desktop` を設定します。
@@ -81,6 +87,8 @@ background の thread 一覧 polling は、同じ error の連続表示を抑え
 - 最近の thread 一覧と resume
 - デスクトップ Codex セッションをスマホから操作
 - shared bridge-managed thread による PC/スマホ間の継続利用
+- 複数 bridge / worktree slot を 1 tab で扱う Bridge Fleet / Worktree Switchboard
+- 登録済み bridge 全体の global running monitor と approval inbox
 - thread 位置、稼働状態、thread 色、compact cwd、mini thread switcher をまとめた cockpit header
 - text input、terminal log、artifact preview、approval card、横スクロール領域では誤発火しない swipe navigation
 - unread badge と draft / scroll 復元つきの chat / terminal 切り替え
