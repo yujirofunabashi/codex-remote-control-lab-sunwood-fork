@@ -76,8 +76,7 @@
             <span class="mobile-toggle-icon" aria-hidden="true"></span>
           </button>
           <div class="title-stack">
-            <h1 id="threadTitle">稼働中スレッド</h1>
-            <p id="threadSubtitle" class="thread-subtitle">新しい共有thread</p>
+            <h1 id="threadTitle">新しい共有thread</h1>
             <p id="meta">接続準備中</p>
           </div>
           <button type="button" class="bridge-pill" id="bridgePill" aria-label="Worktree switchboard を開く" aria-haspopup="dialog">
@@ -117,14 +116,14 @@
         </header>
         <button type="button" id="workspaceIndicator" class="workspace-strip empty" aria-live="polite" aria-label="作業場所を取得できません">
           <span class="workspace-place">
-            <span class="workspace-pwd-badge">pwd</span>
+            <span class="workspace-tag" aria-hidden="true">場所</span>
             <span id="workspaceRepo" class="workspace-repo">--</span>
-            <span class="workspace-separator" aria-hidden="true">/</span>
+            <span class="workspace-separator" aria-hidden="true">›</span>
             <span id="workspaceLocation" class="workspace-location">--</span>
           </span>
           <span class="workspace-branch">
             <span id="workspaceConnectionDot" class="workspace-connection-dot" aria-hidden="true"></span>
-            <span class="workspace-label">branch</span>
+            <span class="workspace-tag" aria-hidden="true">ブランチ</span>
             <span id="branchName" class="branch-name">--</span>
           </span>
         </button>
@@ -291,11 +290,13 @@
             </section>
             <form id="composer" class="composer">
               <input id="fileInput" class="hidden" type="file" accept="image/*,audio/*,.m4a,.mp3,.wav,.aac,.flac,.ogg,.webm,.mp4" multiple />
-              <div id="runState" class="run-state" data-state="connecting" role="status" aria-live="polite">
-                <span class="run-state-dot" aria-hidden="true"></span>
-                <span id="runStateLabel">接続準備中</span>
+              <div class="composer-status-bar">
+                <div id="runState" class="run-state" data-state="connecting" role="status" aria-live="polite">
+                  <span class="run-state-dot" aria-hidden="true"></span>
+                  <span id="runStateLabel">接続準備中</span>
+                </div>
+                <div id="quickActions" class="quick-actions" role="group" aria-label="ワンタップ入力"></div>
               </div>
-              <div id="quickActions" class="quick-actions" aria-label="クイックアクション"></div>
               <div id="attachments" class="attachments" aria-live="polite"></div>
               <textarea id="prompt" rows="3" placeholder="フォローアップの変更を求める"></textarea>
               <div class="composer-footer">

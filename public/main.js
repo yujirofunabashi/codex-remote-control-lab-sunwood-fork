@@ -88,7 +88,6 @@ const runStateLabel = document.querySelector("#runStateLabel");
 const threadList = document.querySelector("#threadList");
 const threadSearch = document.querySelector("#threadSearch");
 const threadTitle = document.querySelector("#threadTitle");
-const threadSubtitle = document.querySelector("#threadSubtitle");
 const composer = document.querySelector("#composer");
 const promptInput = document.querySelector("#prompt");
 const workspaceIndicator = document.querySelector("#workspaceIndicator");
@@ -1193,8 +1192,7 @@ function titleForThread(thread) {
 }
 
 function setThreadHeading(title) {
-  if (threadTitle) threadTitle.textContent = "稼働中スレッド";
-  if (threadSubtitle) threadSubtitle.textContent = title || "新しい共有thread";
+  if (threadTitle) threadTitle.textContent = title || "新しい共有thread";
 }
 
 function isOpaqueThreadId(value) {

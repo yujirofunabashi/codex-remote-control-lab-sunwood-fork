@@ -798,13 +798,6 @@ p {
   font-size: 12px;
 }
 
-.thread-subtitle {
-  max-width: 100%;
-  color: color-mix(in srgb, var(--thread-accent) 64%, var(--muted));
-  font-size: 11px;
-  font-weight: 650;
-}
-
 .title-actions {
   display: flex;
   min-width: 0;
@@ -901,16 +894,29 @@ p {
 
 .header-color-button {
   position: relative;
-  width: 34px;
-  min-width: 34px;
-  height: 34px;
-  border: 2px solid var(--card);
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  border: 1px solid var(--line);
   border-radius: 999px;
   padding: 0;
+  background: var(--card);
+}
+
+.header-color-button::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 12px;
+  height: 12px;
+  margin: auto;
+  border-radius: 999px;
   background: var(--thread-accent);
-  box-shadow:
-    0 0 0 1px var(--line),
-    0 0 0 5px var(--thread-accent-soft);
+}
+
+.header-color-button:hover,
+.header-color-button:focus-visible {
+  border-color: color-mix(in srgb, var(--thread-accent) 48%, var(--line));
 }
 
 .thread-color-popover,
@@ -2300,16 +2306,6 @@ body[data-terminal-input-mode="keys"] .terminal-input-mode-button {
   font-weight: 620;
 }
 
-.composer .run-state {
-  width: auto;
-  max-width: none;
-  min-height: 28px;
-  margin: 8px 12px 0;
-  padding: 0 10px;
-  box-shadow: none;
-  font-size: 12px;
-}
-
 .run-state-dot {
   flex: 0 0 auto;
   width: 9px;
@@ -2458,12 +2454,45 @@ body[data-terminal-input-mode="keys"] .terminal-input-mode-button {
   padding: 12px 14px 0;
 }
 
+/* Composer status band: run-state reads as a status label, quick actions read as tappable chips. */
+.composer-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 9px 12px 0;
+}
+
+.composer-status-bar .run-state {
+  flex: 0 0 auto;
+  width: auto;
+  max-width: 58%;
+  min-width: 0;
+  min-height: 24px;
+  margin: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.composer-status-bar .run-state > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .quick-actions {
   display: flex;
   gap: 7px;
+  flex: 1 1 auto;
   min-width: 0;
   overflow-x: auto;
-  padding: 10px 12px 0;
+  padding: 0 0 0 10px;
+  border-left: 1px solid var(--line);
   scroll-snap-type: x proximity;
   -webkit-overflow-scrolling: touch;
 }
@@ -2471,17 +2500,24 @@ body[data-terminal-input-mode="keys"] .terminal-input-mode-button {
 .quick-action-chip {
   flex: 0 0 auto;
   min-height: 28px;
-  border: 1px solid color-mix(in srgb, var(--thread-accent) 20%, var(--line));
+  border: 1px solid color-mix(in srgb, var(--thread-accent) 30%, var(--line));
   border-radius: 999px;
-  padding: 0 10px;
-  background: color-mix(in srgb, var(--thread-accent) 7%, var(--card));
+  padding: 0 11px;
+  background: var(--card);
   color: var(--nav-text);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--text) 7%, transparent);
   scroll-snap-align: start;
   font-size: 12px;
   font-weight: 700;
+  transition: transform 90ms ease, box-shadow 90ms ease, border-color 90ms ease;
 }
 
-body[data-main-view="terminal"] .quick-actions {
+.quick-action-chip:active {
+  transform: translateY(1px);
+  box-shadow: none;
+}
+
+body[data-main-view="terminal"] .composer-status-bar {
   padding: 7px 10px 0;
 }
 
@@ -2603,22 +2639,22 @@ textarea::placeholder {
   justify-content: flex-end;
 }
 
-.workspace-label,
 .workspace-separator {
   flex: 0 0 auto;
-  color: var(--muted);
+  color: color-mix(in srgb, var(--muted) 68%, transparent);
   font-weight: 600;
 }
 
-.workspace-pwd-badge {
+.workspace-tag {
   flex: 0 0 auto;
-  border-radius: 999px;
-  padding: 3px 9px;
-  background: var(--thread-accent);
-  color: var(--thread-accent-contrast);
-  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
-  font-size: 12px;
-  font-weight: 850;
+  border: 1px solid color-mix(in srgb, var(--thread-accent) 24%, var(--line));
+  border-radius: 6px;
+  padding: 1px 6px;
+  background: color-mix(in srgb, var(--thread-accent) 8%, var(--card));
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.02em;
 }
 
 .workspace-connection-dot {
@@ -2647,15 +2683,19 @@ textarea::placeholder {
 .workspace-repo {
   flex: 0 1 auto;
   min-width: 0;
-  max-width: 34%;
+  max-width: 46%;
+  font-weight: 750;
 }
 
 .workspace-location {
   flex: 1 1 auto;
+  color: var(--muted);
+  font-weight: 600;
 }
 
 .branch-name {
   max-width: min(220px, 30vw);
+  font-weight: 700;
 }
 
 .composer-footer {
@@ -4710,20 +4750,12 @@ body[data-main-view="terminal"] .pwa-install-hint {
     border-radius: 18px;
   }
 
-  body.keyboard-open .conversation {
-    padding-bottom: min(var(--keyboard-inset), 42vh);
-  }
-
+  /* .workspace already tracks --visual-viewport-height, so the conversation is
+     bounded to the area above the keyboard. Adding padding-bottom here (or extra
+     workspace-strip margin) double-counted the keyboard and opened a large empty
+     gap above the composer. The composer now sits directly above the keyboard. */
   body.keyboard-open .composer {
     margin-bottom: 4px;
-  }
-
-  body.keyboard-open .workspace-strip {
-    margin-bottom: max(10px, env(safe-area-inset-bottom));
-  }
-
-  body.keyboard-open[data-main-view="terminal"] .workspace-strip {
-    margin-bottom: 0;
   }
 
   .run-state {
@@ -4785,11 +4817,11 @@ body[data-main-view="terminal"] .pwa-install-hint {
 
   .workspace-repo {
     min-width: 0;
-    max-width: 34%;
+    max-width: 44%;
   }
 
   .branch-name {
-    max-width: 30vw;
+    max-width: 34vw;
   }
 
   .composer-footer {
@@ -4901,11 +4933,6 @@ body[data-main-view="terminal"] .pwa-install-hint {
     font-size: 12px;
   }
 
-  body[data-main-view="terminal"] .thread-subtitle {
-    margin-top: 0;
-    font-size: 10px;
-  }
-
   body[data-main-view="terminal"] .mobile-toggle,
   body[data-main-view="terminal"] .icon-button,
   body[data-main-view="terminal"] .header-color-button {
@@ -4935,12 +4962,7 @@ body[data-main-view="terminal"] .pwa-install-hint {
     font-size: 10px;
   }
 
-  body[data-main-view="terminal"] .workspace-pwd-badge {
-    padding: 2px 7px;
-    font-size: 10px;
-  }
-
-  body[data-main-view="terminal"] .workspace-label {
+  body[data-main-view="terminal"] .workspace-tag {
     display: none;
   }
 
@@ -5000,10 +5022,14 @@ body[data-main-view="terminal"] .pwa-install-hint {
     border-radius: 14px;
   }
 
+  body[data-main-view="terminal"] .composer-status-bar {
+    padding: 6px 8px 0;
+  }
+
   body[data-main-view="terminal"] .composer .run-state {
-    min-height: 23px;
-    margin: 5px 8px 0;
-    padding: 0 8px;
+    min-height: 22px;
+    margin: 0;
+    padding: 0;
     font-size: 11px;
   }
 
@@ -5052,7 +5078,7 @@ body[data-main-view="terminal"] .pwa-install-hint {
 
   body.terminal-focus-mode .composer .run-state {
     min-height: 21px;
-    margin-top: 4px;
+    margin: 0;
     font-size: 10px;
   }
 
