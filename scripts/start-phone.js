@@ -283,12 +283,14 @@ function runRateLimitRefreshCommand(provider, command) {
       child.kill("SIGTERM");
       reject(new Error(`rate limit command timed out after ${rateLimitRefreshTimeoutMs}ms`));
     }, rateLimitRefreshTimeoutMs);
+    child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString("utf8");
+      stdout += chunk;
       if (stdout.length > 64_000) child.kill("SIGTERM");
     });
+    child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString("utf8");
+      stderr += chunk;
       if (stderr.length > 8_000) stderr = stderr.slice(-8_000);
     });
     child.on("error", (error) => {
@@ -438,7 +440,11 @@ function displayPath(value) {
   return String(value || "").split(path.sep).join("/");
 }
 
-function currentWorkspaceMeta() {
+const workspaceMetaCacheTtlMs = 5000;
+let workspaceMetaCache = null;
+let workspaceMetaCacheAt = 0;
+
+function readWorkspaceMeta() {
   const gitRoot = gitOutput(["rev-parse", "--show-toplevel"]);
   const repoName = path.basename(gitRoot || workdir);
   const relative = gitRoot ? displayPath(path.relative(gitRoot, workdir)) : "";
@@ -447,6 +453,14 @@ function currentWorkspaceMeta() {
     repoName,
     workspaceLocation: gitRoot ? relative || "." : displayPath(workdir),
   };
+}
+
+function currentWorkspaceMeta() {
+  const now = Date.now();
+  if (workspaceMetaCache && now - workspaceMetaCacheAt < workspaceMetaCacheTtlMs) return workspaceMetaCache;
+  workspaceMetaCache = readWorkspaceMeta();
+  workspaceMetaCacheAt = now;
+  return workspaceMetaCache;
 }
 
 function modelEnvKeyForProvider(provider) {
@@ -834,7 +848,9 @@ function notifyRunEvent(status, { provider = agentProvider, threadId, turnId, me
     workdir,
     message,
     url: bridgeUrlForThread(threadId, provider),
-  }).then((results) => logNotifyResults(`task ${status}`, results));
+  })
+    .then((results) => logNotifyResults(`task ${status}`, results))
+    .catch((error) => console.warn(`[notify] task ${status} error: ${error.message}`));
 }
 
 function waitForReady(timeoutMs = 10_000) {
@@ -1066,6 +1082,15 @@ function requireToken(url, phoneToken, res) {
   if (url.searchParams.get("token") === phoneToken) return true;
   sendJson(res, 401, { error: "invalid token" });
   return false;
+}
+
+function queryProvider(url, res, fallback = agentProvider) {
+  try {
+    return normalizeProvider(url.searchParams.get("provider") || fallback);
+  } catch (error) {
+    sendJson(res, 400, { error: error.message });
+    return null;
+  }
 }
 
 function safeRelativePath(input) {
@@ -1762,6 +1787,7 @@ class SharedBridge {
     this.turnQueue = [];
     this.runState = { state: "connecting", label: "接続中", turnId: null, updatedAt: Date.now() };
     this.streamingStarted = false;
+    this.turnStarted = false;
     this.interruptRequested = false;
     this.idleDisposeTimer = null;
     this.upstream = createUpstreamWebSocket();
@@ -1998,11 +2024,11 @@ class SharedBridge {
         } else {
           this.activeTurnId = msg.result.turn.id;
           this.streamingStarted = false;
+          this.turnStarted = false;
           this.setBridgeRunState("running", "Agent 処理中", this.activeTurnId);
           this.emit("turn", { status: "started", turnId: this.activeTurnId, run: this.runPayload() });
           if (this.interruptRequested) {
-            this.interruptRequested = false;
-            this.sendTurnInterrupt(this.activeTurnId);
+            this.setBridgeRunState("interrupting", "開始後に中断します", this.activeTurnId);
           }
         }
         return;
@@ -2020,22 +2046,34 @@ class SharedBridge {
         return;
       }
 
+      if (msg.method === "turn/started") {
+        this.turnStarted = true;
+        this.flushPendingInterrupt();
+        return;
+      }
+
       if (msg.method === "item/agentMessage/delta") {
+        this.turnStarted = true;
         if (!this.streamingStarted) {
           this.streamingStarted = true;
           this.setBridgeRunState("streaming", "回答生成中", this.activeTurnId);
         }
+        this.flushPendingInterrupt();
         this.emit("assistantDelta", { text: msg.params.delta });
         return;
       }
 
       if (msg.method === "item/started") {
+        this.turnStarted = true;
+        this.flushPendingInterrupt();
         const text = summarizeLiveItem(msg.params.item, "started");
         if (text) this.emit("status", { text });
         return;
       }
 
       if (msg.method === "item/completed") {
+        this.turnStarted = true;
+        this.flushPendingInterrupt();
         const entry = summarizeItem(msg.params.item);
         if (entry && entry.type !== "user") this.appendHistory({ ...entry, outputGroup: this.activeTurnId || null });
         const text = summarizeLiveItem(msg.params.item, "completed");
@@ -2051,6 +2089,7 @@ class SharedBridge {
         this.interruptRequested = false;
         this.activeTurnId = null;
         this.streamingStarted = false;
+        this.turnStarted = false;
         this.setBridgeRunState(wasInterrupted ? "interrupted" : "done", wasInterrupted ? "中断しました" : "完了しました", completedTurnId);
         this.emit("turn", { status: "completed", turnId: completedTurnId, run: this.runPayload() });
         notifyRunEvent(wasInterrupted ? "interrupted" : "completed", {
@@ -2146,12 +2185,29 @@ class SharedBridge {
     return true;
   }
 
+  flushPendingInterrupt() {
+    if (!this.interruptRequested || !this.activeTurnId || !this.turnStarted) return;
+    try {
+      this.interruptRequested = false;
+      if (!this.sendTurnInterrupt(this.activeTurnId)) this.emit("status", { text: "中断要求はすでに送信済みです。" });
+    } catch (error) {
+      this.setBridgeRunState("error", "中断に失敗", this.activeTurnId);
+      this.emit("error", { text: `中断要求の送信に失敗しました: ${error.message}` });
+    }
+  }
+
   interrupt() {
     const queuedCount = this.turnQueue.length;
     this.turnQueue = [];
     if (queuedCount) this.emit("status", { text: `待機中の送信を破棄しました（${queuedCount}件）。` });
 
     if (this.activeTurnId) {
+      if (!this.turnStarted) {
+        this.interruptRequested = true;
+        this.setBridgeRunState("interrupting", "開始後に中断します", this.activeTurnId);
+        this.emit("status", { text: "開始待ちの処理を中断予約しました。" });
+        return;
+      }
       try {
         this.interruptRequested = false;
         if (!this.sendTurnInterrupt(this.activeTurnId)) {
@@ -2223,6 +2279,7 @@ class SharedBridge {
 
   startPrompt(text, attachments = [], options = {}, clientMessageId = null) {
     this.interruptRequested = false;
+    this.turnStarted = false;
     const input = [{ type: "text", text, text_elements: [] }];
     const savedImages = [];
     const savedFiles = [];
@@ -2508,6 +2565,14 @@ class ClaudeBridge {
     let stderrBuffer = "";
     let assistantText = "";
 
+    const clearActiveProcess = () => {
+      if (this.activeProcess !== child && this.activeTurnId !== turnId) return false;
+      this.activeProcess = null;
+      this.activeTurnId = null;
+      this.streamingStarted = false;
+      return true;
+    };
+
     const handleLine = (line) => {
       if (!line.trim()) return;
       let msg;
@@ -2577,8 +2642,9 @@ class ClaudeBridge {
       }
     });
     child.on("error", (error) => {
+      if (!clearActiveProcess()) return;
       this.interruptRequested = false;
-      this.setBridgeRunState("error", "起動に失敗", this.activeTurnId);
+      this.setBridgeRunState("error", "起動に失敗", turnId);
       this.emit("error", { text: `Claudeを起動できませんでした: ${error.message}` });
       notifyRunEvent("failed", {
         provider: this.provider,
@@ -2587,14 +2653,14 @@ class ClaudeBridge {
         turnId,
         message: error.message,
       });
+      this.startNextQueuedTurn();
+      this.scheduleIdleDispose();
     });
     child.on("exit", (code, signal) => {
-      if (stdoutBuffer.trim()) handleLine(stdoutBuffer);
       const wasInterrupted = this.interruptRequested || signal === "SIGINT" || signal === "SIGTERM";
+      if (!clearActiveProcess()) return;
+      if (stdoutBuffer.trim()) handleLine(stdoutBuffer);
       this.interruptRequested = false;
-      this.activeProcess = null;
-      this.activeTurnId = null;
-      this.streamingStarted = false;
       if (code === 0 && !wasInterrupted) {
         if (assistantText.trim()) this.appendHistory({ type: "assistant", text: assistantText, outputGroup: turnId });
         this.setBridgeRunState("done", "完了しました", turnId);
@@ -2792,7 +2858,8 @@ async function main() {
     }
     if (url.pathname === "/api/threads") {
       if (!requireToken(url, phoneToken, res)) return;
-      const requestedProvider = normalizeProvider(url.searchParams.get("provider") || agentProvider);
+      const requestedProvider = queryProvider(url, res);
+      if (!requestedProvider) return;
       if (requestedProvider === "claude") {
         sendJson(res, 200, claudeThreadListPayload());
         return;
@@ -2806,7 +2873,8 @@ async function main() {
     }
     if (url.pathname === "/api/models") {
       if (!requireToken(url, phoneToken, res)) return;
-      const requestedProvider = normalizeProvider(url.searchParams.get("provider") || agentProvider);
+      const requestedProvider = queryProvider(url, res);
+      if (!requestedProvider) return;
       if (requestedProvider === "claude") {
         sendJson(res, 200, localModelList(requestedProvider));
         return;
@@ -2821,7 +2889,8 @@ async function main() {
     }
     if (url.pathname === "/api/plugins") {
       if (!requireToken(url, phoneToken, res)) return;
-      const requestedProvider = normalizeProvider(url.searchParams.get("provider") || agentProvider);
+      const requestedProvider = queryProvider(url, res);
+      if (!requestedProvider) return;
       if (requestedProvider === "claude") {
         sendJson(res, 200, { data: [] });
         return;
@@ -2845,7 +2914,8 @@ async function main() {
     }
     if (url.pathname === "/api/config") {
       if (!requireToken(url, phoneToken, res)) return;
-      const requestedProvider = normalizeProvider(url.searchParams.get("provider") || agentProvider);
+      const requestedProvider = queryProvider(url, res);
+      if (!requestedProvider) return;
       if (requestedProvider === "claude") {
         sendJson(res, 200, {
           config: { config: { model: modelForProvider(requestedProvider), cwd: workdir, provider: requestedProvider } },
@@ -2962,7 +3032,8 @@ async function main() {
     if (url.pathname === "/api/status") {
       if (!requireToken(url, phoneToken, res)) return;
       const refreshRateLimits = url.searchParams.get("refreshRateLimits") === "1";
-      const requestedProvider = normalizeProvider(url.searchParams.get("provider") || agentProvider);
+      const requestedProvider = queryProvider(url, res);
+      if (!requestedProvider) return;
       sendJson(res, 200, {
         provider: requestedProvider,
         defaultProvider: agentProvider,
@@ -2983,7 +3054,8 @@ async function main() {
     }
     if (url.pathname === "/api/history-sync") {
       if (!requireToken(url, phoneToken, res)) return;
-      const requestedProvider = normalizeProvider(url.searchParams.get("provider") || agentProvider);
+      const requestedProvider = queryProvider(url, res);
+      if (!requestedProvider) return;
       if (requestedProvider === "claude") {
         sendJson(res, 200, { skipped: true, reason: "history sync is only available for the Codex provider" });
         return;
@@ -3009,7 +3081,8 @@ async function main() {
     if (url.pathname === "/api/thread") {
       if (!requireToken(url, phoneToken, res)) return;
       const threadId = url.searchParams.get("thread");
-      const requestedProvider = normalizeProvider(url.searchParams.get("provider") || (threadId?.startsWith("claude:") ? "claude" : agentProvider));
+      const requestedProvider = queryProvider(url, res, threadId?.startsWith("claude:") ? "claude" : agentProvider);
+      if (!requestedProvider) return;
       if (!threadId) {
         sendJson(res, 400, { error: "thread is required" });
         return;
@@ -3126,7 +3199,14 @@ async function main() {
       return;
     }
     const threadId = url.searchParams.get("thread") || null;
-    const requestedProvider = normalizeProvider(url.searchParams.get("provider") || (threadId?.startsWith("claude:") ? "claude" : agentProvider));
+    let requestedProvider;
+    try {
+      requestedProvider = normalizeProvider(url.searchParams.get("provider") || (threadId?.startsWith("claude:") ? "claude" : agentProvider));
+    } catch (error) {
+      socket.write(`HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n${error.message}`);
+      socket.destroy();
+      return;
+    }
     wss.handleUpgrade(req, socket, head, (ws) => {
       bindBrowser(ws, phoneToken, threadId, requestedProvider).catch((error) => {
         if (ws.readyState === WebSocket.OPEN) {
