@@ -423,9 +423,14 @@ function selectModel(model) {
 }
 
 function titleForThread(thread) {
-  const raw = thread.name || thread.preview || thread.cwd || thread.id;
-  const firstLine = raw.split("\n").find(Boolean) || thread.id;
+  const raw = thread.name || thread.preview || thread.cwd || "";
+  const firstLine = raw.split("\n").find(Boolean) || "";
+  if (!firstLine || firstLine === thread.id || isOpaqueThreadId(firstLine)) return "名前未設定のthread";
   return firstLine.length > 54 ? `${firstLine.slice(0, 54)}...` : firstLine;
+}
+
+function isOpaqueThreadId(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(value || "").trim());
 }
 
 function projectForThread(thread) {
@@ -1294,6 +1299,10 @@ async function refreshSelectedThread() {
   try {
     const result = await apiGet(`/api/thread?thread=${encodeURIComponent(selectedThread)}&provider=${encodeURIComponent(provider)}`);
     if (result.threadId !== selectedThread) return;
+    if (result.missing) {
+      resetMissingSelectedThread(result.threadId);
+      return;
+    }
     renderHistoryIfChanged(result.history || []);
     lastThreadRefreshError = "";
   } catch (error) {
@@ -1305,6 +1314,21 @@ async function refreshSelectedThread() {
   } finally {
     selectedThreadRefreshActive = false;
   }
+}
+
+function resetMissingSelectedThread(threadId) {
+  if (threadId && selectedThread !== threadId) return;
+  selectedThreadByProvider.delete(currentThreadProvider());
+  selectedThread = "";
+  lastHistorySignature = "";
+  renderHistory([]);
+  threadTitle.textContent = "新しい共有thread";
+  updateUrlThread();
+  renderThreadList();
+  addStatus("選択中のthreadが見つからないため、新しいthreadに戻しました。");
+  closeSocket({ suppressReconnect: true });
+  setReady(false);
+  connect();
 }
 
 async function loadArtifacts() {
@@ -1333,7 +1357,7 @@ function syncReadyThread(threadId) {
   selectedThread = threadId;
   updateUrlThread();
   const selected = threadCache.find((thread) => thread.id === selectedThread);
-  threadTitle.textContent = selected ? titleForThread(selected) : selectedThread;
+  threadTitle.textContent = selected ? titleForThread(selected) : "新しい共有thread";
   renderThreadList();
 }
 

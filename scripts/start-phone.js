@@ -3125,11 +3125,16 @@ async function main() {
       }
       if (requestedProvider === "claude") {
         const bridge = findBridgeByThreadId(threadId, requestedProvider);
+        const session = bridge ? null : readClaudeSession(threadId);
+        if (!bridge && !session) {
+          sendJson(res, 200, { provider: requestedProvider, activeProvider: requestedProvider, threadId, missing: true, history: [] });
+          return;
+        }
         sendJson(res, 200, {
           provider: requestedProvider,
           activeProvider: requestedProvider,
           threadId,
-          history: bridge?.history?.length ? bridge.history : claudeHistoryForSession(threadId),
+          history: bridge?.history?.length ? bridge.history : session?.history || [],
         });
         return;
       }
@@ -3145,7 +3150,7 @@ async function main() {
         sendJson(res, 200, { provider: requestedProvider, activeProvider: requestedProvider, ...snapshot });
       } catch (error) {
         if (isMissingThreadError(error)) {
-          sendJson(res, 200, { provider: requestedProvider, activeProvider: requestedProvider, threadId, history: [] });
+          sendJson(res, 200, { provider: requestedProvider, activeProvider: requestedProvider, threadId, missing: true, history: [] });
           return;
         }
         sendJson(res, 500, { error: error.message });
