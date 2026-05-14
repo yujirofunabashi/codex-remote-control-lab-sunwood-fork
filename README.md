@@ -112,7 +112,11 @@ The current phone bridge supports:
 - recent thread listing and direct thread resume
 - per-thread accent colors saved in browser local storage, so concurrent work is easier to distinguish
 - chat / terminal view switching for command, file change, approval, and error monitoring logs
-- mobile-width thread switching through horizontal swipes or the header previous/next buttons
+- a mobile cockpit header with state, position, per-thread color, compact path, and a mini thread switcher
+- mobile-width thread switching through guarded horizontal swipes, the header previous/next buttons, or the position pill
+- a phone-first terminal view with filter chips, search, copy-visible-log, auto-scroll pause, font controls, safe key-intent chips, and focus mode
+- sticky approval cards visible from chat and terminal views, with larger approve/reject controls and terminal transcript feedback
+- quick action chips that insert common follow-up prompts without auto-sending
 - default history-sync refresh for Desktop reopen/refresh continuity
 - plugin, model, config/auth, and automation status panels
 - approval and sandbox mode controls for the next turn
@@ -122,6 +126,8 @@ The current phone bridge supports:
 - local repository image artifacts served through token-protected file routes
 - collapsed status/tool logs with expandable detail rows
 - simple, cyberpunk, and botanical color themes saved in browser local storage
+
+The bridge safety boundary is unchanged: the Codex app-server stays on `127.0.0.1`, browser actions still go through the token-protected bridge, and the terminal controls do not expose arbitrary unauthenticated shell execution.
 
 ## 🖼️ UI Evidence
 

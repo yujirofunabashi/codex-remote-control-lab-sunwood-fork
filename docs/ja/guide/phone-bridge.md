@@ -81,6 +81,12 @@ background の thread 一覧 polling は、同じ error の連続表示を抑え
 - 最近の thread 一覧と resume
 - デスクトップ Codex セッションをスマホから操作
 - shared bridge-managed thread による PC/スマホ間の継続利用
+- thread 位置、稼働状態、thread 色、compact cwd、mini thread switcher をまとめた cockpit header
+- text input、terminal log、artifact preview、approval card、横スクロール領域では誤発火しない swipe navigation
+- unread badge と draft / scroll 復元つきの chat / terminal 切り替え
+- filter chip、client-side search、表示ログコピー、auto-scroll pause、wrap / font control、key-intent chip、CSS focus mode を備えた phone terminal
+- chat / terminal のどちらでも見える approval card
+- 勝手に送信せず入力欄へ prompt template を挿入する quick action chip
 - model、plugin、config、auth、automation の確認
 - Codex model 表示は `5.5-L/M/H/XH` 形式。`L/M/H/XH` は Low / Medium / High / Extra High
 - 次 turn 向けの承認・sandbox mode 切り替え
@@ -89,3 +95,5 @@ background の thread 一覧 polling は、同じ error の連続表示を抑え
 - browser 画像添付を `localImage` input として Codex に渡す
 - 設定 panel から simple / cyberpunk / botanical のカラーテーマを切り替え
 - bridge-managed thread を LAN 内の複数端末で共有
+
+terminal の key row は、認証なしの raw shell 実行口ではありません。`$` は Codex への安全なコマンド実行依頼テンプレートを挿入するだけで、bridge access は引き続き token protected、Codex app-server は localhost bind のままです。

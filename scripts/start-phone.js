@@ -1610,6 +1610,9 @@ function redactTerminalText(value) {
 function terminalKindForStatus(text) {
   if (/^\$\s/.test(text)) return "command";
   if (/file changes|ファイル/i.test(text)) return "file";
+  if (/approval|承認/i.test(text)) return "approval";
+  if (/error|failed|失敗|エラー/i.test(text)) return "error";
+  if (/turn |接続|再接続|ready|completed|完了|切断/i.test(text)) return "lifecycle";
   return "status";
 }
 
@@ -1626,7 +1629,7 @@ function terminalEntryForBridgeMessage(type, payload = {}, bridge = {}) {
   if (type === "approval") {
     return {
       ts: now,
-      kind: "status",
+      kind: "approval",
       message: redactTerminalText(`approval requested: ${payload.request?.method || "request"}`),
       turnId: bridge.activeTurnId || null,
     };
@@ -1634,7 +1637,7 @@ function terminalEntryForBridgeMessage(type, payload = {}, bridge = {}) {
   if (type === "turn") {
     return {
       ts: now,
-      kind: "status",
+      kind: "lifecycle",
       message: redactTerminalText(`turn ${payload.status || "updated"}${payload.turnId ? `: ${payload.turnId}` : ""}`),
       turnId: payload.turnId || bridge.activeTurnId || null,
     };
@@ -1643,7 +1646,7 @@ function terminalEntryForBridgeMessage(type, payload = {}, bridge = {}) {
     const count = Array.isArray(payload.attachments) ? payload.attachments.length : 0;
     return {
       ts: now,
-      kind: "status",
+      kind: "user",
       message: `user prompt sent${count ? ` (${count} attachments)` : ""}`,
       turnId: bridge.activeTurnId || null,
     };

@@ -105,7 +105,11 @@ PHONE_NOTIFY_TIMEOUT_MS=5000 npm run phone
 - 最近の thread 一覧と直接 resume
 - thread ごとのアクセント色を browser localStorage に保存し、複数作業を見分けやすくする
 - チャット / ターミナル表示を切り替え、command・file change・承認・error などの監視ログを確認
-- スマホ幅では左右スワイプまたはヘッダーの前後ボタンで thread を切り替え
+- 状態、位置、thread 色、compact path、mini thread switcher をまとめたスマホ向け cockpit header
+- スマホ幅では誤爆を抑えた左右スワイプ、ヘッダーの前後ボタン、または位置 pill から thread を切り替え
+- filter chip、検索、表示ログコピー、auto-scroll pause、文字サイズ、safe key-intent chip、focus mode を備えたスマホ向け terminal view
+- chat / terminal のどちらでも見える approval card と、大きめの承認 / 拒否操作
+- 勝手に送信せず入力欄へ挿入する quick action chip
 - Desktop の開き直し/再読込に寄せた既定の履歴同期 refresh
 - plugin、model、config/auth、automation status panel
 - 次 turn 向けの approval / sandbox mode control
@@ -115,6 +119,8 @@ PHONE_NOTIFY_TIMEOUT_MS=5000 npm run phone
 - local repository image artifact を token-protected file route から表示
 - status/tool log の折りたたみ表示
 - simple / cyberpunk / botanical のカラーテーマを browser local storage に保存
+
+安全境界は変えていません。Codex app-server は `127.0.0.1` のまま、browser 操作は token-protected bridge を通り、terminal 操作 UI も認証なしの任意 shell 実行口を追加しません。
 
 ## 🖼️ UI Evidence
 

@@ -60,52 +60,143 @@
             <span class="mobile-toggle-icon" aria-hidden="true"></span>
           </button>
           <div class="title-stack">
-            <h1 id="threadTitle">Codex Remote</h1>
+            <h1 id="threadTitle">稼働中スレッド</h1>
+            <p id="threadSubtitle" class="thread-subtitle">新しい共有thread</p>
             <p id="meta">接続準備中</p>
           </div>
+          <button type="button" class="thread-position-pill" id="threadPositionPill" aria-label="スレッド切替を開く" aria-haspopup="dialog">
+            <span id="threadPositionText">--/--</span>
+            <span id="threadStateText">接続中</span>
+          </button>
           <div class="thread-nav" aria-label="スレッド移動">
             <button type="button" class="thread-nav-button prev" id="prevThread" title="前のスレッド" aria-label="前のスレッド"></button>
             <button type="button" class="thread-nav-button next" id="nextThread" title="次のスレッド" aria-label="次のスレッド"></button>
           </div>
+          <button type="button" class="header-color-button" id="headerThreadColorButton" title="現在のスレッド色" aria-label="現在のスレッド色を変更"></button>
           <div class="title-actions">
-            <button id="connect" type="button" class="icon-button" title="再接続">↻</button>
+            <button id="connect" type="button" class="icon-button" title="再接続" aria-label="再接続">↻</button>
             <button type="button" class="icon-button mobile-settings-button" id="mobileSettingsButton" title="設定" aria-label="設定">⚙︎</button>
             <button type="button" class="icon-button mobile-menu-button" id="menuButton" title="メニュー" aria-label="メニュー">
               <span class="menu-dots-icon" aria-hidden="true"></span>
             </button>
           </div>
         </header>
+        <button type="button" id="workspaceIndicator" class="workspace-strip empty" aria-live="polite" aria-label="作業場所を取得できません">
+          <span class="workspace-place">
+            <span class="workspace-pwd-badge">pwd</span>
+            <span id="workspaceRepo" class="workspace-repo">--</span>
+            <span class="workspace-separator" aria-hidden="true">/</span>
+            <span id="workspaceLocation" class="workspace-location">--</span>
+          </span>
+          <span class="workspace-branch">
+            <span id="workspaceConnectionDot" class="workspace-connection-dot" aria-hidden="true"></span>
+            <span class="workspace-label">branch</span>
+            <span id="branchName" class="branch-name">--</span>
+          </span>
+        </button>
+        <section id="threadColorPopover" class="thread-color-popover hidden" role="dialog" aria-label="スレッド色"></section>
+        <section id="threadSwitcher" class="thread-switcher hidden" role="dialog" aria-modal="false" aria-label="スレッド切替">
+          <header class="thread-switcher-header">
+            <strong>スレッド切替</strong>
+            <button type="button" id="closeThreadSwitcher" aria-label="スレッド切替を閉じる">×</button>
+          </header>
+          <div id="threadSwitcherList" class="thread-switcher-list"></div>
+        </section>
 
         <div class="content-grid">
           <section class="conversation" aria-label="会話">
             <div class="main-view-bar">
               <div class="main-view-toggle" role="group" aria-label="表示モード">
-                <button type="button" id="chatViewButton" class="main-view-button active" data-main-view="chat" aria-pressed="true">チャット</button>
-                <button type="button" id="terminalViewButton" class="main-view-button" data-main-view="terminal" aria-pressed="false">ターミナル</button>
+                <button type="button" id="chatViewButton" class="main-view-button active" data-main-view="chat" aria-pressed="true" aria-selected="true">
+                  <span aria-hidden="true">□</span><span>会話</span><span id="chatUnreadBadge" class="view-unread-badge hidden"></span>
+                </button>
+                <button type="button" id="terminalViewButton" class="main-view-button" data-main-view="terminal" aria-pressed="false" aria-selected="false">
+                  <span aria-hidden="true">&gt;_</span><span>端末</span><span id="terminalUnreadBadge" class="view-unread-badge hidden"></span>
+                </button>
               </div>
               <div id="swipeFeedback" class="swipe-feedback hidden" aria-live="polite"></div>
             </div>
             <div id="log" class="log" aria-live="polite"></div>
             <section id="mainTerminalView" class="terminal-view hidden" aria-label="ターミナルログ">
+              <header class="terminal-card-header">
+                <div class="terminal-identity">
+                  <span class="terminal-status-dot" aria-hidden="true"></span>
+                  <div>
+                    <strong id="terminalStatusTitle">Codex CLI TUI</strong>
+                    <small id="terminalSessionMeta">接続準備中</small>
+                  </div>
+                </div>
+                <div class="terminal-card-actions">
+                  <button type="button" id="terminalFocusButton" class="terminal-icon-tool" aria-label="ターミナルをフォーカス表示">Focus</button>
+                  <div class="terminal-font-controls" aria-label="ターミナル文字サイズ">
+                    <span>Font</span>
+                    <button type="button" id="terminalFontDown" aria-label="文字サイズを小さく">A-</button>
+                    <button type="button" id="terminalFontReset" aria-label="文字サイズを標準に">A</button>
+                    <button type="button" id="terminalFontUp" aria-label="文字サイズを大きく">A+</button>
+                  </div>
+                </div>
+              </header>
               <div class="terminal-toolbar" aria-label="ターミナルログ操作">
-                <select id="terminalFilter" class="terminal-filter" aria-label="ターミナルログの絞り込み">
+                <select id="terminalFilter" class="terminal-filter hidden" aria-label="ターミナルログの絞り込み">
                   <option value="all">all</option>
                   <option value="command">command</option>
                   <option value="file">file</option>
                   <option value="status">status</option>
                   <option value="error">error</option>
                 </select>
+                <div class="terminal-filter-chips" role="toolbar" aria-label="ターミナルログの絞り込み">
+                  <button type="button" class="terminal-filter-chip active" data-terminal-filter="all" aria-pressed="true">All</button>
+                  <button type="button" class="terminal-filter-chip" data-terminal-filter="command" aria-pressed="false">Cmd</button>
+                  <button type="button" class="terminal-filter-chip" data-terminal-filter="file" aria-pressed="false">Files</button>
+                  <button type="button" class="terminal-filter-chip" data-terminal-filter="status" aria-pressed="false">Status</button>
+                  <button type="button" class="terminal-filter-chip" data-terminal-filter="error" aria-pressed="false">Errors</button>
+                  <button type="button" class="terminal-filter-chip" data-terminal-filter="approval" aria-pressed="false">Approval</button>
+                </div>
+                <div class="terminal-search">
+                  <input id="terminalSearchInput" type="search" placeholder="Search" aria-label="ターミナルログを検索" />
+                  <span id="terminalSearchCount">0</span>
+                  <button type="button" id="terminalSearchPrev" aria-label="前の一致">↑</button>
+                  <button type="button" id="terminalSearchNext" aria-label="次の一致">↓</button>
+                </div>
+                <button type="button" id="terminalWrapToggle" class="terminal-tool active" aria-pressed="true">Wrap</button>
                 <button type="button" id="terminalAutoScroll" class="terminal-tool active" aria-pressed="true">Auto</button>
-                <button type="button" id="terminalClear" class="terminal-tool">Clear</button>
+                <button type="button" id="terminalClear" class="terminal-tool" title="クライアント表示だけをクリア">Clear view</button>
                 <button type="button" id="terminalCopy" class="terminal-tool">Copy</button>
               </div>
-              <div id="terminalTranscript" class="terminal-transcript" role="log" aria-live="polite" aria-relevant="additions text"></div>
+              <div id="terminalTranscript" class="terminal-transcript" role="log" aria-live="off" aria-relevant="additions text"></div>
+              <button type="button" id="terminalLatestButton" class="terminal-latest-button hidden">最新へ</button>
             </section>
-            <section id="approval" class="approval hidden">
-              <div>
-                <strong>承認リクエスト</strong>
-                <pre id="approvalText"></pre>
+            <div id="terminalOps" class="terminal-ops hidden" aria-label="ターミナル操作">
+              <div class="terminal-mode-toggle" role="group" aria-label="ターミナル入力モード">
+                <button type="button" id="terminalTextMode" class="active" aria-pressed="true">Text</button>
+                <button type="button" id="terminalKeysMode" aria-pressed="false">Keys</button>
               </div>
+              <div class="terminal-key-row" aria-label="TUIキー候補">
+                <button type="button" data-terminal-key="Tab">Tab</button>
+                <button type="button" data-terminal-key="Esc">Esc</button>
+                <button type="button" data-terminal-key="Ctrl+C" class="danger">Ctrl+C</button>
+                <button type="button" data-terminal-key="Ctrl+L">Ctrl+L</button>
+                <button type="button" data-terminal-key="↑">↑</button>
+                <button type="button" data-terminal-key="↓">↓</button>
+                <button type="button" data-terminal-key="←">←</button>
+                <button type="button" data-terminal-key="→">→</button>
+                <button type="button" data-terminal-key="/">/</button>
+                <button type="button" data-terminal-key="$">$</button>
+                <button type="button" data-terminal-key="Backspace">⌫</button>
+                <button type="button" data-terminal-key="folder">フォルダ</button>
+              </div>
+              <div id="terminalHelper" class="terminal-helper hidden"></div>
+            </div>
+            <section id="approval" class="approval hidden" aria-live="assertive" aria-label="承認リクエスト">
+              <div class="approval-header">
+                <strong>承認リクエスト</strong>
+                <span id="approvalKind">確認</span>
+              </div>
+              <details id="approvalDetails" open>
+                <summary id="approvalSummary">内容を確認してください</summary>
+                <pre id="approvalText"></pre>
+              </details>
+              <textarea id="approvalReason" class="approval-reason" rows="2" placeholder="拒否理由（任意）"></textarea>
               <div class="actions">
                 <button id="decline" type="button" class="secondary">拒否</button>
                 <button id="approve" type="button">承認</button>
@@ -117,6 +208,7 @@
             </div>
             <form id="composer" class="composer">
               <input id="fileInput" class="hidden" type="file" accept="image/*,audio/*,.m4a,.mp3,.wav,.aac,.flac,.ogg,.webm,.mp4" multiple />
+              <div id="quickActions" class="quick-actions" aria-label="クイックアクション"></div>
               <div id="attachments" class="attachments" aria-live="polite"></div>
               <textarea id="prompt" rows="3" placeholder="フォローアップの変更を求める"></textarea>
               <div class="composer-footer">
@@ -142,6 +234,7 @@
                       <path d="M4 12.5 20 4l-6.4 16-2.4-6.6L4 12.5Z" />
                       <path d="m11.2 13.4 3.4-3.4" />
                     </svg>
+                    <span id="sendLabel" class="send-label">送信</span>
                   </button>
                 </div>
               </div>
@@ -163,17 +256,6 @@
                 <button type="button" class="model-menu-row submenu-row" id="moreModelsButton">その他のモデル<span class="chevron">›</span></button>
               </div>
             </form>
-            <div id="workspaceIndicator" class="workspace-strip empty" aria-live="polite" aria-label="作業場所を取得できません">
-              <div class="workspace-place">
-                <span id="workspaceRepo" class="workspace-repo">--</span>
-                <span class="workspace-separator" aria-hidden="true">/</span>
-                <span id="workspaceLocation" class="workspace-location">--</span>
-              </div>
-              <div class="workspace-branch">
-                <span class="workspace-label">branch</span>
-                <span id="branchName" class="branch-name">--</span>
-              </div>
-            </div>
             <section class="prompt-modal hidden" id="promptModal" role="dialog" aria-modal="true" aria-labelledby="promptModalTitle">
               <div class="prompt-modal-card">
                 <header class="prompt-modal-header">
@@ -220,6 +302,8 @@
       </section>
     </main>
 
+    <div id="toastStack" class="toast-stack" aria-live="polite" aria-atomic="true"></div>
+    <script src="phone-ui-utils.js"></script>
     <script src="main.js"></script>
   </body>
 </html>

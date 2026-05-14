@@ -1,3 +1,4 @@
+const uiUtils = window.CodexPhoneUiUtils || {};
 const log = document.querySelector("#log");
 const meta = document.querySelector("#meta");
 const connectButton = document.querySelector("#connect");
@@ -30,14 +31,41 @@ const terminalList = document.querySelector("#terminalList");
 const mainTerminalView = document.querySelector("#mainTerminalView");
 const terminalTranscript = document.querySelector("#terminalTranscript");
 const terminalFilter = document.querySelector("#terminalFilter");
+const terminalFilterChips = document.querySelectorAll("[data-terminal-filter]");
+const terminalSearchInput = document.querySelector("#terminalSearchInput");
+const terminalSearchCount = document.querySelector("#terminalSearchCount");
+const terminalSearchPrevButton = document.querySelector("#terminalSearchPrev");
+const terminalSearchNextButton = document.querySelector("#terminalSearchNext");
+const terminalWrapToggle = document.querySelector("#terminalWrapToggle");
 const terminalAutoScrollButton = document.querySelector("#terminalAutoScroll");
 const terminalClearButton = document.querySelector("#terminalClear");
 const terminalCopyButton = document.querySelector("#terminalCopy");
+const terminalLatestButton = document.querySelector("#terminalLatestButton");
+const terminalFocusButton = document.querySelector("#terminalFocusButton");
+const terminalFontDownButton = document.querySelector("#terminalFontDown");
+const terminalFontResetButton = document.querySelector("#terminalFontReset");
+const terminalFontUpButton = document.querySelector("#terminalFontUp");
+const terminalStatusTitle = document.querySelector("#terminalStatusTitle");
+const terminalSessionMeta = document.querySelector("#terminalSessionMeta");
+const terminalOps = document.querySelector("#terminalOps");
+const terminalTextModeButton = document.querySelector("#terminalTextMode");
+const terminalKeysModeButton = document.querySelector("#terminalKeysMode");
+const terminalHelper = document.querySelector("#terminalHelper");
 const statusButton = document.querySelector("#statusButton");
 const chatViewButton = document.querySelector("#chatViewButton");
 const terminalViewButton = document.querySelector("#terminalViewButton");
+const chatUnreadBadge = document.querySelector("#chatUnreadBadge");
+const terminalUnreadBadge = document.querySelector("#terminalUnreadBadge");
 const prevThreadButton = document.querySelector("#prevThread");
 const nextThreadButton = document.querySelector("#nextThread");
+const threadPositionPill = document.querySelector("#threadPositionPill");
+const threadPositionText = document.querySelector("#threadPositionText");
+const threadStateText = document.querySelector("#threadStateText");
+const headerThreadColorButton = document.querySelector("#headerThreadColorButton");
+const threadColorPopover = document.querySelector("#threadColorPopover");
+const threadSwitcher = document.querySelector("#threadSwitcher");
+const threadSwitcherList = document.querySelector("#threadSwitcherList");
+const closeThreadSwitcherButton = document.querySelector("#closeThreadSwitcher");
 const swipeFeedback = document.querySelector("#swipeFeedback");
 const webSearchButton = document.querySelector("#webSearchButton");
 const artifactsTab = document.querySelector("#artifactsTab");
@@ -49,13 +77,16 @@ const runStateLabel = document.querySelector("#runStateLabel");
 const threadList = document.querySelector("#threadList");
 const threadSearch = document.querySelector("#threadSearch");
 const threadTitle = document.querySelector("#threadTitle");
+const threadSubtitle = document.querySelector("#threadSubtitle");
 const composer = document.querySelector("#composer");
 const promptInput = document.querySelector("#prompt");
 const workspaceIndicator = document.querySelector("#workspaceIndicator");
 const workspaceRepo = document.querySelector("#workspaceRepo");
 const workspaceLocation = document.querySelector("#workspaceLocation");
 const branchName = document.querySelector("#branchName");
+const workspaceConnectionDot = document.querySelector("#workspaceConnectionDot");
 const sendButton = document.querySelector("#send");
+const sendLabel = document.querySelector("#sendLabel");
 const interruptButton = document.querySelector("#interruptRun");
 const promptModal = document.querySelector("#promptModal");
 const promptModalInput = document.querySelector("#promptModalInput");
@@ -64,14 +95,23 @@ const cancelPromptModalButton = document.querySelector("#cancelPromptModalButton
 const applyPromptModalButton = document.querySelector("#applyPromptModalButton");
 const approval = document.querySelector("#approval");
 const approvalText = document.querySelector("#approvalText");
+const approvalKind = document.querySelector("#approvalKind");
+const approvalSummary = document.querySelector("#approvalSummary");
+const approvalReason = document.querySelector("#approvalReason");
 const approveButton = document.querySelector("#approve");
 const declineButton = document.querySelector("#decline");
+const quickActions = document.querySelector("#quickActions");
+const toastStack = document.querySelector("#toastStack");
 
 const params = new URLSearchParams(location.search);
-const token = params.get("token") || localStorage.getItem("codexPhoneToken") || "";
+const token = params.get("token") || "";
 const preserveBookmarkEntryUrl = location.pathname.replace(/\/+$/, "").endsWith("/bookmark");
 let selectedThread = preserveBookmarkEntryUrl ? "" : params.get("thread") || "";
-if (token) localStorage.setItem("codexPhoneToken", token);
+try {
+  localStorage.removeItem("codexPhoneToken");
+} catch {
+  // Token must stay URL/session scoped; ignore legacy cleanup failures.
+}
 if (token && !params.get("token") && window.history?.replaceState) {
   const nextUrl = new URL(location.href);
   nextUrl.searchParams.set("token", token);
@@ -101,9 +141,7 @@ function appPath(path) {
 function readJsonStorage(key, fallback) {
   try {
     const value = localStorage.getItem(key);
-    if (!value) return fallback;
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : fallback;
+    return uiUtils.safeJsonParse ? uiUtils.safeJsonParse(value, fallback, { objectOnly: true }) : JSON.parse(value || "null") || fallback;
   } catch {
     return fallback;
   }
@@ -111,7 +149,7 @@ function readJsonStorage(key, fallback) {
 
 function writeJsonStorage(key, value) {
   try {
-    localStorage.setItem(key, JSON.stringify(value));
+    localStorage.setItem(key, uiUtils.safeJsonStringify ? uiUtils.safeJsonStringify(value) : JSON.stringify(value));
   } catch {
     // localStorage may be unavailable or full; keep the in-memory state usable.
   }
@@ -137,6 +175,14 @@ const threadColorStorageKey = "codexPhoneThreadColors:v1";
 const threadDraftStorageKey = "codexPhoneThreadDrafts:v1";
 const mainViewStorageKey = "codexPhoneMainView:v1";
 const swipeHintStorageKey = "codexPhoneSwipeHintSeen:v1";
+const terminalFontSizeStorageKey = "codexPhoneTerminalFontSize:v1";
+const terminalWrapStorageKey = "codexPhoneTerminalWrap:v1";
+const terminalFilterStorageKey = "codexPhoneTerminalFilter:v1";
+const terminalScrollStorageKey = "codexPhoneTerminalScroll:v1";
+const chatScrollStorageKey = "codexPhoneChatScroll:v1";
+const quickActionsStorageKey = "codexPhoneQuickActions:v1";
+const firstUseHintsStorageKey = "codexPhoneFirstUseHints:v1";
+const terminalFocusSessionKey = "codexPhoneTerminalFocus:v1";
 const terminalHistoryLimit = 300;
 const threadColorPalette = [
   "#ff5d22",
@@ -152,6 +198,12 @@ const threadColorPalette = [
 let selectedTheme = localStorage.getItem("codexPhoneTheme") || "simple";
 let threadColorOverrides = readJsonStorage(threadColorStorageKey, {});
 let threadDrafts = readJsonStorage(threadDraftStorageKey, {});
+let terminalScrollPositions = readJsonStorage(terminalScrollStorageKey, {});
+let chatScrollPositions = readJsonStorage(chatScrollStorageKey, {});
+let firstUseHints = readJsonStorage(firstUseHintsStorageKey, {});
+let quickActionState = uiUtils.safeJsonParse
+  ? uiUtils.safeJsonParse(localStorage.getItem(quickActionsStorageKey), {}, { objectOnly: true })
+  : {};
 
 let ws = null;
 let pendingApproval = null;
@@ -180,8 +232,16 @@ if (selectedThread && threadProvider) selectedThreadByProvider.set(threadProvide
 let activeDraftKey = "";
 const threadDraftFiles = new Map();
 let mainViewMode = localStorage.getItem(mainViewStorageKey) === "terminal" ? "terminal" : "chat";
-let terminalFilterMode = "all";
+let terminalFilterMode = localStorage.getItem(terminalFilterStorageKey) || "all";
+let terminalSearchQuery = "";
+let terminalSearchIndex = 0;
 let terminalAutoScroll = true;
+let terminalWrapMode = localStorage.getItem(terminalWrapStorageKey) !== "scroll";
+let terminalFontSize = Math.max(10, Math.min(18, Number(localStorage.getItem(terminalFontSizeStorageKey)) || 12));
+let terminalInputMode = "text";
+let unreadChatCount = 0;
+let unreadTerminalCount = 0;
+let threadSwitchBusy = false;
 const terminalHistories = new Map();
 let swipeStart = null;
 let swipeFeedbackTimer = null;
@@ -214,6 +274,7 @@ const resumeRefreshDebounceMs = 1200;
 const staleSocketMs = 45_000;
 
 function sanitizeHexColor(value) {
+  if (uiUtils.sanitizeHexColor) return uiUtils.sanitizeHexColor(value);
   const text = String(value || "").trim();
   const match = text.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
   if (!match) return "";
@@ -226,6 +287,7 @@ function sanitizeHexColor(value) {
 }
 
 function hashString(value) {
+  if (uiUtils.hashString) return uiUtils.hashString(value);
   let hash = 2166136261;
   for (const char of String(value || "")) {
     hash ^= char.charCodeAt(0);
@@ -235,10 +297,12 @@ function hashString(value) {
 }
 
 function fallbackThreadColor(key) {
+  if (uiUtils.fallbackThreadColor) return uiUtils.fallbackThreadColor(key, threadColorPalette);
   return threadColorPalette[hashString(key || "thread") % threadColorPalette.length];
 }
 
 function contrastColorFor(hex) {
+  if (uiUtils.contrastColorFor) return uiUtils.contrastColorFor(hex);
   const color = sanitizeHexColor(hex) || "#000000";
   const r = Number.parseInt(color.slice(1, 3), 16) / 255;
   const g = Number.parseInt(color.slice(3, 5), 16) / 255;
@@ -299,9 +363,17 @@ function resetThreadColorOverride(key) {
 function applyCurrentThreadAccent() {
   const key = currentThreadColorKey();
   const color = threadColorForKey(key);
+  const contrast = contrastColorFor(color);
   document.documentElement.style.setProperty("--thread-accent", color);
-  document.documentElement.style.setProperty("--thread-accent-contrast", contrastColorFor(color));
+  document.documentElement.style.setProperty("--thread-accent-contrast", contrast);
+  document.documentElement.style.setProperty("--thread-accent-soft", `color-mix(in srgb, ${color} 12%, transparent)`);
+  document.documentElement.style.setProperty("--thread-accent-ring", `color-mix(in srgb, ${color} 42%, transparent)`);
   document.documentElement.dataset.threadColorMode = threadColorOverrides[key] ? "custom" : "auto";
+  if (headerThreadColorButton) {
+    headerThreadColorButton.style.backgroundColor = color;
+    headerThreadColorButton.style.color = contrast;
+    headerThreadColorButton.title = `${threadColorOverrides[key] ? "カスタム" : "自動"} ${color}`;
+  }
 }
 
 const runStateText = {
@@ -319,6 +391,109 @@ const runStateText = {
 };
 const interruptibleRunStates = new Set(["running", "streaming", "approval", "interrupting"]);
 const terminalRunStates = new Set(["ready", "done", "interrupted", "disconnected", "error"]);
+
+function runStateShortLabel(state = currentRunState) {
+  if (state === "approval") return "承認待ち";
+  if (state === "running" || state === "streaming" || state === "syncing" || state === "interrupting") return "稼働中";
+  if (state === "connecting") return "接続中";
+  if (state === "disconnected") return "切断";
+  if (state === "error") return "エラー";
+  return "待機中";
+}
+
+function updateUnreadBadges() {
+  for (const [badge, count] of [
+    [chatUnreadBadge, unreadChatCount],
+    [terminalUnreadBadge, unreadTerminalCount],
+  ]) {
+    if (!badge) continue;
+    badge.textContent = count > 9 ? "9+" : count ? String(count) : "";
+    badge.classList.toggle("hidden", !count);
+  }
+}
+
+function currentThreadIndexInfo() {
+  const threads = visibleThreadsInListOrder();
+  if (!threads.length) return { label: selectedThread ? "1/1" : "新規", index: -1, total: 0 };
+  const index = threads.findIndex((thread) => thread.id === selectedThread);
+  if (index < 0) return { label: selectedThread ? `?/${threads.length}` : `新規/${threads.length}`, index: -1, total: threads.length };
+  return { label: `${index + 1}/${threads.length}`, index, total: threads.length };
+}
+
+function updateHeaderStatus() {
+  if (!threadPositionPill || !threadPositionText || !threadStateText) return;
+  const info = currentThreadIndexInfo();
+  threadPositionText.textContent = info.label;
+  threadStateText.textContent = threadSwitchBusy ? "切替中" : runStateShortLabel();
+  threadPositionPill.dataset.state = threadSwitchBusy ? "switching" : currentRunState;
+  threadPositionPill.disabled = !threadCache.length;
+}
+
+function updateComposerState() {
+  const state = currentRunState;
+  composer.dataset.runState = state;
+  if (state === "approval") promptInput.placeholder = "承認リクエストに対応してください";
+  else if (state === "running" || state === "streaming" || state === "syncing") {
+    promptInput.placeholder = "実行中です。追加指示は必要なら送信できます";
+  } else if (state === "connecting" || state === "disconnected") {
+    promptInput.placeholder = "接続後にフォローアップを送信できます";
+  } else promptInput.placeholder = "フォローアップの変更を求める";
+  if (sendLabel) sendLabel.textContent = mainViewMode === "terminal" ? (state === "approval" ? "承認へ" : state === "disconnected" ? "切断" : state === "running" || state === "streaming" ? "送信" : "Enter ↵") : "送信";
+}
+
+function shortId(value) {
+  const text = String(value || "");
+  if (text.length <= 14) return text;
+  return `${text.slice(0, 8)}...${text.slice(-4)}`;
+}
+
+function updateTerminalHeader() {
+  if (!terminalStatusTitle || !terminalSessionMeta) return;
+  terminalStatusTitle.textContent = `${providerLabel(currentThreadProvider())} CLI TUI`;
+  const connected = connectionReady && ws?.readyState === WebSocket.OPEN;
+  const pieces = [
+    connected ? "connected" : currentRunState === "connecting" ? "connecting" : "disconnected",
+    selectedThread ? shortId(selectedThread) : "new thread",
+    selectedModel || selectedModelLabel,
+    accessMode.sandboxMode,
+    accessMode.approvalPolicy,
+  ].filter(Boolean);
+  terminalSessionMeta.textContent = pieces.join(" / ");
+  mainTerminalView.dataset.state = currentRunState;
+}
+
+function applyTerminalDisplaySettings() {
+  document.documentElement.style.setProperty("--terminal-font-size", `${terminalFontSize}px`);
+  document.body.classList.toggle("terminal-nowrap", !terminalWrapMode);
+  terminalWrapToggle?.classList.toggle("active", terminalWrapMode);
+  terminalWrapToggle?.setAttribute("aria-pressed", String(terminalWrapMode));
+}
+
+function setTerminalFontSize(nextSize) {
+  terminalFontSize = Math.max(10, Math.min(18, Number(nextSize) || 12));
+  localStorage.setItem(terminalFontSizeStorageKey, String(terminalFontSize));
+  applyTerminalDisplaySettings();
+}
+
+function setTerminalFocusMode(enabled) {
+  document.body.classList.toggle("terminal-focus-mode", enabled);
+  try {
+    sessionStorage.setItem(terminalFocusSessionKey, enabled ? "1" : "0");
+  } catch {
+    // Transient only.
+  }
+  if (enabled) {
+    closeRightPanel();
+    setSidebarVisible(false);
+    terminalFocusButton?.setAttribute("aria-label", "ターミナルのフォーカス表示を閉じる");
+    terminalFocusButton.textContent = "Close";
+    mainTerminalView?.focus?.({ preventScroll: true });
+    showToast("ターミナル focus mode");
+  } else if (terminalFocusButton) {
+    terminalFocusButton.setAttribute("aria-label", "ターミナルをフォーカス表示");
+    terminalFocusButton.textContent = "Focus";
+  }
+}
 
 function updateInterruptButton() {
   if (!interruptButton) return;
@@ -345,6 +520,9 @@ function setRunState(state, label) {
   }
   updateInterruptButton();
   updateThreadNavigation();
+  updateHeaderStatus();
+  updateComposerState();
+  updateTerminalHeader();
 }
 
 function applyServerRunState(run = {}) {
@@ -427,6 +605,7 @@ function setSelectedModel(model, { persist = true } = {}) {
     localStorage.setItem("codexPhoneModelLabel", selectedModelLabel);
   }
   updateModelButton();
+  updateTerminalHeader();
 }
 
 function providerSupportsReasoning() {
@@ -599,6 +778,11 @@ function titleForThread(thread) {
   const firstLine = raw.split("\n").find(Boolean) || "";
   if (!firstLine || firstLine === thread.id || isOpaqueThreadId(firstLine)) return "名前未設定のthread";
   return firstLine.length > 54 ? `${firstLine.slice(0, 54)}...` : firstLine;
+}
+
+function setThreadHeading(title) {
+  if (threadTitle) threadTitle.textContent = "稼働中スレッド";
+  if (threadSubtitle) threadSubtitle.textContent = title || "新しい共有thread";
 }
 
 function isOpaqueThreadId(value) {
@@ -892,6 +1076,8 @@ function renderMarkdown(text, options = {}) {
 function stripUiDirectives(text) {
   return String(text || "")
     .replace(/(?:^|\n)::[a-z0-9-]+\{[^\n]*\}(?=\n|$)/gi, "")
+    .replace(/\[CODEX_TASK_COMPLETED\]/g, "\n\n**完了**")
+    .replace(/\[CODEX_TASK_FAILED\]/g, "\n\n**エラー**")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
@@ -1151,6 +1337,7 @@ function addStatus(text) {
 }
 
 function compactWorkspaceLocation(location) {
+  if (uiUtils.compactWorkspacePath) return uiUtils.compactWorkspacePath(location, { keepStart: 1, keepEnd: 1 });
   const value = String(location || "").trim();
   if (!value || value === ".") return value;
   const normalized = value.replace(/\\/g, "/");
@@ -1182,6 +1369,7 @@ function setWorkspaceMeta(meta = {}) {
   const label = empty ? "作業場所を取得できません" : `repo: ${repo || "--"} / 現在地: ${location || "--"} / branch: ${branch || "--"}`;
   workspaceIndicator.title = label;
   workspaceIndicator.setAttribute("aria-label", label);
+  workspaceIndicator.dataset.fullPath = location || repo || "";
   if (!selectedThread) {
     applyCurrentThreadAccent();
     activeDraftKey = currentThreadColorKey();
@@ -1194,8 +1382,12 @@ function setReady(ready) {
   promptInput.disabled = false;
   composer.dataset.ready = ready ? "true" : "false";
   sendButton.title = pendingSubmission ? "送信確認中です" : ready ? "送信" : "接続後に送信できます";
+  if (workspaceConnectionDot) workspaceConnectionDot.dataset.connected = ready ? "true" : "false";
   updateInterruptButton();
   updateThreadNavigation();
+  updateHeaderStatus();
+  updateComposerState();
+  updateTerminalHeader();
 }
 
 function clientMessageId() {
@@ -1239,6 +1431,41 @@ function migrateThreadScopedState(previousKey, nextKey) {
   if (terminalHistories.has(previousKey) && !terminalHistories.has(nextKey)) {
     terminalHistories.set(nextKey, terminalHistories.get(previousKey));
   }
+  if (Object.prototype.hasOwnProperty.call(chatScrollPositions, previousKey) && !Object.prototype.hasOwnProperty.call(chatScrollPositions, nextKey)) {
+    chatScrollPositions[nextKey] = chatScrollPositions[previousKey];
+    delete chatScrollPositions[previousKey];
+    writeJsonStorage(chatScrollStorageKey, chatScrollPositions);
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(terminalScrollPositions, previousKey) &&
+    !Object.prototype.hasOwnProperty.call(terminalScrollPositions, nextKey)
+  ) {
+    terminalScrollPositions[nextKey] = terminalScrollPositions[previousKey];
+    delete terminalScrollPositions[previousKey];
+    writeJsonStorage(terminalScrollStorageKey, terminalScrollPositions);
+  }
+}
+
+function saveScrollPositions() {
+  const key = currentThreadColorKey();
+  if (!key) return;
+  if (log) chatScrollPositions[key] = Math.round(log.scrollTop || 0);
+  if (terminalTranscript) terminalScrollPositions[key] = Math.round(terminalTranscript.scrollTop || 0);
+  writeJsonStorage(chatScrollStorageKey, chatScrollPositions);
+  writeJsonStorage(terminalScrollStorageKey, terminalScrollPositions);
+}
+
+function restoreScrollPositions() {
+  const key = currentThreadColorKey();
+  requestAnimationFrame(() => {
+    if (log && Object.prototype.hasOwnProperty.call(chatScrollPositions, key)) log.scrollTop = chatScrollPositions[key] || 0;
+    if (terminalTranscript && Object.prototype.hasOwnProperty.call(terminalScrollPositions, key) && !liveTurnActive) {
+      terminalTranscript.scrollTop = terminalScrollPositions[key] || 0;
+    } else if (terminalTranscript && liveTurnActive) {
+      terminalTranscript.scrollTop = terminalTranscript.scrollHeight;
+    }
+    updateTerminalLatestButton();
+  });
 }
 
 function currentTerminalHistory() {
@@ -1248,19 +1475,24 @@ function currentTerminalHistory() {
 }
 
 function capTerminalHistory(entries) {
+  if (uiUtils.capTerminalHistory) return uiUtils.capTerminalHistory(entries, terminalHistoryLimit);
   return entries.slice(-terminalHistoryLimit);
 }
 
 function normalizeTerminalKind(kind) {
+  if (uiUtils.normalizeTerminalKind) return uiUtils.normalizeTerminalKind(kind);
   const value = String(kind || "").toLowerCase();
-  if (value === "command" || value === "file" || value === "error") return value;
+  if (["command", "file", "error", "approval", "user", "assistant", "lifecycle"].includes(value)) return value;
   return "status";
 }
 
 function terminalFilterMatches(entry) {
-  if (terminalFilterMode === "all") return true;
-  if (terminalFilterMode === "status") return normalizeTerminalKind(entry.kind) === "status";
-  return normalizeTerminalKind(entry.kind) === terminalFilterMode;
+  if (uiUtils.terminalEntryMatches) {
+    return uiUtils.terminalEntryMatches(entry, { filter: terminalFilterMode, query: terminalSearchQuery });
+  }
+  if (terminalFilterMode !== "all" && normalizeTerminalKind(entry.kind) !== terminalFilterMode) return false;
+  if (!terminalSearchQuery) return true;
+  return `${entry.message || ""}\n${entry.detail || ""}`.toLowerCase().includes(terminalSearchQuery.toLowerCase());
 }
 
 function terminalTimestampLabel(timestamp) {
@@ -1268,20 +1500,47 @@ function terminalTimestampLabel(timestamp) {
   return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
+function filePathFromTerminalEntry(entry = {}) {
+  const text = `${entry.message || ""}\n${entry.detail || ""}`;
+  const match =
+    text.match(/\b((?:docs|public|scripts|src|test|tests)\/[^\s:)]+(?:\.[A-Za-z0-9]+)?)/) ||
+    text.match(/\b([A-Za-z0-9._-]+\.md)\b/);
+  return match ? match[1].replace(/[.,;]+$/, "") : "";
+}
+
+function updateTerminalLatestButton() {
+  if (!terminalLatestButton || !terminalTranscript) return;
+  const nearBottom =
+    terminalTranscript.scrollHeight - terminalTranscript.scrollTop - terminalTranscript.clientHeight < 40;
+  terminalLatestButton.classList.toggle("hidden", terminalAutoScroll || nearBottom);
+}
+
+function updateTerminalFilterControls() {
+  if (terminalFilter) terminalFilter.value = terminalFilterMode;
+  for (const chip of terminalFilterChips) {
+    const active = chip.dataset.terminalFilter === terminalFilterMode;
+    chip.classList.toggle("active", active);
+    chip.setAttribute("aria-pressed", String(active));
+  }
+}
+
 function renderTerminalTranscript() {
   if (!terminalTranscript) return;
   const entries = currentTerminalHistory().filter(terminalFilterMatches);
+  const query = terminalSearchQuery.trim().toLowerCase();
   terminalTranscript.replaceChildren();
+  if (terminalSearchCount) terminalSearchCount.textContent = query ? String(entries.length) : String(currentTerminalHistory().length);
   if (!entries.length) {
     const empty = document.createElement("div");
     empty.className = "terminal-empty";
-    empty.textContent = "このスレッドのターミナルログはまだありません。";
+    empty.textContent = query ? "検索条件に一致するログはありません。" : "このスレッドのターミナルログはまだありません。";
     terminalTranscript.appendChild(empty);
     return;
   }
-  for (const entry of entries) {
+  terminalSearchIndex = Math.min(Math.max(0, terminalSearchIndex), Math.max(0, entries.length - 1));
+  for (const [index, entry] of entries.entries()) {
     const row = document.createElement("div");
-    row.className = `terminal-line ${normalizeTerminalKind(entry.kind)}`;
+    row.className = `terminal-line ${normalizeTerminalKind(entry.kind)}${query && index === terminalSearchIndex ? " search-active" : ""}`;
     const time = document.createElement("time");
     time.dateTime = new Date(Number(entry.ts) || Date.now()).toISOString();
     time.textContent = terminalTimestampLabel(entry.ts);
@@ -1292,6 +1551,15 @@ function renderTerminalTranscript() {
     message.className = "terminal-message";
     message.textContent = entry.message || "";
     row.append(time, kind, message);
+    const filePath = filePathFromTerminalEntry(entry);
+    if (filePath) {
+      const openFile = document.createElement("button");
+      openFile.type = "button";
+      openFile.className = "terminal-open-file";
+      openFile.textContent = "Preview";
+      openFile.addEventListener("click", () => showArtifact(filePath));
+      row.appendChild(openFile);
+    }
     if (entry.detail) {
       const detail = document.createElement("pre");
       detail.className = "terminal-detail";
@@ -1301,31 +1569,42 @@ function renderTerminalTranscript() {
     terminalTranscript.appendChild(row);
   }
   if (terminalAutoScroll) terminalTranscript.scrollTop = terminalTranscript.scrollHeight;
+  updateTerminalLatestButton();
 }
 
 function appendTerminalEntry(entry, { key = currentThreadColorKey() } = {}) {
   if (!entry) return;
-  const normalized = {
-    id: entry.id || `client-terminal-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-    ts: Number(entry.ts) || Date.now(),
-    kind: normalizeTerminalKind(entry.kind),
-    message: String(entry.message || "").slice(0, 1200),
-    detail: entry.detail ? String(entry.detail).slice(0, 4000) : "",
-  };
+  const normalized = uiUtils.normalizeTerminalEntry
+    ? uiUtils.normalizeTerminalEntry(entry)
+    : {
+        id: entry.id || `client-terminal-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        ts: Number(entry.ts) || Date.now(),
+        kind: normalizeTerminalKind(entry.kind),
+        message: String(entry.message || "").slice(0, 1200),
+        detail: entry.detail ? String(entry.detail).slice(0, 4000) : "",
+      };
   const history = capTerminalHistory([...(terminalHistories.get(key) || []), normalized]);
   terminalHistories.set(key, history);
+  if (key === currentThreadColorKey() && mainViewMode !== "terminal") {
+    unreadTerminalCount += 1;
+    updateUnreadBadges();
+  }
   if (key === currentThreadColorKey()) renderTerminalTranscript();
 }
 
 function replaceTerminalHistory(entries = [], { key = currentThreadColorKey() } = {}) {
   const normalized = capTerminalHistory(
-    (entries || []).map((entry) => ({
-      id: entry.id || `terminal-${entry.ts || Date.now()}-${Math.random().toString(16).slice(2)}`,
-      ts: Number(entry.ts) || Date.now(),
-      kind: normalizeTerminalKind(entry.kind),
-      message: String(entry.message || "").slice(0, 1200),
-      detail: entry.detail ? String(entry.detail).slice(0, 4000) : "",
-    })),
+    (entries || []).map((entry) =>
+      uiUtils.normalizeTerminalEntry
+        ? uiUtils.normalizeTerminalEntry(entry)
+        : {
+            id: entry.id || `terminal-${entry.ts || Date.now()}-${Math.random().toString(16).slice(2)}`,
+            ts: Number(entry.ts) || Date.now(),
+            kind: normalizeTerminalKind(entry.kind),
+            message: String(entry.message || "").slice(0, 1200),
+            detail: entry.detail ? String(entry.detail).slice(0, 4000) : "",
+          },
+    ),
   );
   terminalHistories.set(key, normalized);
   if (key === currentThreadColorKey()) renderTerminalTranscript();
@@ -1355,11 +1634,29 @@ function terminalEntryFromMessage(msg) {
     return { ts: now, kind, message: text };
   }
   if (msg.type === "error") return { ts: now, kind: "error", message: msg.text || "エラー" };
-  if (msg.type === "approval") return { ts: now, kind: "status", message: `approval requested: ${msg.request?.method || "request"}` };
-  if (msg.type === "turn") return { ts: now, kind: "status", message: `turn ${msg.status || "updated"}${msg.turnId ? `: ${msg.turnId}` : ""}` };
-  if (msg.type === "user") return { ts: now, kind: "status", message: "user prompt sent" };
+  if (msg.type === "approval") return { ts: now, kind: "approval", message: `approval requested: ${msg.request?.method || "request"}` };
+  if (msg.type === "turn") return { ts: now, kind: "lifecycle", message: `turn ${msg.status || "updated"}${msg.turnId ? `: ${msg.turnId}` : ""}` };
+  if (msg.type === "user") return { ts: now, kind: "user", message: "user prompt sent" };
   if (msg.type === "event" && msg.event?.method) return { ts: now, kind: "status", message: `event: ${msg.event.method}` };
   return null;
+}
+
+function approvalLabelForRequest(request = {}) {
+  const method = String(request.method || "");
+  if (/commandExecution/i.test(method)) return "コマンド";
+  if (/fileChange/i.test(method)) return "ファイル変更";
+  if (/applyPatch|write|edit/i.test(JSON.stringify(request.params || {}))) return "変更";
+  return "確認";
+}
+
+function renderApprovalRequest(request) {
+  const label = approvalLabelForRequest(request);
+  if (approvalKind) approvalKind.textContent = label;
+  if (approvalSummary) approvalSummary.textContent = `${label}の承認が必要です`;
+  approvalText.textContent = JSON.stringify(request?.params || request || {}, null, 2);
+  if (approvalReason) approvalReason.value = "";
+  approval.classList.remove("hidden");
+  appendTerminalEntry({ ts: Date.now(), kind: "approval", message: `${label} approval pending` });
 }
 
 function handleTerminalMessage(msg) {
@@ -1565,6 +1862,7 @@ function renderThreadList() {
     threadList.appendChild(empty);
   }
   updateThreadNavigation();
+  renderThreadSwitcher();
 }
 
 function adjacentThread(direction) {
@@ -1578,15 +1876,34 @@ function adjacentThread(direction) {
 function updateThreadNavigation() {
   const previous = adjacentThread(-1);
   const next = adjacentThread(1);
-  const disabledByRun = liveTurnActive;
+  const disabledByRun = liveTurnActive || Boolean(pendingApproval) || threadSwitchBusy;
   if (prevThreadButton) {
     prevThreadButton.disabled = disabledByRun || !previous;
-    prevThreadButton.title = disabledByRun ? "実行中はスレッド移動を止めています" : previous ? `前: ${titleForThread(previous)}` : "前のスレッドはありません";
+    prevThreadButton.title = disabledByRun
+      ? pendingApproval
+        ? "承認待ちのためスレッド移動を止めています"
+        : threadSwitchBusy
+          ? "スレッド切替中です"
+          : "実行中はスレッド移動を止めています"
+      : previous
+        ? `← 前: ${titleForThread(previous)}`
+        : "前のスレッドはありません";
+    prevThreadButton.setAttribute("aria-label", prevThreadButton.title);
   }
   if (nextThreadButton) {
     nextThreadButton.disabled = disabledByRun || !next;
-    nextThreadButton.title = disabledByRun ? "実行中はスレッド移動を止めています" : next ? `次: ${titleForThread(next)}` : "次のスレッドはありません";
+    nextThreadButton.title = disabledByRun
+      ? pendingApproval
+        ? "承認待ちのためスレッド移動を止めています"
+        : threadSwitchBusy
+          ? "スレッド切替中です"
+          : "実行中はスレッド移動を止めています"
+      : next
+        ? `次 →: ${titleForThread(next)}`
+        : "次のスレッドはありません";
+    nextThreadButton.setAttribute("aria-label", nextThreadButton.title);
   }
+  updateHeaderStatus();
 }
 
 function showSwipeFeedback(text) {
@@ -1602,9 +1919,24 @@ function showSwipeFeedback(text) {
   }, 1800);
 }
 
+function showToast(text, tone = "") {
+  if (!toastStack) {
+    showSwipeFeedback(text);
+    return;
+  }
+  const toast = document.createElement("div");
+  toast.className = tone ? `toast ${tone}` : "toast";
+  toast.textContent = text;
+  toastStack.appendChild(toast);
+  window.setTimeout(() => {
+    toast.classList.add("leaving");
+    window.setTimeout(() => toast.remove(), 180);
+  }, 1900);
+}
+
 function selectAdjacentThread(direction, source = "button") {
-  if (liveTurnActive) {
-    showSwipeFeedback("実行中はスレッド切り替えを止めています。");
+  if (liveTurnActive || pendingApproval || threadSwitchBusy) {
+    showSwipeFeedback(pendingApproval ? "承認待ちのためスレッド切り替えを止めています。" : "実行中はスレッド切り替えを止めています。");
     return;
   }
   const target = adjacentThread(direction);
@@ -1613,6 +1945,7 @@ function selectAdjacentThread(direction, source = "button") {
     return;
   }
   selectThread(target.id);
+  showToast(`${direction > 0 ? "次" : "前"}のスレッドへ切り替えました。`);
   showSwipeFeedback(`${direction > 0 ? "次" : "前"}のスレッドへ切り替えました。`);
   if (source === "swipe") addStatus(`${direction > 0 ? "左" : "右"}スワイプでスレッドを切り替えました。`);
 }
@@ -1623,12 +1956,57 @@ function showInitialSwipeHint() {
   window.setTimeout(() => showSwipeFeedback("左右スワイプで前後のスレッドへ移動できます。"), 800);
 }
 
+function renderThreadSwitcher() {
+  if (!threadSwitcherList) return;
+  threadSwitcherList.replaceChildren();
+  const threads = visibleThreadsInListOrder();
+  if (!threads.length) {
+    const empty = document.createElement("div");
+    empty.className = "thread-switcher-empty";
+    empty.textContent = "表示中のスレッドはありません。";
+    threadSwitcherList.appendChild(empty);
+    return;
+  }
+  for (const thread of threads) {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = thread.id === selectedThread ? "thread-switcher-row active" : "thread-switcher-row";
+    row.disabled = threadSwitchBusy || liveTurnActive || Boolean(pendingApproval);
+    const dot = document.createElement("span");
+    dot.className = "thread-switcher-dot";
+    dot.style.backgroundColor = threadColorForThread(thread);
+    const main = document.createElement("span");
+    main.className = "thread-switcher-main";
+    const title = document.createElement("strong");
+    title.textContent = titleForThread(thread);
+    const metaLine = document.createElement("small");
+    metaLine.textContent = `${formatRelativeTime(thread.updatedAt || thread.createdAt) || "now"} / ${thread.id === selectedThread ? runStateShortLabel() : "待機中"}`;
+    main.append(title, metaLine);
+    row.append(dot, main);
+    row.addEventListener("click", () => {
+      if (thread.id !== selectedThread) selectThread(thread.id);
+      closeThreadSwitcher();
+    });
+    threadSwitcherList.appendChild(row);
+  }
+}
+
+function openThreadSwitcher() {
+  renderThreadSwitcher();
+  threadSwitcher?.classList.remove("hidden");
+  closeThreadSwitcherButton?.focus({ preventScroll: true });
+}
+
+function closeThreadSwitcher() {
+  threadSwitcher?.classList.add("hidden");
+}
+
 function isSwipeIgnoredTarget(target) {
-  if (mainViewMode === "terminal" || liveTurnActive) return true;
+  if (mainViewMode === "terminal" || liveTurnActive || pendingApproval || threadSwitchBusy || document.body.classList.contains("terminal-focus-mode")) return true;
   if (!window.matchMedia("(max-width: 820px)").matches) return true;
   return Boolean(
     target.closest(
-      "textarea,input,button,select,a,[role='button'],[role='menu'],dialog,.model-menu,.prompt-modal,.approval,.terminal-view,.artifact-panel,.sidebar,.sidebar-scrim",
+      "textarea,input,button,select,a,pre,code,[role='button'],[role='menu'],dialog,.model-menu,.prompt-modal,.approval,.terminal-view,.terminal-ops,.artifact-panel,.sidebar,.sidebar-scrim,.thread-switcher,.thread-color-popover,.image-gallery",
     ),
   );
 }
@@ -1655,19 +2033,32 @@ function handleSwipeEnd(event) {
 }
 
 function setMainView(view) {
+  saveScrollPositions();
   mainViewMode = view === "terminal" ? "terminal" : "chat";
   localStorage.setItem(mainViewStorageKey, mainViewMode);
   log.classList.toggle("hidden", mainViewMode !== "chat");
   mainTerminalView.classList.toggle("hidden", mainViewMode !== "terminal");
+  terminalOps?.classList.toggle("hidden", mainViewMode !== "terminal");
   chatViewButton.classList.toggle("active", mainViewMode === "chat");
   terminalViewButton.classList.toggle("active", mainViewMode === "terminal");
   chatViewButton.setAttribute("aria-pressed", String(mainViewMode === "chat"));
   terminalViewButton.setAttribute("aria-pressed", String(mainViewMode === "terminal"));
+  chatViewButton.setAttribute("aria-selected", String(mainViewMode === "chat"));
+  terminalViewButton.setAttribute("aria-selected", String(mainViewMode === "terminal"));
   document.body.dataset.mainView = mainViewMode;
-  if (mainViewMode === "terminal") renderTerminalTranscript();
+  if (mainViewMode === "terminal") {
+    unreadTerminalCount = 0;
+    renderTerminalTranscript();
+  } else {
+    unreadChatCount = 0;
+  }
+  updateUnreadBadges();
+  updateComposerState();
+  restoreScrollPositions();
 }
 
-function renderThreadColorSettings(thread = null) {
+function renderThreadColorSettings(thread = null, options = {}) {
+  const container = options.container || artifactList;
   const target = thread || threadCache.find((candidate) => candidate.id === selectedThread) || {
     provider: currentThreadProvider(),
     cwd: currentWorkspace.workspaceLocation || currentWorkspace.repoName || "",
@@ -1698,14 +2089,17 @@ function renderThreadColorSettings(thread = null) {
   for (const color of threadColorPalette) {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = sanitizeHexColor(color) === activeColor && customColor ? "active" : "";
+    button.className = sanitizeHexColor(color) === activeColor ? "active" : "";
     button.style.backgroundColor = color;
     button.title = color;
     button.setAttribute("aria-label", `スレッド色 ${color}`);
+    if (sanitizeHexColor(color) === activeColor) button.textContent = "✓";
     button.addEventListener("click", () => {
       setThreadColorOverride(key, color);
       if (!thread || thread.id === selectedThread) applyCurrentThreadAccent();
-      openThreadColorPanel(thread);
+      showToast(`スレッド色を ${color} に変更しました。`);
+      if (options.inline) openThreadColorPopover(thread);
+      else openThreadColorPanel(thread);
     });
     palette.appendChild(button);
   }
@@ -1722,7 +2116,9 @@ function renderThreadColorSettings(thread = null) {
   applyButton.textContent = "適用";
   applyButton.addEventListener("click", () => {
     setThreadColorOverride(key, input.value);
-    openThreadColorPanel(thread);
+    showToast(`スレッド色を ${sanitizeHexColor(input.value)} に変更しました。`);
+    if (options.inline) openThreadColorPopover(thread);
+    else openThreadColorPanel(thread);
   });
   const resetButton = document.createElement("button");
   resetButton.type = "button";
@@ -1730,18 +2126,58 @@ function renderThreadColorSettings(thread = null) {
   resetButton.textContent = "自動色に戻す";
   resetButton.addEventListener("click", () => {
     resetThreadColorOverride(key);
-    openThreadColorPanel(thread);
+    showToast("スレッド色を自動に戻しました。");
+    if (options.inline) openThreadColorPopover(thread);
+    else openThreadColorPanel(thread);
   });
-  customRow.append(input, applyButton, resetButton);
+  const copyButton = document.createElement("button");
+  copyButton.type = "button";
+  copyButton.className = "secondary";
+  copyButton.textContent = "色をコピー";
+  copyButton.addEventListener("click", async () => {
+    try {
+      await copyTextToClipboard(activeColor);
+      showToast("色コードをコピーしました。");
+    } catch (error) {
+      addStatus(`色コードをコピーできませんでした: ${error.message}`);
+    }
+  });
+  customRow.append(input, applyButton, resetButton, copyButton);
   group.appendChild(customRow);
 
-  artifactList.appendChild(group);
+  container.appendChild(group);
 }
 
 function openThreadColorPanel(thread = null) {
   clearPanel("スレッド色", "workspace");
   artifactList.replaceChildren();
   renderThreadColorSettings(thread);
+}
+
+function openThreadColorPopover(thread = null) {
+  if (!threadColorPopover) {
+    openThreadColorPanel(thread);
+    return;
+  }
+  threadColorPopover.replaceChildren();
+  const header = document.createElement("div");
+  header.className = "thread-color-popover-header";
+  const title = document.createElement("strong");
+  title.textContent = "スレッド色";
+  const close = document.createElement("button");
+  close.type = "button";
+  close.textContent = "×";
+  close.setAttribute("aria-label", "スレッド色を閉じる");
+  close.addEventListener("click", closeThreadColorPopover);
+  header.append(title, close);
+  threadColorPopover.appendChild(header);
+  renderThreadColorSettings(thread, { container: threadColorPopover, inline: true });
+  threadColorPopover.classList.remove("hidden");
+  close.focus({ preventScroll: true });
+}
+
+function closeThreadColorPopover() {
+  threadColorPopover?.classList.add("hidden");
 }
 
 function authQuery() {
@@ -1878,7 +2314,7 @@ function resetMissingSelectedThread(threadId) {
   selectedThread = "";
   lastHistorySignature = "";
   renderHistory([]);
-  threadTitle.textContent = "新しい共有thread";
+  setThreadHeading("新しい共有thread");
   updateUrlThread();
   renderThreadList();
   restoreDraftForCurrentThread();
@@ -1917,7 +2353,7 @@ function syncReadyThread(threadId) {
   selectedThread = threadId;
   updateUrlThread();
   const selected = threadCache.find((thread) => thread.id === selectedThread);
-  threadTitle.textContent = selected ? titleForThread(selected) : "新しい共有thread";
+  setThreadHeading(selected ? titleForThread(selected) : "新しい共有thread");
   const nextKey = currentThreadColorKey();
   migrateThreadScopedState(previousKey, nextKey);
   activeDraftKey = nextKey;
@@ -1927,7 +2363,11 @@ function syncReadyThread(threadId) {
 }
 
 function selectThread(threadId) {
+  saveScrollPositions();
   saveDraftForActiveThread();
+  threadSwitchBusy = true;
+  updateThreadNavigation();
+  updateHeaderStatus();
   selectedThread = threadId;
   selectedThreadByProvider.set(currentThreadProvider(), selectedThread);
   updateUrlThread();
@@ -1936,8 +2376,15 @@ function selectThread(threadId) {
   renderTerminalTranscript();
   renderThreadList();
   setSidebarVisible(false);
+  closeThreadSwitcher();
+  restoreScrollPositions();
   connect();
   if (selectedThread) refreshSelectedThread();
+  window.setTimeout(() => {
+    threadSwitchBusy = false;
+    updateThreadNavigation();
+    updateHeaderStatus();
+  }, 420);
 }
 
 function showRightPanel() {
@@ -2238,6 +2685,10 @@ function renderExtensionPanel() {
 
 function renderArtifactIndex(items) {
   artifactItems = items;
+  if (menuButton) {
+    menuButton.dataset.badge = artifactItems.length ? String(Math.min(artifactItems.length, 99)) : "";
+    menuButton.setAttribute("aria-label", artifactItems.length ? `メニュー。アーティファクト ${artifactItems.length} 件` : "メニュー");
+  }
   activeArtifactPath = "";
   setActivePanelTab("artifacts");
   artifactTitle.textContent = "アーティファクト";
@@ -2783,6 +3234,113 @@ function renderAttachments() {
   }
 }
 
+const defaultQuickActions = [
+  { id: "continue", label: "続けて", text: "続けてください。" },
+  { id: "summary", label: "要約", text: "ここまでの状況を短く要約してください。" },
+  { id: "diff", label: "差分確認", text: "現在の差分を確認して、重要な変更点とリスクを教えてください。" },
+  { id: "test", label: "テストして", text: "関連するテストを実行して、失敗があれば修正してください。" },
+  { id: "next", label: "次の作業", text: "次に進めるべき作業を具体的に提案してください。" },
+  { id: "pr", label: "PR向け要約", text: "PR向けの変更概要と検証結果をまとめてください。" },
+  { id: "save", label: "保存", text: "再利用できる決定事項があれば project docs に簡潔に保存してください。" },
+];
+
+function renderQuickActions() {
+  if (!quickActions) return;
+  const usage = quickActionState.usage && typeof quickActionState.usage === "object" ? quickActionState.usage : {};
+  const sorted = [...defaultQuickActions].sort((a, b) => (usage[b.id] || 0) - (usage[a.id] || 0));
+  quickActions.replaceChildren();
+  for (const action of sorted.slice(0, 6)) {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "quick-action-chip";
+    chip.textContent = action.label;
+    chip.addEventListener("click", () => {
+      insertPromptText(action.text);
+      quickActionState = { ...quickActionState, usage: { ...usage, [action.id]: (usage[action.id] || 0) + 1 } };
+      try {
+        localStorage.setItem(quickActionsStorageKey, JSON.stringify(quickActionState));
+      } catch {
+        // Non-critical ordering preference.
+      }
+      renderQuickActions();
+      showToast(`${action.label}を入力しました。`);
+    });
+    quickActions.appendChild(chip);
+  }
+}
+
+function insertPromptText(text) {
+  const value = String(text || "");
+  const start = promptInput.selectionStart ?? promptInput.value.length;
+  const end = promptInput.selectionEnd ?? promptInput.value.length;
+  promptInput.value = `${promptInput.value.slice(0, start)}${value}${promptInput.value.slice(end)}`;
+  const nextPosition = start + value.length;
+  promptInput.focus();
+  promptInput.setSelectionRange(nextPosition, nextPosition);
+  saveDraftForActiveThread();
+}
+
+function setTerminalInputMode(mode) {
+  terminalInputMode = mode === "keys" ? "keys" : "text";
+  terminalTextModeButton?.classList.toggle("active", terminalInputMode === "text");
+  terminalKeysModeButton?.classList.toggle("active", terminalInputMode === "keys");
+  terminalTextModeButton?.setAttribute("aria-pressed", String(terminalInputMode === "text"));
+  terminalKeysModeButton?.setAttribute("aria-pressed", String(terminalInputMode === "keys"));
+  appendTerminalEntry({ ts: Date.now(), kind: "lifecycle", message: `terminal input mode: ${terminalInputMode}` });
+}
+
+function showTerminalHelper(text) {
+  if (!terminalHelper) return;
+  terminalHelper.textContent = text;
+  terminalHelper.classList.remove("hidden");
+  window.setTimeout(() => terminalHelper.classList.add("hidden"), 2600);
+}
+
+function handleTerminalKey(key) {
+  if (key === "folder") {
+    showTerminalHelper("フォルダ: 添付またはファイル参照のためにファイル選択を開きます。");
+    fileInput.click();
+    return;
+  }
+  if ((uiUtils.shouldConfirmDangerousKey && uiUtils.shouldConfirmDangerousKey(key)) || key === "Ctrl+C") {
+    if (!interruptibleRunStates.has(currentRunState)) {
+      showTerminalHelper("Ctrl+C: 中断できる実行中タスクはありません。");
+      return;
+    }
+    if (!window.confirm("実行中の処理へ中断要求を送ります。続けますか？")) return;
+    interruptButton.click();
+    appendTerminalEntry({ ts: Date.now(), kind: "lifecycle", message: "danger key confirmed: Ctrl+C" });
+    return;
+  }
+  if (key === "Ctrl+L") {
+    terminalHistories.set(currentThreadColorKey(), []);
+    renderTerminalTranscript();
+    showToast("表示中のターミナルログをクリアしました。");
+    appendTerminalEntry({ ts: Date.now(), kind: "lifecycle", message: "client terminal view cleared" });
+    return;
+  }
+  if (key === "Backspace") {
+    const start = promptInput.selectionStart ?? promptInput.value.length;
+    const end = promptInput.selectionEnd ?? promptInput.value.length;
+    if (start !== end) promptInput.value = `${promptInput.value.slice(0, start)}${promptInput.value.slice(end)}`;
+    else if (start > 0) promptInput.value = `${promptInput.value.slice(0, start - 1)}${promptInput.value.slice(start)}`;
+    const next = Math.max(0, start - 1);
+    promptInput.focus();
+    promptInput.setSelectionRange(next, next);
+    saveDraftForActiveThread();
+    return;
+  }
+  const text = uiUtils.keyIntentText ? uiUtils.keyIntentText(key) : key;
+  if (key === "$") showTerminalHelper("$ は shell 直接実行ではなく、Codex への安全な実行依頼テンプレートを挿入します。");
+  if (key === "/") showTerminalHelper("/ から Codex slash command や作業指示を書き始められます。");
+  if (terminalInputMode === "keys" && text.startsWith("[") && text.endsWith("]")) {
+    insertPromptText(`TUIで ${text} キー相当の操作をしてください。`);
+  } else {
+    insertPromptText(text);
+  }
+  appendTerminalEntry({ ts: Date.now(), kind: "user", message: `key intent: ${key}` });
+}
+
 function formatBytes(bytes) {
   const value = Number(bytes || 0);
   if (value >= 1024 * 1024) return `${(value / 1024 / 1024).toFixed(value >= 10 * 1024 * 1024 ? 0 : 1)}MB`;
@@ -2873,7 +3431,7 @@ function connect({ preserveHistory = false } = {}) {
     renderHistory([]);
   }
   const selected = threadCache.find((thread) => thread.id === selectedThread);
-  threadTitle.textContent = selected ? titleForThread(selected) : "新しい共有thread";
+  setThreadHeading(selected ? titleForThread(selected) : "新しい共有thread");
 
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   const threadParam = selectedThread ? `&thread=${encodeURIComponent(selectedThread)}` : "";
@@ -2940,6 +3498,10 @@ function connect({ preserveHistory = false } = {}) {
     }
     if (msg.type === "assistantDelta") {
       setRunState("streaming");
+      if (mainViewMode !== "chat") {
+        unreadChatCount += 1;
+        updateUnreadBadges();
+      }
       if (!assistantEntry) {
         assistantEntry = addEntry("assistant", "", [], {
           outputGroup: liveOutputGroup || `live-${Date.now()}`,
@@ -2954,8 +3516,8 @@ function connect({ preserveHistory = false } = {}) {
       pendingApproval = msg.request;
       setRunState("approval");
       updateThreadNavigation();
-      approvalText.textContent = JSON.stringify(msg.request.params, null, 2);
-      approval.classList.remove("hidden");
+      renderApprovalRequest(msg.request);
+      showToast("承認リクエストがあります。", "approval");
       return;
     }
     if (msg.type === "turn" && msg.status === "started") {
@@ -3083,7 +3645,8 @@ interruptButton.addEventListener("click", () => {
 approveButton.addEventListener("click", () => {
   if (!pendingApproval) return;
   ws.send(JSON.stringify({ type: "approval", token, decision: "accept", request: pendingApproval }));
-  appendTerminalEntry({ ts: Date.now(), kind: "status", message: "approval accepted" });
+  appendTerminalEntry({ ts: Date.now(), kind: "approval", message: "approval accepted" });
+  showToast("承認を送信しました。");
   approval.classList.add("hidden");
   pendingApproval = null;
   setRunState("running", "承認済み・処理中");
@@ -3091,8 +3654,10 @@ approveButton.addEventListener("click", () => {
 
 declineButton.addEventListener("click", () => {
   if (!pendingApproval) return;
+  const reason = approvalReason?.value?.trim();
   ws.send(JSON.stringify({ type: "approval", token, decision: "decline", request: pendingApproval }));
-  appendTerminalEntry({ ts: Date.now(), kind: "status", message: "approval declined" });
+  appendTerminalEntry({ ts: Date.now(), kind: "approval", message: reason ? `approval declined: ${reason}` : "approval declined" });
+  showToast("拒否を送信しました。");
   approval.classList.add("hidden");
   pendingApproval = null;
   setRunState("running", "拒否済み・処理中");
@@ -3128,18 +3693,53 @@ chatViewButton.addEventListener("click", () => setMainView("chat"));
 terminalViewButton.addEventListener("click", () => setMainView("terminal"));
 terminalFilter.addEventListener("change", () => {
   terminalFilterMode = terminalFilter.value || "all";
+  localStorage.setItem(terminalFilterStorageKey, terminalFilterMode);
+  updateTerminalFilterControls();
+  renderTerminalTranscript();
+});
+for (const chip of terminalFilterChips) {
+  chip.addEventListener("click", () => {
+    terminalFilterMode = chip.dataset.terminalFilter || "all";
+    localStorage.setItem(terminalFilterStorageKey, terminalFilterMode);
+    terminalSearchIndex = 0;
+    updateTerminalFilterControls();
+    renderTerminalTranscript();
+  });
+}
+terminalSearchInput?.addEventListener("input", () => {
+  terminalSearchQuery = terminalSearchInput.value || "";
+  terminalSearchIndex = 0;
+  renderTerminalTranscript();
+});
+terminalSearchPrevButton?.addEventListener("click", () => {
+  terminalSearchIndex = Math.max(0, terminalSearchIndex - 1);
+  renderTerminalTranscript();
+});
+terminalSearchNextButton?.addEventListener("click", () => {
+  terminalSearchIndex += 1;
+  renderTerminalTranscript();
+});
+terminalWrapToggle?.addEventListener("click", () => {
+  terminalWrapMode = !terminalWrapMode;
+  localStorage.setItem(terminalWrapStorageKey, terminalWrapMode ? "wrap" : "scroll");
+  applyTerminalDisplaySettings();
   renderTerminalTranscript();
 });
 terminalAutoScrollButton.addEventListener("click", () => {
   terminalAutoScroll = !terminalAutoScroll;
   terminalAutoScrollButton.classList.toggle("active", terminalAutoScroll);
   terminalAutoScrollButton.setAttribute("aria-pressed", String(terminalAutoScroll));
-  if (terminalAutoScroll) renderTerminalTranscript();
+  if (terminalAutoScroll) {
+    terminalTranscript.scrollTop = terminalTranscript.scrollHeight;
+    renderTerminalTranscript();
+  } else {
+    showToast("ターミナル auto-scroll を一時停止しました。");
+  }
 });
 terminalClearButton.addEventListener("click", () => {
   terminalHistories.set(currentThreadColorKey(), []);
   renderTerminalTranscript();
-  showSwipeFeedback("表示中のターミナルログをクリアしました。");
+  showToast("表示中のターミナルログだけをクリアしました。");
 });
 terminalCopyButton.addEventListener("click", async () => {
   const text = currentTerminalHistory()
@@ -3148,9 +3748,52 @@ terminalCopyButton.addEventListener("click", async () => {
     .join("\n");
   try {
     await copyTextToClipboard(text);
-    showSwipeFeedback("表示中のターミナルログをコピーしました。");
+    showToast("表示中のターミナルログをコピーしました。");
   } catch (error) {
     addStatus(`ターミナルログをコピーできませんでした: ${error.message}`);
+  }
+});
+terminalLatestButton?.addEventListener("click", () => {
+  terminalAutoScroll = true;
+  terminalAutoScrollButton.classList.add("active");
+  terminalAutoScrollButton.setAttribute("aria-pressed", "true");
+  terminalTranscript.scrollTop = terminalTranscript.scrollHeight;
+  updateTerminalLatestButton();
+});
+terminalTranscript?.addEventListener("scroll", () => {
+  saveScrollPositions();
+  const nearBottom = terminalTranscript.scrollHeight - terminalTranscript.scrollTop - terminalTranscript.clientHeight < 40;
+  if (!nearBottom && terminalAutoScroll) {
+    terminalAutoScroll = false;
+    terminalAutoScrollButton.classList.remove("active");
+    terminalAutoScrollButton.setAttribute("aria-pressed", "false");
+    showToast("ターミナル auto-scroll を一時停止しました。");
+  }
+  updateTerminalLatestButton();
+});
+log?.addEventListener("scroll", saveScrollPositions);
+terminalFontDownButton?.addEventListener("click", () => setTerminalFontSize(terminalFontSize - 1));
+terminalFontResetButton?.addEventListener("click", () => setTerminalFontSize(12));
+terminalFontUpButton?.addEventListener("click", () => setTerminalFontSize(terminalFontSize + 1));
+terminalFocusButton?.addEventListener("click", () => setTerminalFocusMode(!document.body.classList.contains("terminal-focus-mode")));
+terminalTextModeButton?.addEventListener("click", () => setTerminalInputMode("text"));
+terminalKeysModeButton?.addEventListener("click", () => setTerminalInputMode("keys"));
+terminalOps?.addEventListener("click", (event) => {
+  const keyButton = event.target.closest("[data-terminal-key]");
+  if (!keyButton) return;
+  handleTerminalKey(keyButton.dataset.terminalKey);
+});
+threadPositionPill?.addEventListener("click", openThreadSwitcher);
+closeThreadSwitcherButton?.addEventListener("click", closeThreadSwitcher);
+headerThreadColorButton?.addEventListener("click", () => openThreadColorPopover());
+workspaceIndicator?.addEventListener("click", async () => {
+  const fullPath = workspaceIndicator.dataset.fullPath || currentWorkspace.workspaceLocation || "";
+  if (!fullPath) return;
+  try {
+    await copyTextToClipboard(fullPath);
+    showToast("作業パスをコピーしました。");
+  } catch {
+    showToast(fullPath);
   }
 });
 if (window.visualViewport) {
@@ -3226,6 +3869,7 @@ accessButton.addEventListener("click", () => {
   const index = accessModes.findIndex((candidate) => candidate.label === accessMode.label);
   accessMode = accessModes[(index + 1) % accessModes.length];
   accessButton.textContent = accessMode.label;
+  updateTerminalHeader();
   addStatus(`権限を ${accessMode.label} に切り替えました。次の送信から反映します。`);
 });
 thinkingButton.addEventListener("click", toggleModelMenu);
@@ -3251,6 +3895,20 @@ document.addEventListener("click", (event) => {
   if (modelMenu.classList.contains("hidden")) return;
   if (modelMenu.contains(event.target) || modelButton.contains(event.target) || thinkingButton.contains(event.target)) return;
   closeModelMenu();
+});
+document.addEventListener("click", (event) => {
+  if (!threadColorPopover?.classList.contains("hidden")) {
+    if (!threadColorPopover.contains(event.target) && !headerThreadColorButton?.contains(event.target)) closeThreadColorPopover();
+  }
+  if (!threadSwitcher?.classList.contains("hidden")) {
+    if (!threadSwitcher.contains(event.target) && !threadPositionPill?.contains(event.target)) closeThreadSwitcher();
+  }
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  if (document.body.classList.contains("terminal-focus-mode")) setTerminalFocusMode(false);
+  closeThreadColorPopover();
+  closeThreadSwitcher();
 });
 document.querySelector(".conversation").addEventListener("touchstart", handleSwipeStart, { passive: true });
 document.querySelector(".conversation").addEventListener("touchend", handleSwipeEnd, { passive: true });
@@ -3285,8 +3943,16 @@ window.addEventListener("online", () => recoverFromPageResume("ネットワー�
 setReady(false);
 updateModelButton();
 applyCurrentThreadAccent();
+applyTerminalDisplaySettings();
+updateTerminalFilterControls();
+renderQuickActions();
 restoreDraftForCurrentThread();
 setMainView(mainViewMode);
+try {
+  if (sessionStorage.getItem(terminalFocusSessionKey) === "1") setTerminalFocusMode(true);
+} catch {
+  // Session storage is optional.
+}
 loadArtifacts();
 loadThreads().catch(() => {}).finally(connect);
 setInterval(() => {

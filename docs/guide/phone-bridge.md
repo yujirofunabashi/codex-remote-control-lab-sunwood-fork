@@ -95,6 +95,12 @@ Claude mode is intentionally narrower than Codex mode. It has Claude Code sessio
 - recent thread list and thread resume
 - phone control of the desktop Codex session
 - PC/mobile continuity through a shared bridge-managed thread
+- cockpit header with thread position, run state, per-thread accent color, compact cwd, and a mini thread switcher
+- guarded swipe navigation that avoids text inputs, terminal logs, artifact previews, approval cards, and horizontal scrollers
+- chat / terminal view switching with unread badges and preserved drafts/scroll position
+- phone terminal mode with filter chips, client-side search, visible-log copy, auto-scroll pause, wrap/font controls, key-intent chips, and CSS focus mode
+- approval cards that stay visible from both chat and terminal views
+- quick action chips that insert prompt templates without auto-sending
 - model, plugin, config, auth, and automation lookups
 - Codex model labels use `5.5-L/M/H/XH`, where `L/M/H/XH` mean Low, Medium, High, and Extra High
 - approval and sandbox mode controls for the next turn
@@ -103,3 +109,5 @@ Claude mode is intentionally narrower than Codex mode. It has Claude Code sessio
 - browser image attachments passed to Codex as `localImage` inputs
 - simple, cyberpunk, and botanical color themes from the settings panel
 - LAN sharing for a single bridge-managed thread
+
+The terminal key row does not expose unauthenticated raw shell execution. `$` inserts a safe Codex command-request template, and bridge access remains token protected while the Codex app-server stays bound to localhost.
