@@ -10,9 +10,11 @@ const {
   normalizeTerminalEntry,
   redactSensitiveText,
   safeJsonParse,
+  sameWorkspaceThreadRecord,
   sanitizeHexColor,
   shouldConfirmDangerousKey,
   visibleTerminalEntries,
+  workspaceKeyForThreadRecord,
 } = require("../public/phone-ui-utils");
 
 test("thread colors sanitize, fall back, and choose readable contrast", () => {
@@ -34,6 +36,14 @@ test("compactWorkspacePath middle-truncates long mobile paths", () => {
     compactWorkspacePath("/Users/minijiro/Developer/ZG_PROJECT/codex-remote-control-lab", { keepStart: 1, keepEnd: 1 }),
     "~/Developer/.../codex-remote-control-lab",
   );
+});
+
+test("workspace helpers keep thread switching scoped to one worktree", () => {
+  const base = workspaceKeyForThreadRecord({ cwd: "/Users/minijiro/work/app/" });
+  assert.equal(base, "/Users/minijiro/work/app");
+  assert.equal(sameWorkspaceThreadRecord({ cwd: "/Users/minijiro/work/app" }, base), true);
+  assert.equal(sameWorkspaceThreadRecord({ cwd: "/Users/minijiro/work/other" }, base), false);
+  assert.equal(sameWorkspaceThreadRecord({ id: "legacy-without-cwd" }, base), true);
 });
 
 test("terminal event normalization, filtering, search, and cap are stable", () => {

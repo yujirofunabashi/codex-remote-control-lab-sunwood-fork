@@ -752,18 +752,6 @@ p {
     0 0 0 5px var(--thread-accent-soft);
 }
 
-.header-color-button::after {
-  content: "✓";
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  color: currentColor;
-  font-size: 14px;
-  font-weight: 900;
-  opacity: 0.92;
-}
-
 .thread-color-popover,
 .thread-switcher {
   position: fixed;
@@ -891,24 +879,6 @@ p {
   box-shadow:
     -7px 0 0 currentColor,
     7px 0 0 currentColor;
-}
-
-.mobile-menu-button[data-badge]:not([data-badge=""])::after {
-  content: attr(data-badge);
-  position: absolute;
-  top: -5px;
-  right: -5px;
-  display: grid;
-  place-items: center;
-  min-width: 18px;
-  height: 18px;
-  border: 2px solid var(--card);
-  border-radius: 999px;
-  padding: 0 4px;
-  background: var(--thread-accent);
-  color: var(--thread-accent-contrast);
-  font-size: 10px;
-  font-weight: 850;
 }
 
 .content-grid {

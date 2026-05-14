@@ -795,6 +795,25 @@ function projectForThread(thread) {
   return cwd.split("/").filter(Boolean).pop() || cwd;
 }
 
+function workspaceKeyForThread(thread, fallback = "") {
+  if (uiUtils.workspaceKeyForThreadRecord) return uiUtils.workspaceKeyForThreadRecord(thread, fallback);
+  return String(thread?.cwd || thread?.workspaceLocation || thread?.workdir || fallback || "")
+    .trim()
+    .replace(/\\/g, "/")
+    .replace(/\/+$/, "");
+}
+
+function currentThreadWorkspaceKey() {
+  const selected = threadCache.find((thread) => thread.id === selectedThread);
+  return workspaceKeyForThread(selected, currentWorkspace.workspaceLocation || currentWorkspace.repoName || "");
+}
+
+function isSameCurrentWorkspaceThread(thread, baseKey = currentThreadWorkspaceKey()) {
+  if (uiUtils.sameWorkspaceThreadRecord) return uiUtils.sameWorkspaceThreadRecord(thread, baseKey);
+  const candidate = workspaceKeyForThread(thread);
+  return !baseKey || !candidate || candidate === baseKey;
+}
+
 function formatRelativeTime(timestamp) {
   if (!timestamp) return "";
   const ms = timestamp < 10_000_000_000 ? timestamp * 1000 : timestamp;
@@ -1781,7 +1800,11 @@ function visibleThreadGroups() {
 
 function visibleThreadsInListOrder() {
   const threads = [];
-  for (const groupThreads of visibleThreadGroups().values()) threads.push(...groupThreads.slice(0, 6));
+  const baseKey = currentThreadWorkspaceKey();
+  for (const groupThreads of visibleThreadGroups().values()) {
+    const scopedThreads = groupThreads.filter((thread) => isSameCurrentWorkspaceThread(thread, baseKey));
+    threads.push(...scopedThreads.slice(0, 6));
+  }
   return threads;
 }
 
@@ -1887,7 +1910,7 @@ function updateThreadNavigation() {
           : "実行中はスレッド移動を止めています"
       : previous
         ? `← 前: ${titleForThread(previous)}`
-        : "前のスレッドはありません";
+        : "同じ作業ツリー内に前のスレッドはありません";
     prevThreadButton.setAttribute("aria-label", prevThreadButton.title);
   }
   if (nextThreadButton) {
@@ -1900,7 +1923,7 @@ function updateThreadNavigation() {
           : "実行中はスレッド移動を止めています"
       : next
         ? `次 →: ${titleForThread(next)}`
-        : "次のスレッドはありません";
+        : "同じ作業ツリー内に次のスレッドはありません";
     nextThreadButton.setAttribute("aria-label", nextThreadButton.title);
   }
   updateHeaderStatus();
@@ -1941,7 +1964,7 @@ function selectAdjacentThread(direction, source = "button") {
   }
   const target = adjacentThread(direction);
   if (!target) {
-    showSwipeFeedback(direction > 0 ? "次のスレッドはありません。" : "前のスレッドはありません。");
+    showSwipeFeedback(direction > 0 ? "同じ作業ツリー内に次のスレッドはありません。" : "同じ作業ツリー内に前のスレッドはありません。");
     return;
   }
   selectThread(target.id);
@@ -1953,7 +1976,7 @@ function selectAdjacentThread(direction, source = "button") {
 function showInitialSwipeHint() {
   if (localStorage.getItem(swipeHintStorageKey) || !window.matchMedia("(max-width: 820px)").matches) return;
   localStorage.setItem(swipeHintStorageKey, "1");
-  window.setTimeout(() => showSwipeFeedback("左右スワイプで前後のスレッドへ移動できます。"), 800);
+  window.setTimeout(() => showSwipeFeedback("左右スワイプで同じ作業ツリー内の前後へ移動できます。"), 800);
 }
 
 function renderThreadSwitcher() {
@@ -1963,7 +1986,7 @@ function renderThreadSwitcher() {
   if (!threads.length) {
     const empty = document.createElement("div");
     empty.className = "thread-switcher-empty";
-    empty.textContent = "表示中のスレッドはありません。";
+    empty.textContent = "同じ作業ツリー内のスレッドはありません。";
     threadSwitcherList.appendChild(empty);
     return;
   }
@@ -2093,7 +2116,7 @@ function renderThreadColorSettings(thread = null, options = {}) {
     button.style.backgroundColor = color;
     button.title = color;
     button.setAttribute("aria-label", `スレッド色 ${color}`);
-    if (sanitizeHexColor(color) === activeColor) button.textContent = "✓";
+    if (sanitizeHexColor(color) === activeColor) button.setAttribute("aria-current", "true");
     button.addEventListener("click", () => {
       setThreadColorOverride(key, color);
       if (!thread || thread.id === selectedThread) applyCurrentThreadAccent();
@@ -2686,8 +2709,9 @@ function renderExtensionPanel() {
 function renderArtifactIndex(items) {
   artifactItems = items;
   if (menuButton) {
-    menuButton.dataset.badge = artifactItems.length ? String(Math.min(artifactItems.length, 99)) : "";
-    menuButton.setAttribute("aria-label", artifactItems.length ? `メニュー。アーティファクト ${artifactItems.length} 件` : "メニュー");
+    menuButton.removeAttribute("data-badge");
+    menuButton.title = artifactItems.length ? `メニュー / アーティファクト ${artifactItems.length} 件` : "メニュー";
+    menuButton.setAttribute("aria-label", menuButton.title);
   }
   activeArtifactPath = "";
   setActivePanelTab("artifacts");

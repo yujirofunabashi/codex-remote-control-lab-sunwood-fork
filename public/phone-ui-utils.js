@@ -90,6 +90,18 @@
     return `${prefix}${parts.slice(0, keepStart).join("/")}/.../${parts.slice(-keepEnd).join("/")}`;
   }
 
+  function workspaceKeyForThreadRecord(thread = {}, fallback = "") {
+    const raw = thread.cwd || thread.workspaceLocation || thread.workdir || fallback || "";
+    return String(raw).trim().replace(/\\/g, "/").replace(/\/+$/, "");
+  }
+
+  function sameWorkspaceThreadRecord(thread = {}, baseKey = "") {
+    const normalizedBase = String(baseKey || "").trim().replace(/\\/g, "/").replace(/\/+$/, "");
+    const candidate = workspaceKeyForThreadRecord(thread);
+    if (!normalizedBase || !candidate) return true;
+    return candidate === normalizedBase;
+  }
+
   function redactSensitiveText(value) {
     return String(value || "")
       .replace(/([?&]token=)[^&\s]+/gi, "$1[redacted]")
@@ -176,6 +188,8 @@
     fallbackThreadColor,
     contrastColorFor,
     compactWorkspacePath,
+    workspaceKeyForThreadRecord,
+    sameWorkspaceThreadRecord,
     redactSensitiveText,
     normalizeTerminalKind,
     inferTerminalKindFromText,
