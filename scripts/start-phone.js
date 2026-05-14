@@ -1510,11 +1510,10 @@ function safeProxyBasePath(basePath) {
   return /^\/(?:abs)?proxy\/\d+$/.test(value) ? value : "";
 }
 
-function manifestHrefForRequest(req, phoneToken) {
+function manifestHrefForRequest(req, _phoneToken) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const safeBasePath = safeProxyBasePath(url.searchParams.get("base"));
   const params = new URLSearchParams();
-  if (phoneToken) params.set("token", phoneToken);
   if (safeBasePath) params.set("base", safeBasePath);
   const query = params.toString();
   return `site.webmanifest${query ? `?${query}` : ""}`;
@@ -1594,7 +1593,7 @@ function serveStatic(req, res, phoneToken) {
   fs.createReadStream(target).pipe(res);
 }
 
-function serveManifest(url, phoneToken, res) {
+function manifestPayloadForRequest(url) {
   const manifestPath = path.join(root, "public", "site.webmanifest");
   const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
   const safeBasePath = safeProxyBasePath(url.searchParams.get("base"));
@@ -1617,11 +1616,12 @@ function serveManifest(url, phoneToken, res) {
       purpose: "any maskable",
     },
   ];
-  if (url.searchParams.get("token") === phoneToken) {
-    manifest.start_url = `${safeBasePath}/?token=${encodeURIComponent(phoneToken)}`;
-  } else {
-    manifest.start_url = `${safeBasePath}/`;
-  }
+  manifest.start_url = `${safeBasePath}/`;
+  return manifest;
+}
+
+function serveManifest(url, _phoneToken, res) {
+  const manifest = manifestPayloadForRequest(url);
   res.writeHead(200, { "content-type": "application/manifest+json; charset=utf-8", "cache-control": "no-store" });
   res.end(JSON.stringify(manifest, null, 2));
 }
@@ -3533,7 +3533,15 @@ async function main() {
   process.once("SIGTERM", () => shutdown("SIGTERM"));
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  manifestHrefForRequest,
+  manifestPayloadForRequest,
+  safeProxyBasePath,
+};

@@ -90,6 +90,85 @@
     return `${prefix}${parts.slice(0, keepStart).join("/")}/.../${parts.slice(-keepEnd).join("/")}`;
   }
 
+  function middleEllipsis(value, options = {}) {
+    const text = String(value || "");
+    const max = Math.max(4, Number(options.max || 32));
+    if (text.length <= max) return text;
+    const marker = String(options.marker || "...");
+    const available = Math.max(1, max - marker.length);
+    const head = Math.max(1, Number(options.head || Math.ceil(available * 0.55)));
+    const tail = Math.max(1, Number(options.tail || available - head));
+    if (head + tail + marker.length >= text.length) return text;
+    return `${text.slice(0, head)}${marker}${text.slice(-tail)}`;
+  }
+
+  function isMobileViewport(width) {
+    return Number(width || 0) > 0 && Number(width) <= 820;
+  }
+
+  function isStandaloneDisplayMode(env = {}) {
+    const target = env || {};
+    const nav = target.navigator || {};
+    const standaloneMedia =
+      typeof target.matchMedia === "function" &&
+      target.matchMedia("(display-mode: standalone)")?.matches;
+    return Boolean(standaloneMedia || nav.standalone === true);
+  }
+
+  function visualViewportVars(env = {}) {
+    const target = env || {};
+    const viewport = target.visualViewport || null;
+    const innerHeight = Number(target.innerHeight || viewport?.height || 0);
+    const height = Math.max(0, Math.round(Number(viewport?.height || innerHeight || 0)));
+    const offsetTop = Math.max(0, Math.round(Number(viewport?.offsetTop || 0)));
+    const keyboardInset = viewport && innerHeight ? Math.max(0, Math.round(innerHeight - viewport.height - offsetTop)) : 0;
+    return {
+      visualViewportHeight: height,
+      visualViewportOffsetTop: offsetTop,
+      keyboardInset,
+    };
+  }
+
+  function terminalCompactState(options = {}) {
+    const mainViewMode = options.mainViewMode === "terminal" ? "terminal" : "chat";
+    const mobile = Boolean(options.mobile ?? isMobileViewport(options.width));
+    const maxMode = Boolean(options.maxMode);
+    const standalone = Boolean(options.standalone);
+    return {
+      compact: mobile && mainViewMode === "terminal",
+      max: mainViewMode === "terminal" && maxMode,
+      standaloneCompact: mobile && mainViewMode === "terminal" && standalone,
+    };
+  }
+
+  function shouldShowQuickBar(options = {}) {
+    return (
+      options.mainViewMode === "terminal" &&
+      (options.inputFocused === true || options.inputMode === "keys" || options.pinned === true)
+    );
+  }
+
+  function canSuggestPwaInstall(options = {}) {
+    return Boolean(
+      options.mobile &&
+        !options.standalone &&
+        !options.dismissed &&
+        (options.secureContext || options.isLocalhost || options.allowInsecureHint),
+    );
+  }
+
+  function serviceWorkerRegistrationAllowed(options = {}) {
+    return Boolean(options.enableSw && options.secureContext);
+  }
+
+  function pwaManifestTokenIssues(manifest = {}) {
+    const text = safeJsonStringify(manifest, "");
+    return {
+      hasTokenParam: /[?&]token=/i.test(text),
+      hasSecretField: /"(?:token|secret|authorization)"\s*:/i.test(text),
+    };
+  }
+
   function workspaceKeyForThreadRecord(thread = {}, fallback = "") {
     const raw = thread.cwd || thread.workspaceLocation || thread.workdir || fallback || "";
     return String(raw).trim().replace(/\\/g, "/").replace(/\/+$/, "");
@@ -313,6 +392,15 @@
     fallbackThreadColor,
     contrastColorFor,
     compactWorkspacePath,
+    middleEllipsis,
+    isMobileViewport,
+    isStandaloneDisplayMode,
+    visualViewportVars,
+    terminalCompactState,
+    shouldShowQuickBar,
+    canSuggestPwaInstall,
+    serviceWorkerRegistrationAllowed,
+    pwaManifestTokenIssues,
     workspaceKeyForThreadRecord,
     sameWorkspaceThreadRecord,
     redactSensitiveText,

@@ -45,11 +45,22 @@ const terminalFocusButton = document.querySelector("#terminalFocusButton");
 const terminalFontDownButton = document.querySelector("#terminalFontDown");
 const terminalFontResetButton = document.querySelector("#terminalFontReset");
 const terminalFontUpButton = document.querySelector("#terminalFontUp");
+const terminalFilterSheetButton = document.querySelector("#terminalFilterSheetButton");
+const terminalCurrentFilterPill = document.querySelector("#terminalCurrentFilterPill");
+const terminalCompactSearchButton = document.querySelector("#terminalCompactSearchButton");
+const terminalCompactSearchCount = document.querySelector("#terminalCompactSearchCount");
+const terminalAutoScrollMini = document.querySelector("#terminalAutoScrollMini");
+const terminalToolsButton = document.querySelector("#terminalToolsButton");
+const terminalToolsSheet = document.querySelector("#terminalToolsSheet");
+const terminalToolsCloseButton = document.querySelector("#terminalToolsClose");
+const terminalMaxSheetButton = document.querySelector("#terminalMaxSheetButton");
+const terminalQuickbarPinButton = document.querySelector("#terminalQuickbarPin");
 const terminalStatusTitle = document.querySelector("#terminalStatusTitle");
 const terminalSessionMeta = document.querySelector("#terminalSessionMeta");
 const terminalOps = document.querySelector("#terminalOps");
 const terminalTextModeButton = document.querySelector("#terminalTextMode");
 const terminalKeysModeButton = document.querySelector("#terminalKeysMode");
+const terminalInputModeButton = document.querySelector("#terminalInputModeButton");
 const terminalHelper = document.querySelector("#terminalHelper");
 const statusButton = document.querySelector("#statusButton");
 const chatViewButton = document.querySelector("#chatViewButton");
@@ -77,7 +88,6 @@ const runStateLabel = document.querySelector("#runStateLabel");
 const threadList = document.querySelector("#threadList");
 const threadSearch = document.querySelector("#threadSearch");
 const threadTitle = document.querySelector("#threadTitle");
-const threadSubtitle = document.querySelector("#threadSubtitle");
 const composer = document.querySelector("#composer");
 const promptInput = document.querySelector("#prompt");
 const workspaceIndicator = document.querySelector("#workspaceIndicator");
@@ -182,6 +192,177 @@ function writeSessionJsonStorage(key, value) {
     sessionStorage.setItem(key, uiUtils.safeJsonStringify ? uiUtils.safeJsonStringify(value) : JSON.stringify(value));
   } catch {
     // Session-only bridge tokens are best effort.
+  }
+}
+
+function safeReadStorage(storage, key, fallback = "") {
+  try {
+    return storage.getItem(key) ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function safeWriteStorage(storage, key, value) {
+  try {
+    storage.setItem(key, value);
+  } catch {
+    // Non-critical browser preference.
+  }
+}
+
+function isMobileViewport() {
+  if (uiUtils.isMobileViewport) return uiUtils.isMobileViewport(window.innerWidth);
+  return window.innerWidth <= 820;
+}
+
+function isStandaloneDisplayMode() {
+  if (uiUtils.isStandaloneDisplayMode) return uiUtils.isStandaloneDisplayMode(window);
+  return Boolean(window.matchMedia?.("(display-mode: standalone)")?.matches || window.navigator?.standalone === true);
+}
+
+function applyStandaloneState() {
+  const standalone = isStandaloneDisplayMode();
+  document.body.dataset.standalone = standalone ? "true" : "false";
+  document.body.classList.toggle("app--pwa-standalone", standalone);
+  return standalone;
+}
+
+function setupVisualViewportVars() {
+  const vars = uiUtils.visualViewportVars
+    ? uiUtils.visualViewportVars(window)
+    : {
+        visualViewportHeight: Math.round(window.visualViewport?.height || window.innerHeight || 0),
+        visualViewportOffsetTop: Math.round(window.visualViewport?.offsetTop || 0),
+        keyboardInset: window.visualViewport
+          ? Math.max(0, Math.round(window.innerHeight - window.visualViewport.height - window.visualViewport.offsetTop))
+          : 0,
+      };
+  if (vars.visualViewportHeight) {
+    document.documentElement.style.setProperty("--visual-viewport-height", `${vars.visualViewportHeight}px`);
+  }
+  document.documentElement.style.setProperty("--visual-viewport-offset-top", `${vars.visualViewportOffsetTop || 0}px`);
+  document.documentElement.style.setProperty("--keyboard-inset", `${vars.keyboardInset || 0}px`);
+  document.body.classList.toggle("keyboard-open", (vars.keyboardInset || 0) > 80);
+  if (document.activeElement === promptInput) keepComposerVisible();
+  measureTerminalLayout();
+}
+
+function pwaDiagnosticsSnapshot() {
+  const manifestHref = manifestLink ? new URL(manifestLink.href, location.href).href : "";
+  const manifestUrl = manifestHref ? new URL(manifestHref) : null;
+  return {
+    secureContext: Boolean(window.isSecureContext),
+    displayMode: isStandaloneDisplayMode() ? "standalone" : "browser",
+    standalone: isStandaloneDisplayMode(),
+    manifestHref: manifestUrl ? `${manifestUrl.pathname}${manifestUrl.search}` : "missing",
+    manifestTokenFree: manifestUrl ? !manifestUrl.searchParams.has("token") : true,
+    serviceWorker: "serviceWorker" in navigator ? "available" : "unavailable",
+    tokenAvailable: Boolean(effectiveBridgeToken(activeBridge()) || token),
+    cacheMode: "disabled",
+  };
+}
+
+function renderViewportDebug() {
+  const enabled = params.get("debugViewport") === "1" || params.get("pwaDiagnostics") === "1";
+  let panel = document.querySelector("#viewportDebugPanel");
+  if (!enabled) {
+    panel?.remove();
+    return;
+  }
+  if (!panel) {
+    panel = document.createElement("aside");
+    panel.id = "viewportDebugPanel";
+    panel.className = "viewport-debug-panel";
+    panel.setAttribute("aria-label", "Viewport diagnostics");
+    document.body.appendChild(panel);
+  }
+  const terminalRect = terminalTranscript?.getBoundingClientRect?.();
+  const composerRect = composer?.getBoundingClientRect?.();
+  const titleRect = document.querySelector(".titlebar")?.getBoundingClientRect?.();
+  const toolbarRect = document.querySelector(".terminal-toolbar")?.getBoundingClientRect?.();
+  const workspaceRect = workspaceIndicator?.getBoundingClientRect?.();
+  const diagnostics = pwaDiagnosticsSnapshot();
+  panel.textContent = [
+    `terminal ${Math.round(terminalRect?.height || 0)}px`,
+    `visual ${Math.round(window.visualViewport?.height || window.innerHeight)}px`,
+    `composer ${Math.round(composerRect?.height || 0)}px`,
+    `header ${Math.round(titleRect?.height || 0)}px`,
+    `pathbar ${Math.round(workspaceRect?.height || 0)}px`,
+    `toolbar ${Math.round(toolbarRect?.height || 0)}px`,
+    `display ${diagnostics.displayMode}`,
+    `manifest token-free ${diagnostics.manifestTokenFree ? "yes" : "no"}`,
+    `sw ${diagnostics.serviceWorker}`,
+    `token ${diagnostics.tokenAvailable ? "available" : "missing"}`,
+  ].join("\n");
+}
+
+function measureTerminalLayout() {
+  if (params.get("debugViewport") !== "1" && params.get("pwaDiagnostics") !== "1") return null;
+  window.requestAnimationFrame(renderViewportDebug);
+  const rect = terminalTranscript?.getBoundingClientRect?.();
+  return {
+    terminalBodyHeight: Math.round(rect?.height || 0),
+    visualViewportHeight: Math.round(window.visualViewport?.height || window.innerHeight || 0),
+    composerHeight: Math.round(composer?.getBoundingClientRect?.().height || 0),
+  };
+}
+
+function canSuggestPwaInstall() {
+  const dismissed = safeReadStorage(localStorage, pwaInstallHintStorageKey, "") === "dismissed";
+  const isLocalhost = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
+  if (uiUtils.canSuggestPwaInstall) {
+    return uiUtils.canSuggestPwaInstall({
+      mobile: isMobileViewport(),
+      standalone: isStandaloneDisplayMode(),
+      dismissed,
+      secureContext: window.isSecureContext,
+      isLocalhost,
+      allowInsecureHint: location.protocol === "http:",
+    });
+  }
+  return isMobileViewport() && !isStandaloneDisplayMode() && !dismissed;
+}
+
+function showPwaInstallHint() {
+  if (!canSuggestPwaInstall() || document.querySelector(".pwa-install-hint")) return;
+  const hint = document.createElement("section");
+  hint.className = "pwa-install-hint";
+  hint.setAttribute("role", "status");
+  const hasToken = Boolean(effectiveBridgeToken(activeBridge()) || token);
+  const secure = window.isSecureContext;
+  hint.innerHTML = `
+    <div>
+      <strong>ホーム画面に追加</strong>
+      <span>${secure ? "standalone では表示領域が少し増えます。" : "LAN HTTP では PWA 制限があります。通常表示はこのまま使えます。"}</span>
+      <small>${hasToken ? "start_url に token は保存しません。" : "起動できない時は token 付き URL で開き直してください。"}</small>
+    </div>
+    <button type="button" data-pwa-dismiss>閉じる</button>
+  `;
+  hint.querySelector("[data-pwa-dismiss]")?.addEventListener("click", () => {
+    safeWriteStorage(localStorage, pwaInstallHintStorageKey, "dismissed");
+    hint.remove();
+  });
+  document.body.appendChild(hint);
+}
+
+async function unregisterStaleServiceWorkersIfNeeded() {
+  if (!("serviceWorker" in navigator) || uiUtils.serviceWorkerRegistrationAllowed?.({ enableSw: false, secureContext: window.isSecureContext })) return;
+  try {
+    const registrations = await navigator.serviceWorker.getRegistrations();
+    const base = `${location.origin}${appBasePath || "/"}`;
+    for (const registration of registrations) {
+      const script = registration.active?.scriptURL || registration.waiting?.scriptURL || registration.installing?.scriptURL || "";
+      const sameScope = registration.scope.startsWith(base) || base.startsWith(registration.scope);
+      const looksLikePhoneSw = /(?:^|\/)(?:sw|service-worker)(?:[.-]|\.js|$)/i.test(new URL(script || location.href).pathname);
+      if (sameScope && looksLikePhoneSw) await registration.unregister();
+    }
+    if (window.caches?.keys) {
+      const keys = await window.caches.keys();
+      await Promise.all(keys.filter((key) => /^codex-phone|^codex-remote/i.test(key)).map((key) => window.caches.delete(key)));
+    }
+  } catch {
+    // Stale SW cleanup must not affect the normal UI.
   }
 }
 
@@ -347,10 +528,8 @@ function setSidebarVisible(visible) {
   mobileThreadsButton.setAttribute("aria-expanded", visible ? "true" : "false");
 }
 
-if (manifestLink && token) {
-  manifestLink.href = appPath(
-    `/site.webmanifest?token=${encodeURIComponent(token)}&base=${encodeURIComponent(appBasePath)}`,
-  );
+if (manifestLink && appBasePath) {
+  manifestLink.href = appPath(`/site.webmanifest?base=${encodeURIComponent(appBasePath)}`);
 }
 
 const themeOptions = [
@@ -366,10 +545,14 @@ const terminalFontSizeStorageKey = "codexPhoneTerminalFontSize:v1";
 const terminalWrapStorageKey = "codexPhoneTerminalWrap:v1";
 const terminalFilterStorageKey = "codexPhoneTerminalFilter:v1";
 const terminalScrollStorageKey = "codexPhoneTerminalScroll:v1";
+const terminalInputModeStorageKey = "codexPhoneTerminalInputMode:v1";
+const terminalQuickbarPinStorageKey = "codexPhoneTerminalQuickbarPin:v1";
 const chatScrollStorageKey = "codexPhoneChatScroll:v1";
 const quickActionsStorageKey = "codexPhoneQuickActions:v1";
 const firstUseHintsStorageKey = "codexPhoneFirstUseHints:v1";
 const terminalFocusSessionKey = "codexPhoneTerminalFocus:v1";
+const pwaInstallHintStorageKey = "codexPhonePwaInstallHint:v1";
+const pwaDiagnosticsStorageKey = "codexPhonePwaDiagnostics:v1";
 const bridgeRegistryStorageKey = "codexPhoneBridgeRegistry:v1";
 const activeBridgeStorageKey = "codexPhoneActiveBridgeId:v1";
 const bridgeSessionTokensStorageKey = "codexPhoneBridgeSessionTokens:v1";
@@ -439,7 +622,9 @@ let terminalSearchIndex = 0;
 let terminalAutoScroll = true;
 let terminalWrapMode = localStorage.getItem(terminalWrapStorageKey) !== "scroll";
 let terminalFontSize = Math.max(10, Math.min(18, Number(localStorage.getItem(terminalFontSizeStorageKey)) || 12));
-let terminalInputMode = "text";
+let terminalInputMode = localStorage.getItem(terminalInputModeStorageKey) === "keys" ? "keys" : "text";
+let terminalQuickbarPinned = localStorage.getItem(terminalQuickbarPinStorageKey) === "1";
+let promptInputFocused = false;
 let unreadChatCount = 0;
 let unreadTerminalCount = 0;
 let threadSwitchBusy = false;
@@ -693,22 +878,28 @@ function setTerminalFontSize(nextSize) {
 
 function setTerminalFocusMode(enabled) {
   document.body.classList.toggle("terminal-focus-mode", enabled);
+  document.body.classList.toggle("app--terminal-max", enabled);
   try {
     sessionStorage.setItem(terminalFocusSessionKey, enabled ? "1" : "0");
   } catch {
     // Transient only.
   }
+  toggleTerminalToolsSheet(false);
   if (enabled) {
     closeRightPanel();
     setSidebarVisible(false);
     terminalFocusButton?.setAttribute("aria-label", "ターミナルのフォーカス表示を閉じる");
     terminalFocusButton.textContent = "Close";
+    if (terminalMaxSheetButton) terminalMaxSheetButton.textContent = "Exit Max";
     mainTerminalView?.focus?.({ preventScroll: true });
     showToast("ターミナル focus mode");
   } else if (terminalFocusButton) {
     terminalFocusButton.setAttribute("aria-label", "ターミナルをフォーカス表示");
     terminalFocusButton.textContent = "Focus";
+    if (terminalMaxSheetButton) terminalMaxSheetButton.textContent = "Max";
   }
+  updateQuickBarVisibility();
+  measureTerminalLayout();
 }
 
 function updateInterruptButton() {
@@ -1001,8 +1192,7 @@ function titleForThread(thread) {
 }
 
 function setThreadHeading(title) {
-  if (threadTitle) threadTitle.textContent = "稼働中スレッド";
-  if (threadSubtitle) threadSubtitle.textContent = title || "新しい共有thread";
+  if (threadTitle) threadTitle.textContent = title || "新しい共有thread";
 }
 
 function isOpaqueThreadId(value) {
@@ -1756,6 +1946,75 @@ function updateTerminalLatestButton() {
   terminalLatestButton.classList.toggle("hidden", terminalAutoScroll || nearBottom);
 }
 
+function terminalFilterLabel(filter = terminalFilterMode) {
+  const labels = {
+    all: "All",
+    command: "Cmd",
+    file: "Files",
+    status: "Status",
+    error: "Errors",
+    approval: "Approval",
+  };
+  return labels[filter] || "All";
+}
+
+function toggleTerminalToolsSheet(open) {
+  if (!terminalToolsSheet) return;
+  const willOpen = open ?? terminalToolsSheet.classList.contains("hidden");
+  terminalToolsSheet.classList.toggle("hidden", !willOpen);
+  terminalToolsButton?.setAttribute("aria-expanded", String(willOpen));
+  terminalFilterSheetButton?.setAttribute("aria-expanded", String(willOpen));
+  if (willOpen) terminalToolsSheet.scrollTop = 0;
+  measureTerminalLayout();
+}
+
+function setTerminalAutoScroll(enabled, { toast = true, render = true } = {}) {
+  terminalAutoScroll = Boolean(enabled);
+  terminalAutoScrollButton?.classList.toggle("active", terminalAutoScroll);
+  terminalAutoScrollButton?.setAttribute("aria-pressed", String(terminalAutoScroll));
+  terminalAutoScrollMini?.classList.toggle("active", terminalAutoScroll);
+  terminalAutoScrollMini?.setAttribute("aria-pressed", String(terminalAutoScroll));
+  if (terminalAutoScroll) {
+    if (terminalTranscript) terminalTranscript.scrollTop = terminalTranscript.scrollHeight;
+    if (render) renderTerminalTranscript();
+  } else if (toast) {
+    showToast("ターミナル auto-scroll を一時停止しました。");
+  }
+  updateTerminalLatestButton();
+}
+
+function updateTerminalInputModeButton() {
+  document.body.dataset.terminalInputMode = terminalInputMode;
+  if (terminalInputModeButton) {
+    terminalInputModeButton.textContent = terminalInputMode === "keys" ? "Keys" : "Text";
+    terminalInputModeButton.setAttribute("aria-pressed", String(terminalInputMode === "keys"));
+    terminalInputModeButton.title = terminalInputMode === "keys" ? "Keys mode" : "Text mode";
+  }
+  terminalQuickbarPinButton?.classList.toggle("active", terminalQuickbarPinned);
+  terminalQuickbarPinButton?.setAttribute("aria-pressed", String(terminalQuickbarPinned));
+}
+
+function updateQuickBarVisibility() {
+  const visible = uiUtils.shouldShowQuickBar
+    ? uiUtils.shouldShowQuickBar({
+        mainViewMode,
+        inputFocused: promptInputFocused,
+        inputMode: terminalInputMode,
+        pinned: terminalQuickbarPinned,
+      })
+    : mainViewMode === "terminal" && (promptInputFocused || terminalInputMode === "keys" || terminalQuickbarPinned);
+  document.body.classList.toggle("terminal-quickbar-visible", visible);
+  document.body.classList.toggle("composer-focused", promptInputFocused);
+  updateTerminalInputModeButton();
+  measureTerminalLayout();
+}
+
+function setTerminalQuickbarPinned(enabled) {
+  terminalQuickbarPinned = Boolean(enabled);
+  safeWriteStorage(localStorage, terminalQuickbarPinStorageKey, terminalQuickbarPinned ? "1" : "0");
+  updateQuickBarVisibility();
+}
+
 function updateTerminalFilterControls() {
   if (terminalFilter) terminalFilter.value = terminalFilterMode;
   for (const chip of terminalFilterChips) {
@@ -1763,6 +2022,11 @@ function updateTerminalFilterControls() {
     chip.classList.toggle("active", active);
     chip.setAttribute("aria-pressed", String(active));
   }
+  const visibleCount = currentTerminalHistory().filter(terminalFilterMatches).length;
+  const totalCount = currentTerminalHistory().length;
+  if (terminalCurrentFilterPill) terminalCurrentFilterPill.textContent = terminalFilterLabel(terminalFilterMode);
+  if (terminalCompactSearchCount) terminalCompactSearchCount.textContent = terminalSearchQuery ? `${visibleCount}/${totalCount}` : String(totalCount);
+  setTerminalAutoScroll(terminalAutoScroll, { toast: false, render: false });
 }
 
 function renderTerminalTranscript() {
@@ -1771,6 +2035,9 @@ function renderTerminalTranscript() {
   const query = terminalSearchQuery.trim().toLowerCase();
   terminalTranscript.replaceChildren();
   if (terminalSearchCount) terminalSearchCount.textContent = query ? String(entries.length) : String(currentTerminalHistory().length);
+  if (terminalCompactSearchCount) {
+    terminalCompactSearchCount.textContent = query ? `${entries.length}/${currentTerminalHistory().length}` : String(currentTerminalHistory().length);
+  }
   if (!entries.length) {
     const empty = document.createElement("div");
     empty.className = "terminal-empty";
@@ -2833,10 +3100,13 @@ function setMainView(view) {
     renderTerminalTranscript();
   } else {
     unreadChatCount = 0;
+    toggleTerminalToolsSheet(false);
   }
   updateUnreadBadges();
   updateComposerState();
+  updateQuickBarVisibility();
   restoreScrollPositions();
+  measureTerminalLayout();
 }
 
 function renderThreadColorSettings(thread = null, options = {}) {
@@ -4079,12 +4349,16 @@ function insertPromptText(text) {
   saveDraftForActiveThread();
 }
 
-function setTerminalInputMode(mode) {
+function setTerminalInputMode(mode, { silent = false } = {}) {
   terminalInputMode = mode === "keys" ? "keys" : "text";
+  safeWriteStorage(localStorage, terminalInputModeStorageKey, terminalInputMode);
   terminalTextModeButton?.classList.toggle("active", terminalInputMode === "text");
   terminalKeysModeButton?.classList.toggle("active", terminalInputMode === "keys");
   terminalTextModeButton?.setAttribute("aria-pressed", String(terminalInputMode === "text"));
   terminalKeysModeButton?.setAttribute("aria-pressed", String(terminalInputMode === "keys"));
+  updateTerminalInputModeButton();
+  updateQuickBarVisibility();
+  if (silent) return;
   appendTerminalEntry({ ts: Date.now(), kind: "lifecycle", message: `terminal input mode: ${terminalInputMode}` });
 }
 
@@ -4512,7 +4786,17 @@ sidebarScrim.addEventListener("click", () => {
   setSidebarVisible(false);
 });
 connectButton.addEventListener("click", connect);
-promptInput.addEventListener("focus", keepComposerVisible);
+promptInput.addEventListener("focus", () => {
+  promptInputFocused = true;
+  updateQuickBarVisibility();
+  keepComposerVisible();
+});
+promptInput.addEventListener("blur", () => {
+  window.setTimeout(() => {
+    promptInputFocused = document.activeElement === promptInput;
+    updateQuickBarVisibility();
+  }, 80);
+});
 promptInput.addEventListener("click", keepComposerVisible);
 promptInput.addEventListener("input", saveDraftForActiveThread);
 chatViewButton.addEventListener("click", () => setMainView("chat"));
@@ -4545,6 +4829,14 @@ terminalSearchNextButton?.addEventListener("click", () => {
   terminalSearchIndex += 1;
   renderTerminalTranscript();
 });
+terminalFilterSheetButton?.addEventListener("click", () => toggleTerminalToolsSheet(true));
+terminalCurrentFilterPill?.addEventListener("click", () => toggleTerminalToolsSheet(true));
+terminalToolsButton?.addEventListener("click", () => toggleTerminalToolsSheet());
+terminalToolsCloseButton?.addEventListener("click", () => toggleTerminalToolsSheet(false));
+terminalCompactSearchButton?.addEventListener("click", () => {
+  toggleTerminalToolsSheet(true);
+  window.setTimeout(() => terminalSearchInput?.focus({ preventScroll: true }), 40);
+});
 terminalWrapToggle?.addEventListener("click", () => {
   terminalWrapMode = !terminalWrapMode;
   localStorage.setItem(terminalWrapStorageKey, terminalWrapMode ? "wrap" : "scroll");
@@ -4552,16 +4844,9 @@ terminalWrapToggle?.addEventListener("click", () => {
   renderTerminalTranscript();
 });
 terminalAutoScrollButton.addEventListener("click", () => {
-  terminalAutoScroll = !terminalAutoScroll;
-  terminalAutoScrollButton.classList.toggle("active", terminalAutoScroll);
-  terminalAutoScrollButton.setAttribute("aria-pressed", String(terminalAutoScroll));
-  if (terminalAutoScroll) {
-    terminalTranscript.scrollTop = terminalTranscript.scrollHeight;
-    renderTerminalTranscript();
-  } else {
-    showToast("ターミナル auto-scroll を一時停止しました。");
-  }
+  setTerminalAutoScroll(!terminalAutoScroll);
 });
+terminalAutoScrollMini?.addEventListener("click", () => setTerminalAutoScroll(!terminalAutoScroll));
 terminalClearButton.addEventListener("click", () => {
   terminalHistories.set(currentThreadColorKey(), []);
   renderTerminalTranscript();
@@ -4580,20 +4865,13 @@ terminalCopyButton.addEventListener("click", async () => {
   }
 });
 terminalLatestButton?.addEventListener("click", () => {
-  terminalAutoScroll = true;
-  terminalAutoScrollButton.classList.add("active");
-  terminalAutoScrollButton.setAttribute("aria-pressed", "true");
-  terminalTranscript.scrollTop = terminalTranscript.scrollHeight;
-  updateTerminalLatestButton();
+  setTerminalAutoScroll(true);
 });
 terminalTranscript?.addEventListener("scroll", () => {
   saveScrollPositions();
   const nearBottom = terminalTranscript.scrollHeight - terminalTranscript.scrollTop - terminalTranscript.clientHeight < 40;
   if (!nearBottom && terminalAutoScroll) {
-    terminalAutoScroll = false;
-    terminalAutoScrollButton.classList.remove("active");
-    terminalAutoScrollButton.setAttribute("aria-pressed", "false");
-    showToast("ターミナル auto-scroll を一時停止しました。");
+    setTerminalAutoScroll(false, { render: false });
   }
   updateTerminalLatestButton();
 });
@@ -4604,6 +4882,16 @@ terminalFontUpButton?.addEventListener("click", () => setTerminalFontSize(termin
 terminalFocusButton?.addEventListener("click", () => setTerminalFocusMode(!document.body.classList.contains("terminal-focus-mode")));
 terminalTextModeButton?.addEventListener("click", () => setTerminalInputMode("text"));
 terminalKeysModeButton?.addEventListener("click", () => setTerminalInputMode("keys"));
+terminalInputModeButton?.addEventListener("click", () => setTerminalInputMode(terminalInputMode === "keys" ? "text" : "keys"));
+terminalMaxSheetButton?.addEventListener("click", () => setTerminalFocusMode(!document.body.classList.contains("terminal-focus-mode")));
+terminalQuickbarPinButton?.addEventListener("click", () => setTerminalQuickbarPinned(!terminalQuickbarPinned));
+terminalToolsSheet?.addEventListener("click", (event) => {
+  const fontButton = event.target.closest("[data-terminal-font]");
+  if (!fontButton) return;
+  if (fontButton.dataset.terminalFont === "down") setTerminalFontSize(terminalFontSize - 1);
+  if (fontButton.dataset.terminalFont === "reset") setTerminalFontSize(12);
+  if (fontButton.dataset.terminalFont === "up") setTerminalFontSize(terminalFontSize + 1);
+});
 terminalOps?.addEventListener("click", (event) => {
   const keyButton = event.target.closest("[data-terminal-key]");
   if (!keyButton) return;
@@ -4632,16 +4920,11 @@ workspaceIndicator?.addEventListener("click", async () => {
   }
 });
 if (window.visualViewport) {
-  const updateKeyboardState = () => {
-    const inset = Math.max(0, window.innerHeight - window.visualViewport.height - window.visualViewport.offsetTop);
-    document.documentElement.style.setProperty("--keyboard-inset", `${Math.round(inset)}px`);
-    document.body.classList.toggle("keyboard-open", inset > 80);
-    if (document.activeElement === promptInput) keepComposerVisible();
-  };
-  window.visualViewport.addEventListener("resize", updateKeyboardState);
-  window.visualViewport.addEventListener("scroll", updateKeyboardState);
-  updateKeyboardState();
+  window.visualViewport.addEventListener("resize", setupVisualViewportVars);
+  window.visualViewport.addEventListener("scroll", setupVisualViewportVars);
 }
+window.addEventListener("resize", setupVisualViewportVars);
+setupVisualViewportVars();
 menuButton.addEventListener("click", () => {
   const desktopPanelVisible =
     window.matchMedia("(min-width: 1101px)").matches && !document.body.classList.contains("hide-artifacts");
@@ -4743,6 +5026,15 @@ document.addEventListener("click", (event) => {
       closeBridgeFleet();
     }
   }
+  if (!terminalToolsSheet?.classList.contains("hidden")) {
+    const toolbarTarget =
+      terminalToolsSheet.contains(event.target) ||
+      terminalToolsButton?.contains(event.target) ||
+      terminalFilterSheetButton?.contains(event.target) ||
+      terminalCurrentFilterPill?.contains(event.target) ||
+      terminalCompactSearchButton?.contains(event.target);
+    if (!toolbarTarget) toggleTerminalToolsSheet(false);
+  }
 });
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
@@ -4750,6 +5042,7 @@ document.addEventListener("keydown", (event) => {
   closeThreadColorPopover();
   closeThreadSwitcher();
   closeBridgeFleet();
+  toggleTerminalToolsSheet(false);
 });
 document.querySelector(".conversation").addEventListener("touchstart", handleSwipeStart, { passive: true });
 document.querySelector(".conversation").addEventListener("touchend", handleSwipeEnd, { passive: true });
@@ -4783,9 +5076,11 @@ window.addEventListener("online", () => recoverFromPageResume("ネットワー�
 
 applyActiveBridgeState(activeBridgeId);
 setReady(false);
+applyStandaloneState();
 updateModelButton();
 applyCurrentThreadAccent();
 applyTerminalDisplaySettings();
+setTerminalInputMode(terminalInputMode, { silent: true });
 updateTerminalFilterControls();
 renderQuickActions();
 restoreDraftForCurrentThread();
@@ -4799,6 +5094,11 @@ loadArtifacts();
 loadThreads().catch(() => {}).finally(connect);
 renderFleet();
 refreshFleet({ force: true }).catch(() => {});
+unregisterStaleServiceWorkersIfNeeded().finally(() => {
+  if (params.get("pwaDiagnostics") === "1") safeWriteStorage(localStorage, pwaDiagnosticsStorageKey, "1");
+  showPwaInstallHint();
+  renderViewportDebug();
+});
 setInterval(() => {
   if (document.visibilityState !== "hidden") loadThreads({ background: true });
 }, 10_000);
