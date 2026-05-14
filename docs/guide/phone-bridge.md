@@ -96,6 +96,7 @@ Claude mode is intentionally narrower than Codex mode. It has Claude Code sessio
 - phone control of the desktop Codex session
 - PC/mobile continuity through a shared bridge-managed thread
 - model, plugin, config, auth, and automation lookups
+- Codex model labels use `5.5-L/M/H/XH`, where `L/M/H/XH` mean Low, Medium, High, and Extra High
 - approval and sandbox mode controls for the next turn
 - repository artifact preview
 - Markdown rendering for chat and artifacts

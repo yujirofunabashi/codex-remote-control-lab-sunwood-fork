@@ -131,7 +131,7 @@ const selectedThreadByProvider = new Map();
 if (selectedThread && threadProvider) selectedThreadByProvider.set(threadProvider, selectedThread);
 let selectedModel = localStorage.getItem("codexPhoneModel") || "";
 let selectedModelLabel = localStorage.getItem("codexPhoneModelLabel") || "5.5";
-let selectedReasoning = localStorage.getItem("codexPhoneReasoning") || "中";
+let selectedReasoning = localStorage.getItem("codexPhoneReasoning") || "M";
 let settingsRenderSeq = 0;
 let artifactItems = [];
 let activeArtifactPath = "";
@@ -230,10 +230,34 @@ const accessModes = [
   { label: "確認モード", approvalPolicy: "on-request", sandboxMode: "workspace-write" },
   { label: "読み取り専用", approvalPolicy: "on-request", sandboxMode: "read-only" },
 ];
+const reasoningAliases = new Map([
+  ["L", "L"],
+  ["LOW", "L"],
+  ["低", "L"],
+  ["M", "M"],
+  ["MEDIUM", "M"],
+  ["中", "M"],
+  ["H", "H"],
+  ["HIGH", "H"],
+  ["高", "H"],
+  ["XH", "XH"],
+  ["XHIGH", "XH"],
+  ["EXTRA HIGH", "XH"],
+  ["EXTRA-HIGH", "XH"],
+  ["非常に高", "XH"],
+]);
 const inlineModelChoices = {
   codex: ["gpt-5.5", "gpt-5.4"],
   claude: ["sonnet", "opus", "haiku"],
 };
+
+function normalizeReasoning(value) {
+  const key = String(value || "").trim();
+  return reasoningAliases.get(key) || reasoningAliases.get(key.toUpperCase()) || "M";
+}
+
+selectedReasoning = normalizeReasoning(selectedReasoning);
+localStorage.setItem("codexPhoneReasoning", selectedReasoning);
 
 function labelForModel(model) {
   const label = String(model || "").replace(/^GPT-/, "").replace(/^gpt-/, "");
@@ -287,7 +311,7 @@ function setActiveProvider(provider) {
 
 function updateModelButton() {
   const showReasoning = providerSupportsReasoning();
-  modelButton.textContent = showReasoning ? `${selectedModelLabel} ${selectedReasoning}` : selectedModelLabel;
+  modelButton.textContent = showReasoning ? `${selectedModelLabel}-${selectedReasoning}` : selectedModelLabel;
   thinkingButton.hidden = !showReasoning;
   modelMenu.classList.toggle("no-reasoning", !showReasoning);
   renderInlineModelChoices();
@@ -409,11 +433,11 @@ async function refreshRateLimits() {
 
 function selectReasoning(value) {
   if (!providerSupportsReasoning()) return;
-  selectedReasoning = value;
-  localStorage.setItem("codexPhoneReasoning", value);
+  selectedReasoning = normalizeReasoning(value);
+  localStorage.setItem("codexPhoneReasoning", selectedReasoning);
   updateModelButton();
   closeModelMenu();
-  addStatus(`インテリジェンスを ${value} に設定しました。`);
+  addStatus(`インテリジェンスを ${selectedReasoning} に設定しました。`);
 }
 
 function selectModel(model) {

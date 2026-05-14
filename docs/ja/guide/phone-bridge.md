@@ -82,6 +82,7 @@ background の thread 一覧 polling は、同じ error の連続表示を抑え
 - デスクトップ Codex セッションをスマホから操作
 - shared bridge-managed thread による PC/スマホ間の継続利用
 - model、plugin、config、auth、automation の確認
+- Codex model 表示は `5.5-L/M/H/XH` 形式。`L/M/H/XH` は Low / Medium / High / Extra High
 - 次 turn 向けの承認・sandbox mode 切り替え
 - repository artifact preview
 - chat と artifact の Markdown rendering
