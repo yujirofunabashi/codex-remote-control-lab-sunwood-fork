@@ -1597,6 +1597,84 @@ function summarizeLiveItem(item, phase = "completed") {
   return null;
 }
 
+const terminalHistoryLimit = 300;
+
+function redactTerminalText(value) {
+  return String(value || "")
+    .replace(/([?&]token=)[^&\s]+/gi, "$1[redacted]")
+    .replace(/\b(PHONE_TOKEN=)[^\s]+/gi, "$1[redacted]")
+    .replace(/\b(token:\s*)[A-Za-z0-9._~+/=-]{12,}/gi, "$1[redacted]")
+    .slice(0, 1200);
+}
+
+function terminalKindForStatus(text) {
+  if (/^\$\s/.test(text)) return "command";
+  if (/file changes|ファイル/i.test(text)) return "file";
+  return "status";
+}
+
+function terminalEntryForBridgeMessage(type, payload = {}, bridge = {}) {
+  const now = Date.now();
+  if (type === "status") {
+    const message = redactTerminalText(payload.text || "");
+    if (!message) return null;
+    return { ts: now, kind: terminalKindForStatus(message), message, turnId: bridge.activeTurnId || null };
+  }
+  if (type === "error") {
+    return { ts: now, kind: "error", message: redactTerminalText(payload.text || "エラー"), turnId: bridge.activeTurnId || null };
+  }
+  if (type === "approval") {
+    return {
+      ts: now,
+      kind: "status",
+      message: redactTerminalText(`approval requested: ${payload.request?.method || "request"}`),
+      turnId: bridge.activeTurnId || null,
+    };
+  }
+  if (type === "turn") {
+    return {
+      ts: now,
+      kind: "status",
+      message: redactTerminalText(`turn ${payload.status || "updated"}${payload.turnId ? `: ${payload.turnId}` : ""}`),
+      turnId: payload.turnId || bridge.activeTurnId || null,
+    };
+  }
+  if (type === "user") {
+    const count = Array.isArray(payload.attachments) ? payload.attachments.length : 0;
+    return {
+      ts: now,
+      kind: "status",
+      message: `user prompt sent${count ? ` (${count} attachments)` : ""}`,
+      turnId: bridge.activeTurnId || null,
+    };
+  }
+  if (type === "event" && payload.event?.method) {
+    const method = payload.event.method;
+    const item = payload.event.params?.item;
+    const liveText = summarizeLiveItem(item, method === "item/started" ? "started" : "completed");
+    return {
+      ts: now,
+      kind: liveText ? terminalKindForStatus(liveText) : "status",
+      message: redactTerminalText(liveText || `event: ${method}`),
+      turnId: bridge.activeTurnId || null,
+    };
+  }
+  return null;
+}
+
+function terminalHistoryFromChatHistory(history = []) {
+  return (history || [])
+    .map((entry, index) => {
+      const text = redactTerminalText(entry.text || "");
+      if (!text) return null;
+      if (entry.type === "error") return { id: `history-error-${index}`, ts: Date.now(), kind: "error", message: text };
+      if (entry.type !== "status") return null;
+      return { id: `history-status-${index}`, ts: Date.now(), kind: terminalKindForStatus(text), message: text };
+    })
+    .filter(Boolean)
+    .slice(-terminalHistoryLimit);
+}
+
 function historyFromThread(thread) {
   const history = [];
   for (const [turnIndex, turn] of (thread.turns || []).entries()) {
@@ -1820,6 +1898,7 @@ class SharedBridge {
     this.ready = false;
     this.startupFailed = false;
     this.history = [];
+    this.terminalHistory = [];
     this.turnQueue = [];
     this.runState = { state: "connecting", label: "接続中", turnId: null, updatedAt: Date.now() };
     this.streamingStarted = false;
@@ -1853,6 +1932,7 @@ class SharedBridge {
       shared: true,
       clients: this.clients.size,
       history: this.history,
+      terminalHistory: this.terminalHistory,
       run: this.runPayload(),
     };
   }
@@ -1913,8 +1993,24 @@ class SharedBridge {
     this.idleDisposeTimer.unref?.();
   }
 
+  appendTerminal(entry) {
+    if (!entry) return null;
+    const next = {
+      id: entry.id || `terminal-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      ts: entry.ts || Date.now(),
+      kind: entry.kind || "status",
+      message: redactTerminalText(entry.message || ""),
+      detail: entry.detail ? redactTerminalText(entry.detail).slice(0, 4000) : "",
+      turnId: entry.turnId || this.activeTurnId || null,
+    };
+    this.terminalHistory.push(next);
+    this.terminalHistory = this.terminalHistory.slice(-terminalHistoryLimit);
+    return next;
+  }
+
   emit(type, payload = {}) {
-    const body = JSON.stringify({ type, ...payload });
+    const terminalEntry = this.appendTerminal(terminalEntryForBridgeMessage(type, payload, this));
+    const body = JSON.stringify({ type, ...(terminalEntry ? { terminalEntry } : {}), ...payload });
     for (const client of this.clients) {
       if (client.readyState === WebSocket.OPEN) client.send(body);
     }
@@ -2034,6 +2130,7 @@ class SharedBridge {
         this.promoteBridgeKey();
         this.ready = true;
         this.history = historyFromThread(msg.result.thread);
+        this.terminalHistory = terminalHistoryFromChatHistory(this.history);
         const idleState = runStateFromSessionFile(msg.result.thread) || idleRunStateFromHistory(this.history);
         this.setBridgeRunState(idleState.state, idleState.label, idleState.turnId);
         this.emit("ready", this.readyPayload());
@@ -2400,6 +2497,7 @@ class ClaudeBridge {
     this.activeTurnId = null;
     this.ready = true;
     this.history = this.claudeSessionId ? claudeHistoryForSession(this.claudeSessionId) : [];
+    this.terminalHistory = terminalHistoryFromChatHistory(this.history);
     this.turnQueue = [];
     this.activeProcess = null;
     const idleState = idleRunStateFromHistory(this.history);
@@ -2430,6 +2528,7 @@ class ClaudeBridge {
       shared: true,
       clients: this.clients.size,
       history: this.history,
+      terminalHistory: this.terminalHistory,
       run: this.runPayload(),
     };
   }
@@ -2489,8 +2588,24 @@ class ClaudeBridge {
     this.idleDisposeTimer.unref?.();
   }
 
+  appendTerminal(entry) {
+    if (!entry) return null;
+    const next = {
+      id: entry.id || `terminal-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      ts: entry.ts || Date.now(),
+      kind: entry.kind || "status",
+      message: redactTerminalText(entry.message || ""),
+      detail: entry.detail ? redactTerminalText(entry.detail).slice(0, 4000) : "",
+      turnId: entry.turnId || this.activeTurnId || null,
+    };
+    this.terminalHistory.push(next);
+    this.terminalHistory = this.terminalHistory.slice(-terminalHistoryLimit);
+    return next;
+  }
+
   emit(type, payload = {}) {
-    const body = JSON.stringify({ type, ...payload });
+    const terminalEntry = this.appendTerminal(terminalEntryForBridgeMessage(type, payload, this));
+    const body = JSON.stringify({ type, ...(terminalEntry ? { terminalEntry } : {}), ...payload });
     for (const client of this.clients) {
       if (client.readyState === WebSocket.OPEN) client.send(body);
     }

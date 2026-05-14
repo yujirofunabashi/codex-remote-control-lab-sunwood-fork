@@ -103,6 +103,9 @@ PHONE_NOTIFY_TIMEOUT_MS=5000 npm run phone
 
 - Codex Desktop 風の sidebar / conversation / artifact panel / composer layout
 - 最近の thread 一覧と直接 resume
+- thread ごとのアクセント色を browser localStorage に保存し、複数作業を見分けやすくする
+- チャット / ターミナル表示を切り替え、command・file change・承認・error などの監視ログを確認
+- スマホ幅では左右スワイプまたはヘッダーの前後ボタンで thread を切り替え
 - Desktop の開き直し/再読込に寄せた既定の履歴同期 refresh
 - plugin、model、config/auth、automation status panel
 - 次 turn 向けの approval / sandbox mode control

@@ -63,6 +63,10 @@
             <h1 id="threadTitle">Codex Remote</h1>
             <p id="meta">接続準備中</p>
           </div>
+          <div class="thread-nav" aria-label="スレッド移動">
+            <button type="button" class="thread-nav-button prev" id="prevThread" title="前のスレッド" aria-label="前のスレッド"></button>
+            <button type="button" class="thread-nav-button next" id="nextThread" title="次のスレッド" aria-label="次のスレッド"></button>
+          </div>
           <div class="title-actions">
             <button id="connect" type="button" class="icon-button" title="再接続">↻</button>
             <button type="button" class="icon-button mobile-settings-button" id="mobileSettingsButton" title="設定" aria-label="設定">⚙︎</button>
@@ -74,7 +78,29 @@
 
         <div class="content-grid">
           <section class="conversation" aria-label="会話">
+            <div class="main-view-bar">
+              <div class="main-view-toggle" role="group" aria-label="表示モード">
+                <button type="button" id="chatViewButton" class="main-view-button active" data-main-view="chat" aria-pressed="true">チャット</button>
+                <button type="button" id="terminalViewButton" class="main-view-button" data-main-view="terminal" aria-pressed="false">ターミナル</button>
+              </div>
+              <div id="swipeFeedback" class="swipe-feedback hidden" aria-live="polite"></div>
+            </div>
             <div id="log" class="log" aria-live="polite"></div>
+            <section id="mainTerminalView" class="terminal-view hidden" aria-label="ターミナルログ">
+              <div class="terminal-toolbar" aria-label="ターミナルログ操作">
+                <select id="terminalFilter" class="terminal-filter" aria-label="ターミナルログの絞り込み">
+                  <option value="all">all</option>
+                  <option value="command">command</option>
+                  <option value="file">file</option>
+                  <option value="status">status</option>
+                  <option value="error">error</option>
+                </select>
+                <button type="button" id="terminalAutoScroll" class="terminal-tool active" aria-pressed="true">Auto</button>
+                <button type="button" id="terminalClear" class="terminal-tool">Clear</button>
+                <button type="button" id="terminalCopy" class="terminal-tool">Copy</button>
+              </div>
+              <div id="terminalTranscript" class="terminal-transcript" role="log" aria-live="polite" aria-relevant="additions text"></div>
+            </section>
             <section id="approval" class="approval hidden">
               <div>
                 <strong>承認リクエスト</strong>

@@ -27,7 +27,18 @@ const artifactTitle = document.querySelector("#artifactTitle");
 const artifactList = document.querySelector("#artifactList");
 const artifactPreview = document.querySelector("#artifactPreview");
 const terminalList = document.querySelector("#terminalList");
+const mainTerminalView = document.querySelector("#mainTerminalView");
+const terminalTranscript = document.querySelector("#terminalTranscript");
+const terminalFilter = document.querySelector("#terminalFilter");
+const terminalAutoScrollButton = document.querySelector("#terminalAutoScroll");
+const terminalClearButton = document.querySelector("#terminalClear");
+const terminalCopyButton = document.querySelector("#terminalCopy");
 const statusButton = document.querySelector("#statusButton");
+const chatViewButton = document.querySelector("#chatViewButton");
+const terminalViewButton = document.querySelector("#terminalViewButton");
+const prevThreadButton = document.querySelector("#prevThread");
+const nextThreadButton = document.querySelector("#nextThread");
+const swipeFeedback = document.querySelector("#swipeFeedback");
 const webSearchButton = document.querySelector("#webSearchButton");
 const artifactsTab = document.querySelector("#artifactsTab");
 const workspaceTab = document.querySelector("#workspaceTab");
@@ -87,6 +98,25 @@ function appPath(path) {
   return `${appBasePath}${raw}`;
 }
 
+function readJsonStorage(key, fallback) {
+  try {
+    const value = localStorage.getItem(key);
+    if (!value) return fallback;
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeJsonStorage(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // localStorage may be unavailable or full; keep the in-memory state usable.
+  }
+}
+
 function setSidebarVisible(visible) {
   document.body.classList.toggle("show-sidebar", visible);
   mobileThreadsButton.setAttribute("aria-expanded", visible ? "true" : "false");
@@ -103,7 +133,25 @@ const themeOptions = [
   { id: "cyberpunk", name: "サイバーパンク", detail: "暗め / ネオンアクセント" },
   { id: "botanical", name: "ボタニカル", detail: "葉色 / 紙のような柔らかさ" },
 ];
+const threadColorStorageKey = "codexPhoneThreadColors:v1";
+const threadDraftStorageKey = "codexPhoneThreadDrafts:v1";
+const mainViewStorageKey = "codexPhoneMainView:v1";
+const swipeHintStorageKey = "codexPhoneSwipeHintSeen:v1";
+const terminalHistoryLimit = 300;
+const threadColorPalette = [
+  "#ff5d22",
+  "#7c3aed",
+  "#2563eb",
+  "#0f766e",
+  "#3f7f4b",
+  "#ca8a04",
+  "#dc2626",
+  "#db2777",
+  "#475569",
+];
 let selectedTheme = localStorage.getItem("codexPhoneTheme") || "simple";
+let threadColorOverrides = readJsonStorage(threadColorStorageKey, {});
+let threadDrafts = readJsonStorage(threadDraftStorageKey, {});
 
 let ws = null;
 let pendingApproval = null;
@@ -129,6 +177,14 @@ let threadProvider = normalizeProviderName(params.get("provider") || (selectedTh
 let threadProviderExplicit = Boolean(threadProvider);
 const selectedThreadByProvider = new Map();
 if (selectedThread && threadProvider) selectedThreadByProvider.set(threadProvider, selectedThread);
+let activeDraftKey = "";
+const threadDraftFiles = new Map();
+let mainViewMode = localStorage.getItem(mainViewStorageKey) === "terminal" ? "terminal" : "chat";
+let terminalFilterMode = "all";
+let terminalAutoScroll = true;
+const terminalHistories = new Map();
+let swipeStart = null;
+let swipeFeedbackTimer = null;
 let selectedModel = localStorage.getItem("codexPhoneModel") || "";
 let selectedModelLabel = localStorage.getItem("codexPhoneModelLabel") || "5.5";
 let selectedReasoning = localStorage.getItem("codexPhoneReasoning") || "M";
@@ -156,6 +212,97 @@ const apiTimeoutMs = 9000;
 const uploadTimeoutMs = 60_000;
 const resumeRefreshDebounceMs = 1200;
 const staleSocketMs = 45_000;
+
+function sanitizeHexColor(value) {
+  const text = String(value || "").trim();
+  const match = text.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+  if (!match) return "";
+  if (match[1].length === 6) return `#${match[1].toLowerCase()}`;
+  return `#${match[1]
+    .split("")
+    .map((char) => `${char}${char}`)
+    .join("")
+    .toLowerCase()}`;
+}
+
+function hashString(value) {
+  let hash = 2166136261;
+  for (const char of String(value || "")) {
+    hash ^= char.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function fallbackThreadColor(key) {
+  return threadColorPalette[hashString(key || "thread") % threadColorPalette.length];
+}
+
+function contrastColorFor(hex) {
+  const color = sanitizeHexColor(hex) || "#000000";
+  const r = Number.parseInt(color.slice(1, 3), 16) / 255;
+  const g = Number.parseInt(color.slice(3, 5), 16) / 255;
+  const b = Number.parseInt(color.slice(5, 7), 16) / 255;
+  const linear = [r, g, b].map((channel) =>
+    channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4,
+  );
+  const luminance = 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
+  return luminance > 0.58 ? "#141414" : "#ffffff";
+}
+
+function threadColorKeyFor(thread) {
+  const provider = normalizeProviderName(thread?.provider) || currentThreadProvider();
+  if (thread?.id) return `${provider}:thread:${thread.id}`;
+  const cwd = String(thread?.cwd || currentWorkspace.workspaceLocation || "").trim();
+  if (cwd) return `${provider}:new:${cwd}`;
+  return `${provider}:new:${location.host}${appBasePath || "/"}`;
+}
+
+function currentThreadColorKey() {
+  const selected = threadCache.find((thread) => thread.id === selectedThread);
+  if (selected) return threadColorKeyFor(selected);
+  return threadColorKeyFor({
+    provider: currentThreadProvider(),
+    cwd: currentWorkspace.workspaceLocation || currentWorkspace.repoName || "",
+  });
+}
+
+function threadColorForKey(key) {
+  return sanitizeHexColor(threadColorOverrides[key]) || fallbackThreadColor(key);
+}
+
+function threadColorForThread(thread) {
+  return threadColorForKey(threadColorKeyFor(thread));
+}
+
+function setThreadColorOverride(key, color) {
+  const sanitized = sanitizeHexColor(color);
+  if (!key || !sanitized) return;
+  threadColorOverrides = { ...threadColorOverrides, [key]: sanitized };
+  writeJsonStorage(threadColorStorageKey, threadColorOverrides);
+  applyCurrentThreadAccent();
+  renderThreadList();
+  renderTerminalTranscript();
+}
+
+function resetThreadColorOverride(key) {
+  if (!key || !Object.prototype.hasOwnProperty.call(threadColorOverrides, key)) return;
+  const next = { ...threadColorOverrides };
+  delete next[key];
+  threadColorOverrides = next;
+  writeJsonStorage(threadColorStorageKey, threadColorOverrides);
+  applyCurrentThreadAccent();
+  renderThreadList();
+  renderTerminalTranscript();
+}
+
+function applyCurrentThreadAccent() {
+  const key = currentThreadColorKey();
+  const color = threadColorForKey(key);
+  document.documentElement.style.setProperty("--thread-accent", color);
+  document.documentElement.style.setProperty("--thread-accent-contrast", contrastColorFor(color));
+  document.documentElement.dataset.threadColorMode = threadColorOverrides[key] ? "custom" : "auto";
+}
 
 const runStateText = {
   connecting: "接続中",
@@ -197,6 +344,7 @@ function setRunState(state, label) {
     runStateLabel.textContent = nextLabel;
   }
   updateInterruptButton();
+  updateThreadNavigation();
 }
 
 function applyServerRunState(run = {}) {
@@ -1034,6 +1182,10 @@ function setWorkspaceMeta(meta = {}) {
   const label = empty ? "作業場所を取得できません" : `repo: ${repo || "--"} / 現在地: ${location || "--"} / branch: ${branch || "--"}`;
   workspaceIndicator.title = label;
   workspaceIndicator.setAttribute("aria-label", label);
+  if (!selectedThread) {
+    applyCurrentThreadAccent();
+    activeDraftKey = currentThreadColorKey();
+  }
 }
 
 function setReady(ready) {
@@ -1043,6 +1195,7 @@ function setReady(ready) {
   composer.dataset.ready = ready ? "true" : "false";
   sendButton.title = pendingSubmission ? "送信確認中です" : ready ? "送信" : "接続後に送信できます";
   updateInterruptButton();
+  updateThreadNavigation();
 }
 
 function clientMessageId() {
@@ -1052,6 +1205,170 @@ function clientMessageId() {
 
 function fileDraftSignature(files = pendingFiles) {
   return JSON.stringify(files.map((file) => [file.name, file.absolutePath || file.path || file.url || "", file.size || 0]));
+}
+
+function saveDraftForActiveThread() {
+  const key = activeDraftKey || currentThreadColorKey();
+  if (!key) return;
+  const text = promptInput.value || "";
+  if (text) threadDrafts[key] = text;
+  else delete threadDrafts[key];
+  if (pendingFiles.length) threadDraftFiles.set(key, pendingFiles.map((file) => ({ ...file })));
+  else threadDraftFiles.delete(key);
+  writeJsonStorage(threadDraftStorageKey, threadDrafts);
+}
+
+function restoreDraftForCurrentThread() {
+  activeDraftKey = currentThreadColorKey();
+  promptInput.value = threadDrafts[activeDraftKey] || "";
+  pendingFiles = (threadDraftFiles.get(activeDraftKey) || []).map((file) => ({ ...file }));
+  renderAttachments();
+}
+
+function migrateThreadScopedState(previousKey, nextKey) {
+  if (!previousKey || !nextKey || previousKey === nextKey) return;
+  if (Object.prototype.hasOwnProperty.call(threadDrafts, previousKey) && !Object.prototype.hasOwnProperty.call(threadDrafts, nextKey)) {
+    threadDrafts[nextKey] = threadDrafts[previousKey];
+    delete threadDrafts[previousKey];
+    writeJsonStorage(threadDraftStorageKey, threadDrafts);
+  }
+  if (threadDraftFiles.has(previousKey) && !threadDraftFiles.has(nextKey)) {
+    threadDraftFiles.set(nextKey, threadDraftFiles.get(previousKey));
+    threadDraftFiles.delete(previousKey);
+  }
+  if (terminalHistories.has(previousKey) && !terminalHistories.has(nextKey)) {
+    terminalHistories.set(nextKey, terminalHistories.get(previousKey));
+  }
+}
+
+function currentTerminalHistory() {
+  const key = currentThreadColorKey();
+  if (!terminalHistories.has(key)) terminalHistories.set(key, []);
+  return terminalHistories.get(key);
+}
+
+function capTerminalHistory(entries) {
+  return entries.slice(-terminalHistoryLimit);
+}
+
+function normalizeTerminalKind(kind) {
+  const value = String(kind || "").toLowerCase();
+  if (value === "command" || value === "file" || value === "error") return value;
+  return "status";
+}
+
+function terminalFilterMatches(entry) {
+  if (terminalFilterMode === "all") return true;
+  if (terminalFilterMode === "status") return normalizeTerminalKind(entry.kind) === "status";
+  return normalizeTerminalKind(entry.kind) === terminalFilterMode;
+}
+
+function terminalTimestampLabel(timestamp) {
+  const date = new Date(Number(timestamp) || Date.now());
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+function renderTerminalTranscript() {
+  if (!terminalTranscript) return;
+  const entries = currentTerminalHistory().filter(terminalFilterMatches);
+  terminalTranscript.replaceChildren();
+  if (!entries.length) {
+    const empty = document.createElement("div");
+    empty.className = "terminal-empty";
+    empty.textContent = "このスレッドのターミナルログはまだありません。";
+    terminalTranscript.appendChild(empty);
+    return;
+  }
+  for (const entry of entries) {
+    const row = document.createElement("div");
+    row.className = `terminal-line ${normalizeTerminalKind(entry.kind)}`;
+    const time = document.createElement("time");
+    time.dateTime = new Date(Number(entry.ts) || Date.now()).toISOString();
+    time.textContent = terminalTimestampLabel(entry.ts);
+    const kind = document.createElement("span");
+    kind.className = "terminal-kind";
+    kind.textContent = normalizeTerminalKind(entry.kind);
+    const message = document.createElement("span");
+    message.className = "terminal-message";
+    message.textContent = entry.message || "";
+    row.append(time, kind, message);
+    if (entry.detail) {
+      const detail = document.createElement("pre");
+      detail.className = "terminal-detail";
+      detail.textContent = entry.detail;
+      row.appendChild(detail);
+    }
+    terminalTranscript.appendChild(row);
+  }
+  if (terminalAutoScroll) terminalTranscript.scrollTop = terminalTranscript.scrollHeight;
+}
+
+function appendTerminalEntry(entry, { key = currentThreadColorKey() } = {}) {
+  if (!entry) return;
+  const normalized = {
+    id: entry.id || `client-terminal-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    ts: Number(entry.ts) || Date.now(),
+    kind: normalizeTerminalKind(entry.kind),
+    message: String(entry.message || "").slice(0, 1200),
+    detail: entry.detail ? String(entry.detail).slice(0, 4000) : "",
+  };
+  const history = capTerminalHistory([...(terminalHistories.get(key) || []), normalized]);
+  terminalHistories.set(key, history);
+  if (key === currentThreadColorKey()) renderTerminalTranscript();
+}
+
+function replaceTerminalHistory(entries = [], { key = currentThreadColorKey() } = {}) {
+  const normalized = capTerminalHistory(
+    (entries || []).map((entry) => ({
+      id: entry.id || `terminal-${entry.ts || Date.now()}-${Math.random().toString(16).slice(2)}`,
+      ts: Number(entry.ts) || Date.now(),
+      kind: normalizeTerminalKind(entry.kind),
+      message: String(entry.message || "").slice(0, 1200),
+      detail: entry.detail ? String(entry.detail).slice(0, 4000) : "",
+    })),
+  );
+  terminalHistories.set(key, normalized);
+  if (key === currentThreadColorKey()) renderTerminalTranscript();
+}
+
+function terminalHistoryFromChatHistory(history = []) {
+  return capTerminalHistory(
+    history
+      .map((entry, index) => {
+        const text = String(entry.text || "").trim();
+        if (!text) return null;
+        if (entry.type === "error") return { id: `history-error-${index}`, ts: Date.now(), kind: "error", message: text };
+        if (entry.type !== "status") return null;
+        const kind = /^\$\s/.test(text) ? "command" : /file changes|ファイル/i.test(text) ? "file" : "status";
+        return { id: `history-status-${index}`, ts: Date.now(), kind, message: text };
+      })
+      .filter(Boolean),
+  );
+}
+
+function terminalEntryFromMessage(msg) {
+  const now = Date.now();
+  if (msg.type === "runState") return { ts: now, kind: "status", message: `run state: ${msg.label || msg.state || "updated"}` };
+  if (msg.type === "status") {
+    const text = String(msg.text || "");
+    const kind = /^\$\s/.test(text) ? "command" : /file changes|ファイル/i.test(text) ? "file" : "status";
+    return { ts: now, kind, message: text };
+  }
+  if (msg.type === "error") return { ts: now, kind: "error", message: msg.text || "エラー" };
+  if (msg.type === "approval") return { ts: now, kind: "status", message: `approval requested: ${msg.request?.method || "request"}` };
+  if (msg.type === "turn") return { ts: now, kind: "status", message: `turn ${msg.status || "updated"}${msg.turnId ? `: ${msg.turnId}` : ""}` };
+  if (msg.type === "user") return { ts: now, kind: "status", message: "user prompt sent" };
+  if (msg.type === "event" && msg.event?.method) return { ts: now, kind: "status", message: `event: ${msg.event.method}` };
+  return null;
+}
+
+function handleTerminalMessage(msg) {
+  if (msg.type === "ready") {
+    const entries = Array.isArray(msg.terminalHistory) && msg.terminalHistory.length ? msg.terminalHistory : terminalHistoryFromChatHistory(msg.history || []);
+    replaceTerminalHistory(entries);
+    return;
+  }
+  appendTerminalEntry(msg.terminalEntry || terminalEntryFromMessage(msg));
 }
 
 function setPendingSubmission(submission) {
@@ -1080,8 +1397,10 @@ function acceptPendingSubmission(clientMessageIdValue) {
     promptInput.value = "";
     pendingFiles = [];
     renderAttachments();
+    saveDraftForActiveThread();
   } else {
     addStatus("送信は受理されました。入力欄は変更されているため残しました。");
+    saveDraftForActiveThread();
   }
   setReady(connectionReady);
   return true;
@@ -1097,6 +1416,7 @@ function releasePendingSubmission(message = "") {
     pendingFiles = submission.files.map((file) => ({ ...file }));
     renderAttachments();
   }
+  saveDraftForActiveThread();
   setReady(connectionReady);
   if (message) addStatus(`${message} 入力は残しています。`);
 }
@@ -1148,17 +1468,8 @@ function normalizeThreadRecord(thread, provider) {
   };
 }
 
-function renderThreadList() {
-  threadList.replaceChildren();
+function visibleThreadGroups() {
   const query = threadSearch.value.trim().toLowerCase();
-  const provider = currentThreadProvider();
-  const newProject = document.createElement("button");
-  newProject.type = "button";
-  newProject.className = selectedThread ? "project-heading new-project" : "project-heading new-project active";
-  newProject.innerHTML = `<span class="project-folder"></span><span>New ${providerLabel(provider)} thread</span>`;
-  newProject.addEventListener("click", () => selectThread(""));
-  threadList.appendChild(newProject);
-
   const groups = new Map();
   for (const thread of threadCache) {
     const project = projectForThread(thread);
@@ -1168,6 +1479,26 @@ function renderThreadList() {
     if (!groups.has(project)) groups.set(project, []);
     groups.get(project).push(thread);
   }
+  return groups;
+}
+
+function visibleThreadsInListOrder() {
+  const threads = [];
+  for (const groupThreads of visibleThreadGroups().values()) threads.push(...groupThreads.slice(0, 6));
+  return threads;
+}
+
+function renderThreadList() {
+  threadList.replaceChildren();
+  const provider = currentThreadProvider();
+  const newProject = document.createElement("button");
+  newProject.type = "button";
+  newProject.className = selectedThread ? "project-heading new-project" : "project-heading new-project active";
+  newProject.innerHTML = `<span class="project-folder"></span><span>New ${providerLabel(provider)} thread</span>`;
+  newProject.addEventListener("click", () => selectThread(""));
+  threadList.appendChild(newProject);
+
+  const groups = visibleThreadGroups();
 
   for (const [project, threads] of groups) {
     const group = document.createElement("section");
@@ -1184,18 +1515,32 @@ function renderThreadList() {
 
     const visibleThreads = threads.slice(0, 6);
     for (const thread of visibleThreads) {
-      const item = document.createElement("button");
-      item.type = "button";
+      const item = document.createElement("div");
       item.className = thread.id === selectedThread ? "thread-item active" : "thread-item";
       item.title = titleForThread(thread);
+      item.style.setProperty("--item-thread-accent", threadColorForThread(thread));
+      const colorButton = document.createElement("button");
+      colorButton.type = "button";
+      colorButton.className = "thread-color-button";
+      colorButton.title = `${titleForThread(thread)} の色を変更`;
+      colorButton.setAttribute("aria-label", `${titleForThread(thread)} の色を変更`);
+      colorButton.style.backgroundColor = threadColorForThread(thread);
+      colorButton.addEventListener("click", (event) => {
+        event.stopPropagation();
+        openThreadColorPanel(thread);
+      });
+      const selectButton = document.createElement("button");
+      selectButton.type = "button";
+      selectButton.className = "thread-select";
       const title = document.createElement("span");
       title.className = "thread-title";
       title.textContent = titleForThread(thread);
       const time = document.createElement("span");
       time.className = "thread-time";
       time.textContent = formatRelativeTime(thread.updatedAt || thread.createdAt);
-      item.append(title, time);
-      item.addEventListener("click", () => selectThread(thread.id));
+      selectButton.append(title, time);
+      selectButton.addEventListener("click", () => selectThread(thread.id));
+      item.append(colorButton, selectButton);
       group.appendChild(item);
     }
 
@@ -1219,6 +1564,184 @@ function renderThreadList() {
     empty.textContent = `${providerLabel(provider)}のチャットはありません`;
     threadList.appendChild(empty);
   }
+  updateThreadNavigation();
+}
+
+function adjacentThread(direction) {
+  const threads = visibleThreadsInListOrder();
+  if (!threads.length) return null;
+  const currentIndex = threads.findIndex((thread) => thread.id === selectedThread);
+  if (currentIndex < 0) return direction > 0 ? threads[0] : null;
+  return threads[currentIndex + direction] || null;
+}
+
+function updateThreadNavigation() {
+  const previous = adjacentThread(-1);
+  const next = adjacentThread(1);
+  const disabledByRun = liveTurnActive;
+  if (prevThreadButton) {
+    prevThreadButton.disabled = disabledByRun || !previous;
+    prevThreadButton.title = disabledByRun ? "実行中はスレッド移動を止めています" : previous ? `前: ${titleForThread(previous)}` : "前のスレッドはありません";
+  }
+  if (nextThreadButton) {
+    nextThreadButton.disabled = disabledByRun || !next;
+    nextThreadButton.title = disabledByRun ? "実行中はスレッド移動を止めています" : next ? `次: ${titleForThread(next)}` : "次のスレッドはありません";
+  }
+}
+
+function showSwipeFeedback(text) {
+  if (!swipeFeedback) {
+    addStatus(text);
+    return;
+  }
+  swipeFeedback.textContent = text;
+  swipeFeedback.classList.remove("hidden");
+  if (swipeFeedbackTimer) window.clearTimeout(swipeFeedbackTimer);
+  swipeFeedbackTimer = window.setTimeout(() => {
+    swipeFeedback.classList.add("hidden");
+  }, 1800);
+}
+
+function selectAdjacentThread(direction, source = "button") {
+  if (liveTurnActive) {
+    showSwipeFeedback("実行中はスレッド切り替えを止めています。");
+    return;
+  }
+  const target = adjacentThread(direction);
+  if (!target) {
+    showSwipeFeedback(direction > 0 ? "次のスレッドはありません。" : "前のスレッドはありません。");
+    return;
+  }
+  selectThread(target.id);
+  showSwipeFeedback(`${direction > 0 ? "次" : "前"}のスレッドへ切り替えました。`);
+  if (source === "swipe") addStatus(`${direction > 0 ? "左" : "右"}スワイプでスレッドを切り替えました。`);
+}
+
+function showInitialSwipeHint() {
+  if (localStorage.getItem(swipeHintStorageKey) || !window.matchMedia("(max-width: 820px)").matches) return;
+  localStorage.setItem(swipeHintStorageKey, "1");
+  window.setTimeout(() => showSwipeFeedback("左右スワイプで前後のスレッドへ移動できます。"), 800);
+}
+
+function isSwipeIgnoredTarget(target) {
+  if (mainViewMode === "terminal" || liveTurnActive) return true;
+  if (!window.matchMedia("(max-width: 820px)").matches) return true;
+  return Boolean(
+    target.closest(
+      "textarea,input,button,select,a,[role='button'],[role='menu'],dialog,.model-menu,.prompt-modal,.approval,.terminal-view,.artifact-panel,.sidebar,.sidebar-scrim",
+    ),
+  );
+}
+
+function handleSwipeStart(event) {
+  if (!event.touches?.length || isSwipeIgnoredTarget(event.target)) {
+    swipeStart = null;
+    return;
+  }
+  const touch = event.touches[0];
+  swipeStart = { x: touch.clientX, y: touch.clientY, time: Date.now() };
+}
+
+function handleSwipeEnd(event) {
+  if (!swipeStart || !event.changedTouches?.length) return;
+  const touch = event.changedTouches[0];
+  const dx = touch.clientX - swipeStart.x;
+  const dy = touch.clientY - swipeStart.y;
+  const elapsed = Date.now() - swipeStart.time;
+  swipeStart = null;
+  if (elapsed > 900) return;
+  if (Math.abs(dx) < 72 || Math.abs(dx) < Math.abs(dy) * 1.8) return;
+  selectAdjacentThread(dx < 0 ? 1 : -1, "swipe");
+}
+
+function setMainView(view) {
+  mainViewMode = view === "terminal" ? "terminal" : "chat";
+  localStorage.setItem(mainViewStorageKey, mainViewMode);
+  log.classList.toggle("hidden", mainViewMode !== "chat");
+  mainTerminalView.classList.toggle("hidden", mainViewMode !== "terminal");
+  chatViewButton.classList.toggle("active", mainViewMode === "chat");
+  terminalViewButton.classList.toggle("active", mainViewMode === "terminal");
+  chatViewButton.setAttribute("aria-pressed", String(mainViewMode === "chat"));
+  terminalViewButton.setAttribute("aria-pressed", String(mainViewMode === "terminal"));
+  document.body.dataset.mainView = mainViewMode;
+  if (mainViewMode === "terminal") renderTerminalTranscript();
+}
+
+function renderThreadColorSettings(thread = null) {
+  const target = thread || threadCache.find((candidate) => candidate.id === selectedThread) || {
+    provider: currentThreadProvider(),
+    cwd: currentWorkspace.workspaceLocation || currentWorkspace.repoName || "",
+  };
+  const key = threadColorKeyFor(target);
+  const activeColor = threadColorForKey(key);
+  const customColor = sanitizeHexColor(threadColorOverrides[key]);
+  const group = document.createElement("section");
+  group.className = "thread-color-settings";
+
+  const title = document.createElement("div");
+  title.className = "theme-settings-title";
+  title.textContent = thread ? "スレッド色" : "現在のスレッド色";
+  group.appendChild(title);
+
+  const current = document.createElement("div");
+  current.className = "thread-color-current";
+  const swatch = document.createElement("span");
+  swatch.className = "thread-color-current-swatch";
+  swatch.style.backgroundColor = activeColor;
+  const label = document.createElement("span");
+  label.textContent = customColor ? `カスタム ${customColor}` : `自動 ${activeColor}`;
+  current.append(swatch, label);
+  group.appendChild(current);
+
+  const palette = document.createElement("div");
+  palette.className = "thread-color-palette";
+  for (const color of threadColorPalette) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = sanitizeHexColor(color) === activeColor && customColor ? "active" : "";
+    button.style.backgroundColor = color;
+    button.title = color;
+    button.setAttribute("aria-label", `スレッド色 ${color}`);
+    button.addEventListener("click", () => {
+      setThreadColorOverride(key, color);
+      if (!thread || thread.id === selectedThread) applyCurrentThreadAccent();
+      openThreadColorPanel(thread);
+    });
+    palette.appendChild(button);
+  }
+  group.appendChild(palette);
+
+  const customRow = document.createElement("div");
+  customRow.className = "thread-color-custom-row";
+  const input = document.createElement("input");
+  input.type = "color";
+  input.value = activeColor;
+  input.setAttribute("aria-label", "任意のスレッド色");
+  const applyButton = document.createElement("button");
+  applyButton.type = "button";
+  applyButton.textContent = "適用";
+  applyButton.addEventListener("click", () => {
+    setThreadColorOverride(key, input.value);
+    openThreadColorPanel(thread);
+  });
+  const resetButton = document.createElement("button");
+  resetButton.type = "button";
+  resetButton.className = "secondary";
+  resetButton.textContent = "自動色に戻す";
+  resetButton.addEventListener("click", () => {
+    resetThreadColorOverride(key);
+    openThreadColorPanel(thread);
+  });
+  customRow.append(input, applyButton, resetButton);
+  group.appendChild(customRow);
+
+  artifactList.appendChild(group);
+}
+
+function openThreadColorPanel(thread = null) {
+  clearPanel("スレッド色", "workspace");
+  artifactList.replaceChildren();
+  renderThreadColorSettings(thread);
 }
 
 function authQuery() {
@@ -1265,6 +1788,7 @@ async function apiPost(path, body = {}) {
 function switchThreadProvider(provider, { reload = true } = {}) {
   const nextProvider = normalizeProviderName(provider) || activeProvider;
   const previousProvider = currentThreadProvider();
+  saveDraftForActiveThread();
   if (nextProvider === previousProvider) {
     threadProvider = nextProvider;
     threadProviderExplicit = true;
@@ -1283,6 +1807,9 @@ function switchThreadProvider(provider, { reload = true } = {}) {
   renderHistory([]);
   updateUrlThread();
   renderThreadList();
+  restoreDraftForCurrentThread();
+  applyCurrentThreadAccent();
+  renderTerminalTranscript();
   closeSocket({ suppressReconnect: true });
   setReady(false);
   meta.textContent = `${providerLabel(nextProvider)} へ接続を切り替え中`;
@@ -1303,6 +1830,8 @@ async function loadThreads({ background = false, provider = "" } = {}) {
     if (!threadProviderExplicit) threadProvider = resultProvider;
     threadCache = (result.data || []).map((thread) => normalizeThreadRecord(thread, resultProvider));
     renderThreadList();
+    applyCurrentThreadAccent();
+    showInitialSwipeHint();
     lastThreadListError = "";
   } catch (error) {
     const message = error.message || String(error);
@@ -1328,6 +1857,9 @@ async function refreshSelectedThread() {
       return;
     }
     renderHistoryIfChanged(result.history || []);
+    if (!terminalHistories.has(currentThreadColorKey())) {
+      replaceTerminalHistory(terminalHistoryFromChatHistory(result.history || []));
+    }
     lastThreadRefreshError = "";
   } catch (error) {
     const message = error.message || String(error);
@@ -1349,6 +1881,9 @@ function resetMissingSelectedThread(threadId) {
   threadTitle.textContent = "新しい共有thread";
   updateUrlThread();
   renderThreadList();
+  restoreDraftForCurrentThread();
+  applyCurrentThreadAccent();
+  renderTerminalTranscript();
   addStatus("選択中のthreadが見つからないため、新しいthreadに戻しました。");
   closeSocket({ suppressReconnect: true });
   setReady(false);
@@ -1378,17 +1913,27 @@ function syncReadyThread(threadId) {
   if (!threadProviderExplicit) threadProvider = activeProvider;
   if (threadId) selectedThreadByProvider.set(currentThreadProvider(), threadId);
   if (!threadId || selectedThread === threadId) return;
+  const previousKey = currentThreadColorKey();
   selectedThread = threadId;
   updateUrlThread();
   const selected = threadCache.find((thread) => thread.id === selectedThread);
   threadTitle.textContent = selected ? titleForThread(selected) : "新しい共有thread";
+  const nextKey = currentThreadColorKey();
+  migrateThreadScopedState(previousKey, nextKey);
+  activeDraftKey = nextKey;
+  applyCurrentThreadAccent();
   renderThreadList();
+  renderTerminalTranscript();
 }
 
 function selectThread(threadId) {
+  saveDraftForActiveThread();
   selectedThread = threadId;
   selectedThreadByProvider.set(currentThreadProvider(), selectedThread);
   updateUrlThread();
+  restoreDraftForCurrentThread();
+  applyCurrentThreadAccent();
+  renderTerminalTranscript();
   renderThreadList();
   setSidebarVisible(false);
   connect();
@@ -1775,6 +2320,7 @@ async function showSettings() {
   clearPanel("設定", "workspace");
   artifactList.replaceChildren();
   renderThemeSettings();
+  renderThreadColorSettings();
   const loadingRow = addPanelRow("読み込み中...");
   try {
     const provider = currentThreadProvider();
@@ -2231,6 +2777,7 @@ function renderAttachments() {
     chip.addEventListener("click", () => {
       pendingFiles = pendingFiles.filter((candidate) => candidate !== file);
       renderAttachments();
+      saveDraftForActiveThread();
     });
     attachments.appendChild(chip);
   }
@@ -2357,14 +2904,19 @@ function connect({ preserveHistory = false } = {}) {
       });
       syncReadyThread(msg.threadId);
       renderHistoryIfChanged(msg.history || []);
+      handleTerminalMessage(msg);
       meta.textContent = `${msg.model}  •  ${msg.clients}端末  •  ${msg.workdir}`;
       applyServerRunState(msg.run || { state: "ready" });
+      applyCurrentThreadAccent();
+      updateThreadNavigation();
       addEntry("status", `共有${msg.provider || "codex"} thread ready: ${msg.threadId}`);
       return;
     }
+    handleTerminalMessage(msg);
     if (msg.type === "runState") {
       setWorkspaceMeta(msg);
       applyServerRunState(msg);
+      updateThreadNavigation();
       return;
     }
     if (msg.type === "rateLimits") {
@@ -2378,6 +2930,7 @@ function connect({ preserveHistory = false } = {}) {
       assistantEntry = null;
       liveOutputGroup = `live-${Date.now()}`;
       setRunState("running");
+      updateThreadNavigation();
       addEntry("user", msg.text, msg.attachments || []);
       return;
     }
@@ -2400,6 +2953,7 @@ function connect({ preserveHistory = false } = {}) {
     if (msg.type === "approval") {
       pendingApproval = msg.request;
       setRunState("approval");
+      updateThreadNavigation();
       approvalText.textContent = JSON.stringify(msg.request.params, null, 2);
       approval.classList.remove("hidden");
       return;
@@ -2407,6 +2961,7 @@ function connect({ preserveHistory = false } = {}) {
     if (msg.type === "turn" && msg.status === "started") {
       if (msg.turnId && !assistantEntry) liveOutputGroup = msg.turnId;
       applyServerRunState(msg.run || { state: "running", label: "Agent 処理中", turnId: msg.turnId });
+      updateThreadNavigation();
       return;
     }
     if (msg.type === "turn" && msg.status === "completed") {
@@ -2414,6 +2969,7 @@ function connect({ preserveHistory = false } = {}) {
       assistantEntry = null;
       liveOutputGroup = "";
       applyServerRunState(msg.run || { state: "done", label: "完了しました", turnId: msg.turnId });
+      updateThreadNavigation();
       loadThreads();
       refreshSelectedThread();
       return;
@@ -2421,6 +2977,7 @@ function connect({ preserveHistory = false } = {}) {
     if (msg.type === "error") {
       releasePendingSubmission("送信に失敗しました。");
       showBridgeError(msg.text || "エラー");
+      updateThreadNavigation();
       return;
     }
     if (msg.type === "status") {
@@ -2478,19 +3035,24 @@ composer.addEventListener("submit", (event) => {
   setPendingSubmission(submission);
   setRunState("running", "送信確認中");
   try {
+    appendTerminalEntry({
+      ts: Date.now(),
+      kind: "status",
+      message: `user prompt sent${attachmentsToSend.length ? ` (${attachmentsToSend.length} attachments)` : ""}`,
+    });
     ws.send(
       JSON.stringify({
-      type: "prompt",
-      token,
-      clientMessageId: submission.id,
-      text: text || "添付ファイルを確認してください。",
-      attachments: attachmentsToSend,
-      options: {
-        model: selectedModel || undefined,
-        approvalPolicy: accessMode.approvalPolicy,
-        sandboxMode: accessMode.sandboxMode,
-      },
-    }),
+        type: "prompt",
+        token,
+        clientMessageId: submission.id,
+        text: text || "添付ファイルを確認してください。",
+        attachments: attachmentsToSend,
+        options: {
+          model: selectedModel || undefined,
+          approvalPolicy: accessMode.approvalPolicy,
+          sandboxMode: accessMode.sandboxMode,
+        },
+      }),
     );
   } catch (error) {
     releasePendingSubmission("送信できませんでした。");
@@ -2521,6 +3083,7 @@ interruptButton.addEventListener("click", () => {
 approveButton.addEventListener("click", () => {
   if (!pendingApproval) return;
   ws.send(JSON.stringify({ type: "approval", token, decision: "accept", request: pendingApproval }));
+  appendTerminalEntry({ ts: Date.now(), kind: "status", message: "approval accepted" });
   approval.classList.add("hidden");
   pendingApproval = null;
   setRunState("running", "承認済み・処理中");
@@ -2529,12 +3092,15 @@ approveButton.addEventListener("click", () => {
 declineButton.addEventListener("click", () => {
   if (!pendingApproval) return;
   ws.send(JSON.stringify({ type: "approval", token, decision: "decline", request: pendingApproval }));
+  appendTerminalEntry({ ts: Date.now(), kind: "status", message: "approval declined" });
   approval.classList.add("hidden");
   pendingApproval = null;
   setRunState("running", "拒否済み・処理中");
 });
 
 newThreadButton.addEventListener("click", () => selectThread(""));
+prevThreadButton.addEventListener("click", () => selectAdjacentThread(-1));
+nextThreadButton.addEventListener("click", () => selectAdjacentThread(1));
 searchButton.addEventListener("click", () => {
   threadSearch.classList.toggle("hidden");
   threadSearch.focus();
@@ -2557,6 +3123,36 @@ sidebarScrim.addEventListener("click", () => {
 connectButton.addEventListener("click", connect);
 promptInput.addEventListener("focus", keepComposerVisible);
 promptInput.addEventListener("click", keepComposerVisible);
+promptInput.addEventListener("input", saveDraftForActiveThread);
+chatViewButton.addEventListener("click", () => setMainView("chat"));
+terminalViewButton.addEventListener("click", () => setMainView("terminal"));
+terminalFilter.addEventListener("change", () => {
+  terminalFilterMode = terminalFilter.value || "all";
+  renderTerminalTranscript();
+});
+terminalAutoScrollButton.addEventListener("click", () => {
+  terminalAutoScroll = !terminalAutoScroll;
+  terminalAutoScrollButton.classList.toggle("active", terminalAutoScroll);
+  terminalAutoScrollButton.setAttribute("aria-pressed", String(terminalAutoScroll));
+  if (terminalAutoScroll) renderTerminalTranscript();
+});
+terminalClearButton.addEventListener("click", () => {
+  terminalHistories.set(currentThreadColorKey(), []);
+  renderTerminalTranscript();
+  showSwipeFeedback("表示中のターミナルログをクリアしました。");
+});
+terminalCopyButton.addEventListener("click", async () => {
+  const text = currentTerminalHistory()
+    .filter(terminalFilterMatches)
+    .map((entry) => `[${terminalTimestampLabel(entry.ts)}] ${normalizeTerminalKind(entry.kind)} ${entry.message}${entry.detail ? `\n${entry.detail}` : ""}`)
+    .join("\n");
+  try {
+    await copyTextToClipboard(text);
+    showSwipeFeedback("表示中のターミナルログをコピーしました。");
+  } catch (error) {
+    addStatus(`ターミナルログをコピーできませんでした: ${error.message}`);
+  }
+});
 if (window.visualViewport) {
   const updateKeyboardState = () => {
     const inset = Math.max(0, window.innerHeight - window.visualViewport.height - window.visualViewport.offsetTop);
@@ -2613,8 +3209,10 @@ fileInput.addEventListener("change", async () => {
       addStatus(`添付をMacへアップロード中: ${file.name} (${formatBytes(file.size)})`);
       pendingFiles.push(await uploadFile(file));
       renderAttachments();
+      saveDraftForActiveThread();
     }
     renderAttachments();
+    saveDraftForActiveThread();
     if (files.length) addStatus(`${files.length}件のファイルを添付しました。送信時は保存済みパスだけを渡します。`);
     if (selectedFiles.length > files.length) addStatus(`${selectedFiles.length - files.length}件の未対応ファイルをスキップしました。`);
   } catch (error) {
@@ -2654,6 +3252,8 @@ document.addEventListener("click", (event) => {
   if (modelMenu.contains(event.target) || modelButton.contains(event.target) || thinkingButton.contains(event.target)) return;
   closeModelMenu();
 });
+document.querySelector(".conversation").addEventListener("touchstart", handleSwipeStart, { passive: true });
+document.querySelector(".conversation").addEventListener("touchend", handleSwipeEnd, { passive: true });
 artifactsTab.addEventListener("click", () => {
   showRightPanel();
   renderArtifactIndex(artifactItems);
@@ -2684,6 +3284,9 @@ window.addEventListener("online", () => recoverFromPageResume("ネットワー�
 
 setReady(false);
 updateModelButton();
+applyCurrentThreadAccent();
+restoreDraftForCurrentThread();
+setMainView(mainViewMode);
 loadArtifacts();
 loadThreads().catch(() => {}).finally(connect);
 setInterval(() => {

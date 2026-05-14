@@ -110,6 +110,9 @@ The current phone bridge supports:
 
 - Codex Desktop-like browser layout with a left thread sidebar, central conversation, right artifact panel, and bottom composer
 - recent thread listing and direct thread resume
+- per-thread accent colors saved in browser local storage, so concurrent work is easier to distinguish
+- chat / terminal view switching for command, file change, approval, and error monitoring logs
+- mobile-width thread switching through horizontal swipes or the header previous/next buttons
 - default history-sync refresh for Desktop reopen/refresh continuity
 - plugin, model, config/auth, and automation status panels
 - approval and sandbox mode controls for the next turn
