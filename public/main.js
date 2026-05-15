@@ -133,20 +133,38 @@ const bridgeRememberToken = document.querySelector("#bridgeRememberToken");
 const bridgeAddClear = document.querySelector("#bridgeAddClear");
 const bridgeAddSubmit = document.querySelector("#bridgeAddSubmit");
 const bridgeAddStatus = document.querySelector("#bridgeAddStatus");
+const threadInboxTabs = document.querySelector("#threadInboxTabs");
+const threadInboxTabButtons = document.querySelectorAll("[data-thread-filter]");
+const approvalStrip = document.querySelector("#approvalStrip");
+const taskTemplates = document.querySelector("#taskTemplates");
+const reviewTabButtons = document.querySelectorAll("[data-review-tab]");
 
+const tokenStorageKey = "codexPhoneToken:v1";
 const params = new URLSearchParams(location.search);
 const initialToken = params.get("token") || "";
-let token = initialToken;
+let storedToken = "";
+try {
+  storedToken = localStorage.getItem(tokenStorageKey) || localStorage.getItem("codexPhoneToken") || "";
+} catch {
+  storedToken = "";
+}
+let token = initialToken || storedToken;
 const preserveBookmarkEntryUrl = location.pathname.replace(/\/+$/, "").endsWith("/bookmark");
 let selectedThread = preserveBookmarkEntryUrl ? "" : params.get("thread") || "";
 try {
-  localStorage.removeItem("codexPhoneToken");
+  if (initialToken) {
+    localStorage.setItem(tokenStorageKey, initialToken);
+    localStorage.removeItem("codexPhoneToken");
+  }
 } catch {
-  // Token must stay URL/session scoped; ignore legacy cleanup failures.
+  // localStorage may be unavailable; the URL token still works for this page load.
 }
-if (token && !params.get("token") && window.history?.replaceState) {
-  const nextUrl = new URL(location.href);
-  nextUrl.searchParams.set("token", token);
+if (params.has("token") && window.history?.replaceState) {
+  const nextUrl = uiUtils.urlWithoutTokenParam ? uiUtils.urlWithoutTokenParam(location.href) : (() => {
+    const url = new URL(location.href);
+    url.searchParams.delete("token");
+    return url.href;
+  })();
   window.history.replaceState(null, "", nextUrl);
 }
 if (preserveBookmarkEntryUrl && params.has("thread") && window.history?.replaceState) {
@@ -162,6 +180,20 @@ function proxyBasePath() {
 }
 
 const appBasePath = proxyBasePath();
+
+function rememberTokenForCurrentOrigin(value) {
+  const text = String(value || "");
+  if (!text) return;
+  try {
+    const secure = location.protocol === "https:" ? "; Secure" : "";
+    const path = appBasePath || "/";
+    document.cookie = `codex_phone_token=${encodeURIComponent(text)}; Path=${path}; SameSite=Lax${secure}`;
+  } catch {
+    // Cookie storage is a fallback for non-fetch resources and WebSocket reconnects.
+  }
+}
+
+rememberTokenForCurrentOrigin(token);
 
 function appPath(path) {
   const raw = String(path || "");
@@ -276,7 +308,7 @@ function pwaDiagnosticsSnapshot() {
     manifestTokenFree: manifestUrl ? !manifestUrl.searchParams.has("token") : true,
     serviceWorker: "serviceWorker" in navigator ? "available" : "unavailable",
     tokenAvailable: Boolean(effectiveBridgeToken(activeBridge()) || token),
-    cacheMode: "disabled",
+    cacheMode: "app-shell-only",
   };
 }
 
@@ -364,8 +396,14 @@ function showPwaInstallHint() {
 }
 
 async function unregisterStaleServiceWorkersIfNeeded() {
-  if (!("serviceWorker" in navigator) || uiUtils.serviceWorkerRegistrationAllowed?.({ enableSw: false, secureContext: window.isSecureContext })) return;
+  if (!("serviceWorker" in navigator)) return;
+  const isLocalhost = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
+  const canRegister = Boolean(window.isSecureContext || isLocalhost);
   try {
+    if (canRegister) {
+      await navigator.serviceWorker.register(appPath("/service-worker.js"), { scope: appPath("/") });
+      return;
+    }
     const registrations = await navigator.serviceWorker.getRegistrations();
     const base = `${location.origin}${appBasePath || "/"}`;
     for (const registration of registrations) {
@@ -409,25 +447,39 @@ function bridgeColorFor(entry = {}) {
 function maskToken(value) {
   if (uiUtils.maskToken) return uiUtils.maskToken(value);
   const text = String(value || "");
-  return text ? `${text.slice(0, 3)}...${text.slice(-3)}` : "";
+  if (!text) return "";
+  if (text.length <= 8) return "****";
+  return `${text.slice(0, 4)}…${text.slice(-4)}`;
 }
 
 function saveBridgeSessionTokens() {
   writeSessionJsonStorage(bridgeSessionTokensStorageKey, bridgeSessionTokens);
 }
 
+function saveBridgeLocalTokens() {
+  writeJsonStorage(bridgeLocalTokensStorageKey, bridgeLocalTokens);
+}
+
 function effectiveBridgeToken(entry = {}) {
-  return String(entry.token || bridgeSessionTokens[entry.id] || (entry.id === homeBridgeId ? initialToken : "") || "");
+  return String(entry.token || bridgeSessionTokens[entry.id] || bridgeLocalTokens[entry.id] || (entry.id === homeBridgeId ? token || storedToken : "") || "");
 }
 
 function persistBridgeRegistry() {
+  const sanitized = [];
+  for (const entry of bridgeRegistry.bridges || []) {
+    if (entry.token && entry.rememberToken !== false) bridgeLocalTokens[entry.id] = String(entry.token);
+    if (entry.rememberToken === false) delete bridgeLocalTokens[entry.id];
+    sanitized.push({
+      ...entry,
+      baseUrl: uiUtils.normalizeBridgeBaseUrl ? uiUtils.normalizeBridgeBaseUrl(entry.baseUrl || "", location.origin) || entry.baseUrl : entry.baseUrl,
+      token: "",
+    });
+  }
   bridgeRegistry = {
     version: 1,
-    bridges: (bridgeRegistry.bridges || []).map((entry) => ({
-      ...entry,
-      token: entry.rememberToken === false ? "" : String(entry.token || ""),
-    })),
+    bridges: sanitized,
   };
+  saveBridgeLocalTokens();
   writeJsonStorage(bridgeRegistryStorageKey, bridgeRegistry);
 }
 
@@ -448,14 +500,14 @@ function ensureHomeBridge() {
       id: homeBridgeId,
       label: "現在の接続先",
       baseUrl: homeBridgeBaseUrl(),
-      token: "",
+      token,
       port: Number(location.port || 0) || null,
-      rememberToken: false,
+      rememberToken: Boolean(token),
     },
     { fallbackOrigin: location.origin },
   );
   if (!home) return;
-  if (initialToken) bridgeSessionTokens[home.id] = initialToken;
+  if (token && !home.rememberToken) bridgeSessionTokens[home.id] = token;
   const existing = (bridgeRegistry.bridges || []).find((bridge) => bridge.id === home.id || bridge.baseUrl === home.baseUrl);
   if (!existing) bridgeRegistry = { ...bridgeRegistry, version: 1, bridges: [home, ...(bridgeRegistry.bridges || [])] };
   else {
@@ -516,10 +568,28 @@ function bridgeAbsoluteUrl(path, entry = activeBridge()) {
 
 function urlWithBridgeToken(url, entry = activeBridge()) {
   const bridge = entry || activeBridge();
-  const target = new URL(bridgeAbsoluteUrl(url, bridge), location.href);
+  return new URL(bridgeAbsoluteUrl(url, bridge), location.href).href;
+}
+
+function authHeadersForBridge(entry = activeBridge(), headers = {}) {
+  const bridge = entry || activeBridge();
+  const next = { ...headers };
   const bridgeToken = effectiveBridgeToken(bridge);
-  if (bridgeToken) target.searchParams.set("token", bridgeToken);
-  return target.href;
+  if (bridgeToken && !next.authorization && !next.Authorization) next.authorization = `Bearer ${bridgeToken}`;
+  return next;
+}
+
+function base64UrlEncode(text) {
+  const bytes = new TextEncoder().encode(String(text || ""));
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function wsProtocolsForBridge(entry = activeBridge()) {
+  const bridgeToken = effectiveBridgeToken(entry);
+  if (!bridgeToken) return ["phone-bridge-v1"];
+  return ["phone-bridge-v1", `phone-token.${base64UrlEncode(bridgeToken)}`];
 }
 
 function wsUrlForBridge(entry = activeBridge(), provider = currentThreadProvider(), threadId = selectedThread, options = {}) {
@@ -534,10 +604,16 @@ function wsUrlForBridge(entry = activeBridge(), provider = currentThreadProvider
 function setBridgeToken(entry, nextToken, rememberToken = true) {
   const tokenValue = String(nextToken || "");
   if (!entry?.id) return entry;
-  if (rememberToken) delete bridgeSessionTokens[entry.id];
-  else bridgeSessionTokens[entry.id] = tokenValue;
+  if (rememberToken) {
+    bridgeLocalTokens[entry.id] = tokenValue;
+    delete bridgeSessionTokens[entry.id];
+  } else {
+    delete bridgeLocalTokens[entry.id];
+    bridgeSessionTokens[entry.id] = tokenValue;
+  }
+  saveBridgeLocalTokens();
   saveBridgeSessionTokens();
-  return { ...entry, token: rememberToken ? tokenValue : "", rememberToken };
+  return { ...entry, token: "", rememberToken };
 }
 
 function setSidebarVisible(visible) {
@@ -571,9 +647,12 @@ const terminalFocusSessionKey = "codexPhoneTerminalFocus:v1";
 const pwaInstallHintStorageKey = "codexPhonePwaInstallHint:v1";
 const pwaDiagnosticsStorageKey = "codexPhonePwaDiagnostics:v1";
 const bridgeRegistryStorageKey = "codexPhoneBridgeRegistry:v1";
+const bridgeLocalTokensStorageKey = "codexPhoneBridgeTokens:v1";
 const activeBridgeStorageKey = "codexPhoneActiveBridgeId:v1";
 const bridgeSessionTokensStorageKey = "codexPhoneBridgeSessionTokens:v1";
 const bridgeViewStateStorageKey = "codexPhoneBridgeViewState:v1";
+const threadInboxFilterStorageKey = "codexPhoneThreadInboxFilter:v1";
+const taskTemplateStorageKey = "codexPhoneLastTaskTemplate:v1";
 const terminalHistoryLimit = 300;
 const threadColorPalette = [
   "#ff5d22",
@@ -593,7 +672,9 @@ let terminalScrollPositions = readJsonStorage(terminalScrollStorageKey, {});
 let chatScrollPositions = readJsonStorage(chatScrollStorageKey, {});
 let firstUseHints = readJsonStorage(firstUseHintsStorageKey, {});
 let bridgeRegistry = readJsonStorage(bridgeRegistryStorageKey, { version: 1, bridges: [] });
+let bridgeLocalTokens = readJsonStorage(bridgeLocalTokensStorageKey, {});
 let bridgeViewState = readJsonStorage(bridgeViewStateStorageKey, {});
+let threadInboxFilter = localStorage.getItem(threadInboxFilterStorageKey) || "attention";
 let quickActionState = uiUtils.safeJsonParse
   ? uiUtils.safeJsonParse(localStorage.getItem(quickActionsStorageKey), {}, { objectOnly: true })
   : {};
@@ -654,6 +735,7 @@ let selectedReasoning = localStorage.getItem("codexPhoneReasoning") || "M";
 let settingsRenderSeq = 0;
 let artifactItems = [];
 let activeArtifactPath = "";
+let activeReviewTab = "summary";
 let latestRateLimits = null;
 let selectedExtensionView = localStorage.getItem("codexPhoneExtensionView") || "plugins";
 let extensionPanelState = null;
@@ -819,6 +901,44 @@ function runStateShortLabel(state = currentRunState) {
   return "待機中";
 }
 
+function threadStatusRuntime() {
+  const state = getBridgeState(activeBridgeId);
+  return {
+    selectedThread,
+    currentRunState,
+    pendingApproval,
+    bridgeRuns: Array.isArray(state.status?.bridges) ? state.status.bridges : [],
+    terminalEntries: currentTerminalHistory(),
+  };
+}
+
+function deriveThreadStatus(thread) {
+  if (uiUtils.deriveThreadStatus) return uiUtils.deriveThreadStatus(thread, threadStatusRuntime());
+  if (thread.id === selectedThread && pendingApproval) return { key: "approval_required", label: "承認待ち", tone: "approval", group: "attention", priority: 100 };
+  if (thread.id === selectedThread && ["running", "streaming"].includes(currentRunState)) return { key: "running", label: "実行中", tone: "running", group: "running", priority: 60 };
+  return { key: "recent", label: "最近", tone: "recent", group: "recent", priority: 20 };
+}
+
+function sortThreadsForInbox(threads) {
+  if (uiUtils.sortThreadsForInbox) return uiUtils.sortThreadsForInbox(threads, threadStatusRuntime());
+  return [...threads].sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0));
+}
+
+function threadMatchesInboxFilter(thread) {
+  const status = deriveThreadStatus(thread);
+  if (threadInboxFilter === "attention") return status.group === "attention";
+  if (threadInboxFilter === "running") return status.group === "running";
+  return true;
+}
+
+function renderThreadInboxTabs() {
+  for (const button of threadInboxTabButtons) {
+    const active = button.dataset.threadFilter === threadInboxFilter;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+  }
+}
+
 function updateUnreadBadges() {
   for (const [badge, count] of [
     [chatUnreadBadge, unreadChatCount],
@@ -856,7 +976,10 @@ function updateComposerState() {
   } else if (state === "connecting" || state === "disconnected") {
     promptInput.placeholder = "接続後にフォローアップを送信できます";
   } else promptInput.placeholder = "フォローアップの変更を求める";
-  if (sendLabel) sendLabel.textContent = mainViewMode === "terminal" ? (state === "approval" ? "承認へ" : state === "disconnected" ? "切断" : state === "running" || state === "streaming" ? "送信" : "Enter ↵") : "送信";
+  if (sendLabel) {
+    if (pendingSubmission) sendLabel.textContent = "送信中";
+    else sendLabel.textContent = mainViewMode === "terminal" ? (state === "approval" ? "承認へ" : state === "disconnected" ? "切断" : state === "running" || state === "streaming" ? "送信" : "Enter ↵") : "送信";
+  }
 }
 
 function shortId(value) {
@@ -950,6 +1073,8 @@ function setRunState(state, label) {
   bridgeState.runState = state;
   bridgeState.lastEventAt = Date.now();
   renderFleet();
+  renderThreadList();
+  refreshReviewCenterIfOpen();
 }
 
 function applyServerRunState(run = {}) {
@@ -958,6 +1083,7 @@ function applyServerRunState(run = {}) {
   if (state !== "approval" && pendingApproval) {
     pendingApproval = null;
     approval.classList.add("hidden");
+    renderApprovalStrip(null);
   }
   const activeStates = new Set(["running", "streaming", "approval", "syncing", "interrupting"]);
   liveTurnActive = activeStates.has(state);
@@ -1539,7 +1665,7 @@ function parseJsonish(value) {
 }
 
 function compactBridgeError(raw) {
-  const text = String(raw || "").trim();
+  const text = (uiUtils.redactSensitiveText ? uiUtils.redactSensitiveText(raw) : String(raw || "")).trim();
   const parsed = parseJsonish(text);
   const root = parsed && typeof parsed === "object" ? parsed : {};
   const error = root.error && typeof root.error === "object" ? root.error : root;
@@ -1862,6 +1988,7 @@ function restoreDraftForCurrentThread() {
   promptInput.value = threadDrafts[activeDraftKey] || "";
   pendingFiles = (threadDraftFiles.get(activeDraftKey) || []).map((file) => ({ ...file }));
   renderAttachments();
+  autoGrowPrompt();
 }
 
 function migrateThreadScopedState(previousKey, nextKey) {
@@ -2117,6 +2244,7 @@ function appendTerminalEntry(entry, { key = currentThreadColorKey() } = {}) {
     updateUnreadBadges();
   }
   if (key === currentThreadColorKey()) renderTerminalTranscript();
+  if (key === currentThreadColorKey()) refreshReviewCenterIfOpen();
 }
 
 function replaceTerminalHistory(entries = [], { key = currentThreadColorKey() } = {}) {
@@ -2135,6 +2263,7 @@ function replaceTerminalHistory(entries = [], { key = currentThreadColorKey() } 
   );
   terminalHistories.set(key, normalized);
   if (key === currentThreadColorKey()) renderTerminalTranscript();
+  if (key === currentThreadColorKey()) refreshReviewCenterIfOpen();
 }
 
 function terminalHistoryFromChatHistory(history = []) {
@@ -2183,7 +2312,32 @@ function renderApprovalRequest(request) {
   approvalText.textContent = JSON.stringify(request?.params || request || {}, null, 2);
   if (approvalReason) approvalReason.value = "";
   approval.classList.remove("hidden");
+  renderApprovalStrip(request);
   appendTerminalEntry({ ts: Date.now(), kind: "approval", message: `${label}の承認待ち` });
+}
+
+function renderApprovalStrip(request = pendingApproval) {
+  if (!approvalStrip) return;
+  approvalStrip.replaceChildren();
+  approvalStrip.classList.toggle("hidden", !request);
+  if (!request) return;
+  const text = document.createElement("span");
+  text.textContent = `承認待ち: ${approvalSummaryText(request)}`;
+  const details = document.createElement("button");
+  details.type = "button";
+  details.className = "secondary";
+  details.textContent = "詳細";
+  details.addEventListener("click", () => approval?.scrollIntoView({ block: "center", behavior: "smooth" }));
+  const accept = document.createElement("button");
+  accept.type = "button";
+  accept.textContent = "許可";
+  accept.addEventListener("click", () => approveButton?.click());
+  const reject = document.createElement("button");
+  reject.type = "button";
+  reject.className = "secondary";
+  reject.textContent = "拒否";
+  reject.addEventListener("click", () => declineButton?.click());
+  approvalStrip.append(text, details, accept, reject);
 }
 
 function handleTerminalMessage(msg) {
@@ -2198,6 +2352,7 @@ function handleTerminalMessage(msg) {
 function setPendingSubmission(submission) {
   if (pendingSubmissionTimer) window.clearTimeout(pendingSubmissionTimer);
   pendingSubmission = submission;
+  composer.dataset.submitting = "true";
   setReady(connectionReady);
   pendingSubmissionTimer = window.setTimeout(() => {
     if (!pendingSubmission || pendingSubmission.id !== submission.id) return;
@@ -2216,11 +2371,13 @@ function acceptPendingSubmission(clientMessageIdValue) {
   const shouldClearDraft =
     promptInput.value === pendingSubmission.inputValue && fileDraftSignature() === pendingSubmission.fileSignature;
   pendingSubmission = null;
+  composer.dataset.submitting = "false";
   clearPendingSubmissionTimer();
   if (shouldClearDraft) {
     promptInput.value = "";
     pendingFiles = [];
     renderAttachments();
+    autoGrowPrompt();
     saveDraftForActiveThread();
   } else {
     addStatus("送信は受理されました。入力欄は変更されているため残しました。");
@@ -2234,6 +2391,7 @@ function releasePendingSubmission(message = "") {
   if (!pendingSubmission) return;
   const submission = pendingSubmission;
   pendingSubmission = null;
+  composer.dataset.submitting = "false";
   clearPendingSubmissionTimer();
   if (!promptInput.value && submission.inputValue) promptInput.value = submission.inputValue;
   if (!pendingFiles.length && submission.files?.length) {
@@ -2295,11 +2453,12 @@ function normalizeThreadRecord(thread, provider) {
 function visibleThreadGroups() {
   const query = threadSearch.value.trim().toLowerCase();
   const groups = new Map();
-  for (const thread of threadCache) {
+  for (const thread of sortThreadsForInbox(threadCache)) {
     const project = projectForThread(thread);
     const title = titleForThread(thread);
     const matches = !query || project.toLowerCase().includes(query) || title.toLowerCase().includes(query);
     if (!matches) continue;
+    if (!threadMatchesInboxFilter(thread)) continue;
     if (!groups.has(project)) groups.set(project, []);
     groups.get(project).push(thread);
   }
@@ -2318,6 +2477,7 @@ function visibleThreadsInListOrder() {
 
 function renderThreadList() {
   threadList.replaceChildren();
+  renderThreadInboxTabs();
   const provider = currentThreadProvider();
   const newProject = document.createElement("button");
   newProject.type = "button";
@@ -2366,7 +2526,11 @@ function renderThreadList() {
       const time = document.createElement("span");
       time.className = "thread-time";
       time.textContent = formatRelativeTime(thread.updatedAt || thread.createdAt);
-      selectButton.append(title, time);
+      const status = deriveThreadStatus(thread);
+      const badge = document.createElement("span");
+      badge.className = `thread-status-badge ${status.tone || status.key}`;
+      badge.textContent = status.label;
+      selectButton.append(title, time, badge);
       selectButton.addEventListener("click", () => selectThread(thread.id));
       item.append(colorButton, selectButton);
       group.appendChild(item);
@@ -2389,7 +2553,12 @@ function renderThreadList() {
   if (!groups.size) {
     const empty = document.createElement("div");
     empty.className = "project-empty";
-    empty.textContent = `${providerLabel(provider)}のチャットはありません`;
+    empty.textContent =
+      threadInboxFilter === "attention"
+        ? "要対応のチャットはありません"
+        : threadInboxFilter === "running"
+          ? "実行中のチャットはありません"
+          : `${providerLabel(provider)}のチャットはありません`;
     threadList.appendChild(empty);
   }
   updateThreadNavigation();
@@ -2649,7 +2818,7 @@ function renderBridgeFleetSheet() {
       main.append(title, small);
       header.append(dot, main, fleetBadge(runStateShortLabel(bridgeStateLabel(entry, state)), bridgeStateLabel(entry, state) === "approval" ? "approval" : ""));
       const metaLine = document.createElement("small");
-      metaLine.textContent = bridgeMetaText(entry, state);
+      metaLine.textContent = `${bridgeMetaText(entry, state)} / ${entry.kind || "lan"}${entry.note ? ` / ${entry.note}` : ""}`;
       const actions = document.createElement("div");
       actions.className = "bridge-card-actions";
       const switchButton = document.createElement("button");
@@ -2777,10 +2946,10 @@ async function fetchJsonForBridge(entry, path, options = {}) {
   if (!bridgeToken) throw new Error("接続キーがありません");
   const response = await fetchWithTimeout(urlWithBridgeToken(path, entry), {
     ...options,
-    headers: {
+    headers: authHeadersForBridge(entry, {
       ...(options.headers || {}),
       ...(options.body ? { "content-type": "application/json" } : {}),
-    },
+    }),
   });
   const result = await response.json().catch(() => ({ error: `${response.status} ${response.statusText}` }));
   if (!response.ok) throw new Error(result.error || `${response.status} ${response.statusText}`);
@@ -2818,6 +2987,7 @@ async function refreshBridgeState(bridgeId, { force = false } = {}) {
       workdir: info.cwd || info.workdir || entry.workdir || "",
       port: info.uiPort || entry.port || null,
       color: entry.color || info.color || "",
+      status: "connected",
       updatedAt: Date.now(),
     };
     bridgeRegistry = { ...bridgeRegistry, bridges: (bridgeRegistry.bridges || []).map((bridge) => (bridge.id === bridgeId ? updated : bridge)) };
@@ -2827,6 +2997,8 @@ async function refreshBridgeState(bridgeId, { force = false } = {}) {
     state.runState = "error";
     state.lastError = error.message || String(error);
     state.lastEventAt = Date.now();
+    bridgeRegistry = { ...bridgeRegistry, bridges: (bridgeRegistry.bridges || []).map((bridge) => (bridge.id === bridgeId ? { ...bridge, status: "error", updatedAt: Date.now() } : bridge)) };
+    persistBridgeRegistry();
   } finally {
     state.refreshing = false;
     renderFleet();
@@ -2885,6 +3057,11 @@ async function setActiveBridge(bridgeId, { silent = false } = {}) {
   captureActiveBridgeState();
   closeSocket({ suppressReconnect: true });
   activeBridgeId = bridgeId;
+  bridgeRegistry = {
+    ...bridgeRegistry,
+    bridges: (bridgeRegistry.bridges || []).map((entry) => (entry.id === bridgeId ? { ...entry, lastUsedAt: Date.now(), status: "active" } : entry)),
+  };
+  persistBridgeRegistry();
   applyActiveBridgeState(bridgeId);
   updateUrlThread();
   lastHistorySignature = "";
@@ -2912,7 +3089,9 @@ function removeBridge(bridgeId) {
   if (!entry) return;
   if (!window.confirm(`${bridgeDisplayLabel(entry, entry.id)} をこの端末から削除します。接続キーも忘れます。`)) return;
   delete bridgeSessionTokens[bridgeId];
+  delete bridgeLocalTokens[bridgeId];
   saveBridgeSessionTokens();
+  saveBridgeLocalTokens();
   bridgeRegistry = uiUtils.removeBridgeFromRegistry
     ? uiUtils.removeBridgeFromRegistry(bridgeRegistry, bridgeId)
     : { ...bridgeRegistry, bridges: (bridgeRegistry.bridges || []).filter((bridge) => bridge.id !== bridgeId) };
@@ -2947,7 +3126,7 @@ async function addBridgeEntriesFromInput() {
     for (const line of lines) {
       const parsed = uiUtils.parseBridgeUrl ? uiUtils.parseBridgeUrl(line, { fallbackOrigin: location.origin }) : null;
       if (!parsed?.baseUrl || !parsed.token) {
-        results.push(`失敗: URLまたは接続キーを読めません (${line.slice(0, 40)})`);
+        results.push("失敗: URLまたは接続キーを読めません");
         continue;
       }
       let entry = normalizeBridgeEntry({ baseUrl: parsed.baseUrl, token: parsed.token, rememberToken: remember }, { fallbackOrigin: location.origin });
@@ -2967,6 +3146,9 @@ async function addBridgeEntriesFromInput() {
         if (!remember) {
           delete bridgeSessionTokens[previousId];
           bridgeSessionTokens[entry.id] = parsed.token;
+        } else if (previousId !== entry.id) {
+          delete bridgeLocalTokens[previousId];
+          bridgeLocalTokens[entry.id] = parsed.token;
         }
         bridgeRegistry = uiUtils.upsertBridgeRegistry ? uiUtils.upsertBridgeRegistry(bridgeRegistry, entry) : { ...bridgeRegistry, bridges: [...(bridgeRegistry.bridges || []), entry] };
         results.push(`追加: ${bridgeDisplayLabel(entry, entry.id)}`);
@@ -2976,6 +3158,7 @@ async function addBridgeEntriesFromInput() {
     }
     persistBridgeRegistry();
     saveBridgeSessionTokens();
+    if (bridgeAddInput) bridgeAddInput.value = "";
     renderFleet();
     refreshFleet({ force: true });
   } finally {
@@ -3002,6 +3185,7 @@ async function sendGlobalApproval(item, decision) {
       appendTerminalEntry({ ts: Date.now(), kind: "approval", message: decision === "accept" ? "承認しました" : "拒否しました" });
       pendingApproval = null;
       approval.classList.add("hidden");
+      renderApprovalStrip(null);
       setRunState("running", decision === "accept" ? "承認済み・処理中" : "拒否済み・処理中");
     }
     showToast(decision === "accept" ? "承認を送信しました。" : "拒否を送信しました。", "approval");
@@ -3260,10 +3444,6 @@ function closeThreadColorPopover() {
   threadColorPopover?.classList.add("hidden");
 }
 
-function authQuery() {
-  return `token=${encodeURIComponent(effectiveBridgeToken(activeBridge()))}`;
-}
-
 async function fetchWithTimeout(url, options = {}, timeoutMs = apiTimeoutMs) {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
@@ -3283,7 +3463,9 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = apiTimeoutMs) {
 
 async function apiGet(path, options = {}) {
   const bridge = bridgeById(options.bridgeId) || activeBridge();
-  const response = await fetchWithTimeout(urlWithBridgeToken(path, bridge));
+  const response = await fetchWithTimeout(urlWithBridgeToken(path, bridge), {
+    headers: authHeadersForBridge(bridge),
+  });
   const result = await response.json();
   if (!response.ok) throw new Error(result.error || `${response.status} ${response.statusText}`);
   return result;
@@ -3293,7 +3475,7 @@ async function apiPost(path, body = {}, options = {}) {
   const bridge = bridgeById(options.bridgeId) || activeBridge();
   const response = await fetchWithTimeout(urlWithBridgeToken(path, bridge), {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: authHeadersForBridge(bridge, { "content-type": "application/json" }),
     body: JSON.stringify(body),
   });
   const result = await response.json();
@@ -3588,6 +3770,217 @@ function renderPanelSection(title, rows, emptyText) {
   for (const row of rows) addPanelRow(row.name, row.detail);
 }
 
+function setActiveReviewTab(tabName) {
+  activeReviewTab = ["summary", "diff", "tests", "terminal", "artifacts", "actions"].includes(tabName) ? tabName : "summary";
+  for (const button of reviewTabButtons) {
+    const active = button.dataset.reviewTab === activeReviewTab;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+  }
+}
+
+function currentThreadTitle() {
+  const selected = threadCache.find((thread) => thread.id === selectedThread);
+  return selected ? titleForThread(selected) : selectedThread ? shortId(selectedThread) : "新しいチャット";
+}
+
+function nextSuggestedAction() {
+  if (pendingApproval) return "承認内容を確認し、許可または拒否してください。";
+  if (currentRunState === "error") return "Terminal で失敗箇所を確認し、失敗原因の調査を依頼してください。";
+  if (["running", "streaming", "syncing", "interrupting"].includes(currentRunState)) return "実行状況を Timeline と Terminal で監視してください。";
+  if (artifactItems.length) return "Artifacts または Diff を確認し、必要なら差分レビューを依頼してください。";
+  return "次の指示を composer から送信できます。";
+}
+
+function timelineTypeForTerminalEntry(entry = {}) {
+  const text = `${entry.message || ""}\n${entry.detail || ""}`;
+  if (entry.kind === "approval" || /承認|approval/i.test(text)) return "waiting_approval";
+  if (entry.kind === "command" || /^\$\s/.test(entry.message || "")) return /test|check|vitest|jest|pytest/i.test(text) ? "testing" : "running_command";
+  if (entry.kind === "file" || /file changes|ファイル|modified|changed/i.test(text)) return "editing";
+  if (entry.kind === "error" || /error|failed|失敗|エラー/i.test(text)) return "error";
+  if (/履歴同期|sync/i.test(text)) return "syncing_history";
+  if (/読|read|file/i.test(text)) return "reading_files";
+  return "planning";
+}
+
+function buildTimelineItems() {
+  const entries = currentTerminalHistory().slice(-24);
+  const items = entries.map((entry, index) => {
+    const type = timelineTypeForTerminalEntry(entry);
+    const labelMap = {
+      planning: "Planning",
+      reading_files: "Reading files",
+      editing: "Editing",
+      running_command: "Running command",
+      testing: "Testing",
+      waiting_approval: "Waiting approval",
+      syncing_history: "Syncing history",
+      error: "Error",
+    };
+    return {
+      id: entry.id || `timeline-${index}`,
+      type,
+      label: labelMap[type] || "Planning",
+      detail: entry.message || "",
+      timestamp: entry.ts || Date.now(),
+      status: type === "error" ? "error" : index === entries.length - 1 && ["running", "streaming", "approval", "syncing"].includes(currentRunState) ? "active" : "done",
+    };
+  });
+  if (["done", "interrupted"].includes(currentRunState)) {
+    items.push({ id: "timeline-done", type: "done", label: "Done", detail: runStateLabel?.textContent || "完了", timestamp: Date.now(), status: "done" });
+  }
+  if (!items.length) {
+    items.push({ id: "timeline-empty", type: "planning", label: "Planning", detail: "まだ実行ログはありません。", timestamp: Date.now(), status: "pending" });
+  }
+  return items.slice(-10);
+}
+
+function renderTimeline(container) {
+  const list = document.createElement("ol");
+  list.className = "work-timeline";
+  for (const item of buildTimelineItems()) {
+    const row = document.createElement("li");
+    row.className = `timeline-item ${item.status}`;
+    const main = document.createElement("span");
+    main.className = "timeline-main";
+    const label = document.createElement("strong");
+    label.textContent = item.label;
+    const detail = document.createElement("small");
+    detail.textContent = item.detail;
+    main.append(label, detail);
+    const time = document.createElement("time");
+    time.textContent = formatRelativeTime(item.timestamp) || "now";
+    row.append(main, time);
+    list.appendChild(row);
+  }
+  container.appendChild(list);
+}
+
+function renderReviewSummary() {
+  artifactList.replaceChildren();
+  artifactList.classList.remove("artifact-browser-list");
+  addPanelRow("Thread", currentThreadTitle(), () => selectedThread && selectThread(selectedThread), { badge: "SUM" });
+  addPanelRow("Project", currentWorkspace.repoName || projectForThread(threadCache.find((thread) => thread.id === selectedThread) || {}));
+  addPanelRow("Workdir", currentWorkspace.workspaceLocation || "--");
+  addPanelRow("Run state", runStateLabel?.textContent || runStateShortLabel());
+  addPanelRow("Last event", formatRelativeTime(getBridgeState(activeBridgeId).lastEventAt) || "none");
+  addPanelRow("Human action", pendingApproval ? "必要" : "不要");
+  addPanelRow("Next", nextSuggestedAction());
+  addPanelSectionTitle("Timeline");
+  renderTimeline(artifactList);
+}
+
+async function renderReviewDiff() {
+  artifactList.replaceChildren();
+  artifactList.classList.remove("artifact-browser-list");
+  addPanelRow("読み込み中...");
+  try {
+    const result = await apiGet("/api/review/diff");
+    artifactList.replaceChildren();
+    if (!result.isGitRepo) {
+      addPanelRow("Git repository ではありません", result.message || "");
+      return;
+    }
+    addPanelRow("Branch", result.branch || "--");
+    addPanelRow("git status --short", result.statusShort || "変更なし");
+    addPanelRow("git diff --stat", result.diffStat || "差分なし");
+    renderPanelSection("Files", result.files || [], "変更ファイルはありません");
+    if (result.truncated) addPanelRow("補足", "出力が長いため一部を省略しました");
+    if (result.error) addPanelRow("補足エラー", result.error);
+  } catch (error) {
+    artifactList.replaceChildren();
+    addPanelRow("Diff を読めませんでした", error.message);
+  }
+}
+
+async function renderReviewTests() {
+  artifactList.replaceChildren();
+  artifactList.classList.remove("artifact-browser-list");
+  addPanelRow("読み込み中...");
+  try {
+    const result = await apiGet(`/api/review/tests?thread=${encodeURIComponent(selectedThread || "")}&provider=${encodeURIComponent(currentThreadProvider())}`);
+    artifactList.replaceChildren();
+    addPanelRow("Last command", result.lastCommand || "まだ test 実行履歴はありません");
+    addPanelRow("Status", result.status || "empty");
+    if (result.failureSummary) addPanelRow("Failure summary", result.failureSummary);
+    addPanelRow("再実行", "安全のため直接 shell 実行せず、composer に依頼文を入れます", () => {
+      insertPromptText("関連するテストを再実行し、失敗した場合は原因と修正案をまとめてください。");
+      showToast("テスト再実行の依頼文を入力しました。");
+    });
+  } catch (error) {
+    artifactList.replaceChildren();
+    addPanelRow("Tests を読めませんでした", error.message);
+  }
+}
+
+function renderReviewTerminal() {
+  artifactList.replaceChildren();
+  artifactList.classList.remove("artifact-browser-list");
+  const entries = currentTerminalHistory().slice(-40).reverse();
+  if (!entries.length) {
+    addPanelRow("Terminal log はまだありません");
+    return;
+  }
+  for (const entry of entries) {
+    const row = document.createElement("details");
+    row.className = "review-log-entry";
+    const summary = document.createElement("summary");
+    summary.textContent = `${terminalFilterLabel(entry.kind)} / ${terminalTimestampLabel(entry.ts)} / ${entry.message || ""}`.slice(0, 180);
+    const pre = document.createElement("pre");
+    pre.textContent = entry.detail || entry.message || "";
+    row.append(summary, pre);
+    artifactList.appendChild(row);
+  }
+}
+
+function renderReviewActions() {
+  artifactList.replaceChildren();
+  artifactList.classList.remove("artifact-browser-list");
+  const actions = [
+    { label: "Approve", disabled: !pendingApproval, run: () => approveButton?.click() },
+    { label: "Decline", disabled: !pendingApproval, run: () => declineButton?.click(), secondary: true },
+    { label: "Retry", run: () => insertPromptText("直前の失敗を踏まえて、原因を確認してから小さく再試行してください。") },
+    { label: "Stop", disabled: !interruptibleRunStates.has(currentRunState), run: () => interruptButton?.click(), secondary: true },
+    { label: "Continue", run: () => insertPromptText("続けてください。") },
+    { label: "Refresh", run: () => recoverFromPageResume("Review Center refresh") },
+    { label: "Open thread", disabled: !selectedThread, run: () => selectThread(selectedThread) },
+  ];
+  const grid = document.createElement("div");
+  grid.className = "review-action-grid";
+  for (const action of actions) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = action.label;
+    button.disabled = Boolean(action.disabled);
+    if (action.secondary) button.className = "secondary";
+    button.addEventListener("click", action.run);
+    grid.appendChild(button);
+  }
+  artifactList.appendChild(grid);
+}
+
+function showReviewCenter(tabName = activeReviewTab) {
+  showRightPanel();
+  setActivePanelTab(tabName === "artifacts" ? "artifacts" : "status");
+  setActiveReviewTab(tabName);
+  artifactTitle.textContent = "Review Center";
+  activeArtifactPath = "";
+  artifactPreview.className = "artifact-preview hidden";
+  artifactPreview.textContent = "";
+  if (activeReviewTab === "summary") renderReviewSummary();
+  if (activeReviewTab === "diff") renderReviewDiff();
+  if (activeReviewTab === "tests") renderReviewTests();
+  if (activeReviewTab === "terminal") renderReviewTerminal();
+  if (activeReviewTab === "artifacts") renderArtifactIndex(artifactItems);
+  if (activeReviewTab === "actions") renderReviewActions();
+}
+
+function refreshReviewCenterIfOpen() {
+  if (!document.body.classList.contains("show-panel") && document.body.classList.contains("hide-artifacts")) return;
+  if (!Array.from(reviewTabButtons).some((button) => button.classList.contains("active"))) return;
+  if (["summary", "terminal", "actions"].includes(activeReviewTab)) showReviewCenter(activeReviewTab);
+}
+
 function pluginDisplayName(plugin) {
   const summary = plugin?.summary || plugin || {};
   return summary.interface?.displayName || summary.name || summary.id || "追加機能";
@@ -3785,6 +4178,7 @@ function renderArtifactIndex(items) {
     menuButton.setAttribute("aria-label", menuButton.title);
   }
   activeArtifactPath = "";
+  setActiveReviewTab("artifacts");
   setActivePanelTab("artifacts");
   artifactTitle.textContent = "ファイル";
   artifactList.classList.add("artifact-browser-list");
@@ -4196,7 +4590,7 @@ function startVoiceInput() {
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SpeechRecognition) {
     voiceButton.dataset.voiceState = "unsupported";
-    addStatus("このブラウザでは音声入力APIが使えません。");
+    addStatus("このブラウザでは音声入力に未対応です。");
     promptInput.focus();
     return;
   }
@@ -4221,7 +4615,23 @@ function startVoiceInput() {
 async function showStatus() {
   clearPanel("接続状態", "status");
   try {
-    const result = await apiGet(`/api/status?provider=${encodeURIComponent(currentThreadProvider())}`);
+    const [statusResult, healthResult] = await Promise.all([
+      apiGet(`/api/status?provider=${encodeURIComponent(currentThreadProvider())}`),
+      apiGet(`/api/health?provider=${encodeURIComponent(currentThreadProvider())}`),
+    ]);
+    const result = statusResult;
+    const health = healthResult || result.health || {};
+    addPanelRow("Bridge", health.bridge || "unknown", null, { badge: "HLT" });
+    addPanelRow("App server", health.appServer || "unknown");
+    addPanelRow("WebSocket", health.websocket || "unknown");
+    addPanelRow("Active clients", String(health.activeClients ?? 0));
+    addPanelRow("History sync", `${health.historySync?.enabled ? "有効" : "無効"} / last success ${health.historySync?.lastSuccessAt || "none"} / last failure ${health.historySync?.lastFailureAt || "none"}`);
+    addPanelRow("Token", health.token?.present ? `${health.token.masked} / ${health.token.ageMs === null ? "age unknown" : `${Math.round(health.token.ageMs / 60000)} min`}` : "missing");
+    addPanelRow("Notification", `${health.notification?.eventsEnabled ? "events on" : "events off"} / ${(health.notification?.providers || []).join(", ") || "none"}`);
+    addPanelRow("Host", health.hostName || "--");
+    addPanelRow("LAN URL", (health.lanUrls || [])[0] || "--");
+    addPanelRow("Last event", health.lastEventAt || "--");
+    addPanelRow("Refresh", "接続状態を再取得", showStatus);
     addPanelRow("画面ポート", String(result.uiPort));
     addPanelRow("使用AI", result.provider || "codex");
     if (result.defaultProvider && result.defaultProvider !== result.provider) addPanelRow("既定の使用AI", result.defaultProvider);
@@ -4229,7 +4639,6 @@ async function showStatus() {
     latestRateLimits = result.rateLimits || null;
     renderRateLimitCard(latestRateLimits);
     addRateLimitPanelRows(latestRateLimits);
-    addPanelRow("履歴同期", result.historySyncEnabled ? "有効" : "無効");
     addPanelRow("作業場所", result.workdir);
     addPanelRow("リポジトリ", result.repoName || "--");
     addPanelRow("現在地", result.workspaceLocation || "--");
@@ -4300,6 +4709,13 @@ function setArtifactPreview(result) {
 function renderAttachments() {
   attachments.replaceChildren();
   attachments.classList.toggle("has-attachments", pendingFiles.length > 0);
+  attachments.dataset.count = String(pendingFiles.length);
+  if (pendingFiles.length) {
+    const summary = document.createElement("span");
+    summary.className = "attachment-summary";
+    summary.textContent = `添付 ${pendingFiles.length}件`;
+    attachments.appendChild(summary);
+  }
   for (const file of pendingFiles) {
     const chip = document.createElement("button");
     chip.type = "button";
@@ -4317,8 +4733,12 @@ function renderAttachments() {
     const label = document.createElement("span");
     label.textContent = file.size ? `${file.name} (${formatBytes(file.size)})` : file.name;
     const close = document.createElement("span");
+    close.className = "attachment-remove";
     close.textContent = "×";
+    close.setAttribute("aria-hidden", "true");
     chip.append(thumb, label, close);
+    chip.title = `${file.name} を削除`;
+    chip.setAttribute("aria-label", `${file.name} を削除`);
     chip.addEventListener("click", () => {
       pendingFiles = pendingFiles.filter((candidate) => candidate !== file);
       renderAttachments();
@@ -4330,12 +4750,46 @@ function renderAttachments() {
 
 const defaultQuickActions = [
   { id: "continue", label: "続けて", text: "続けてください。" },
-  { id: "summary", label: "要約", text: "ここまでの状況を短く要約してください。" },
-  { id: "diff", label: "差分確認", text: "現在の差分を確認して、重要な変更点とリスクを教えてください。" },
-  { id: "test", label: "テストして", text: "関連するテストを実行して、失敗があれば修正してください。" },
-  { id: "next", label: "次の作業", text: "次に進めるべき作業を具体的に提案してください。" },
-  { id: "pr", label: "PR向け要約", text: "PR向けの変更概要と検証結果をまとめてください。" },
-  { id: "save", label: "保存", text: "再利用できる決定事項があれば project docs に簡潔に保存してください。" },
+  { id: "summary", label: "要約して", text: "ここまでの状況を短く要約してください。" },
+  { id: "test", label: "テストして", text: "関連するテストを実行し、失敗時は原因と修正案を示してください。" },
+  { id: "diff", label: "差分を見せて", text: "現在の差分を要点だけ見せてください。" },
+  { id: "failure", label: "失敗原因を調べて", text: "直近の失敗原因を調べ、再発防止を含めて説明してください。" },
+  { id: "readme", label: "READMEにも反映", text: "今回の変更を README / README.ja.md / docs にも必要最小限で反映してください。" },
+  { id: "split", label: "小さく分けて進めて", text: "作業を小さな検証可能単位に分けて、次の一手から進めてください。" },
+  { id: "pause", label: "一旦停止して状況説明", text: "一旦停止して、現在の状況・未解決点・次に取れる選択肢を説明してください。" },
+];
+
+const taskTemplatePrompts = [
+  {
+    id: "bug",
+    label: "バグ調査",
+    text: "バグ調査をお願いします。\n\n現象:\n- \n\n再現手順:\n1. \n2. \n\n期待動作:\n- \n\n調査してほしい範囲:\n- ",
+  },
+  {
+    id: "review",
+    label: "差分レビュー",
+    text: "現在の変更点をレビューし、問題点・リスク・改善案を優先度順に挙げてください。必要なら該当ファイルと確認コマンドも示してください。",
+  },
+  {
+    id: "test",
+    label: "テスト実行",
+    text: "関連する test / check を実行してください。失敗した場合は、原因の切り分け、修正案、再実行結果までまとめてください。",
+  },
+  {
+    id: "readme",
+    label: "README更新",
+    text: "今回の変更内容を README.md / README.ja.md / docs の必要箇所へ反映してください。public-safe な説明に留め、token やローカル秘密情報は書かないでください。",
+  },
+  {
+    id: "screenshot",
+    label: "スクショ確認",
+    text: "UI screenshot / artifact を確認し、崩れ、重なり、読みにくい箇所、スマホで押しにくい箇所を指摘して修正してください。",
+  },
+  {
+    id: "pr",
+    label: "PR用まとめ作成",
+    text: "PR 用に summary / changes / tests / risks / follow-ups を簡潔にまとめてください。security 上の注意があれば含めてください。",
+  },
 ];
 
 function renderQuickActions() {
@@ -4371,7 +4825,45 @@ function insertPromptText(text) {
   const nextPosition = start + value.length;
   promptInput.focus();
   promptInput.setSelectionRange(nextPosition, nextPosition);
+  autoGrowPrompt();
   saveDraftForActiveThread();
+}
+
+function appendPromptText(text) {
+  const value = String(text || "").trim();
+  if (!value) return;
+  const prefix = promptInput.value.trim() ? "\n\n" : "";
+  promptInput.value = `${promptInput.value}${prefix}${value}`;
+  promptInput.focus();
+  promptInput.setSelectionRange(promptInput.value.length, promptInput.value.length);
+  autoGrowPrompt();
+  saveDraftForActiveThread();
+}
+
+function renderTaskTemplates() {
+  if (!taskTemplates) return;
+  taskTemplates.replaceChildren();
+  for (const template of taskTemplatePrompts) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = localStorage.getItem(taskTemplateStorageKey) === template.id ? "task-template active" : "task-template";
+    button.textContent = template.label;
+    button.addEventListener("click", () => {
+      appendPromptText(template.text);
+      safeWriteStorage(localStorage, taskTemplateStorageKey, template.id);
+      renderTaskTemplates();
+      showToast(`${template.label}を入力しました。`);
+    });
+    taskTemplates.appendChild(button);
+  }
+}
+
+function autoGrowPrompt() {
+  if (!promptInput) return;
+  promptInput.style.height = "auto";
+  const next = Math.min(Math.max(promptInput.scrollHeight, 72), isMobileViewport() ? 180 : 240);
+  promptInput.style.height = `${next}px`;
+  setupVisualViewportVars();
 }
 
 function setTerminalInputMode(mode, { silent = false } = {}) {
@@ -4462,6 +4954,64 @@ function canReconnect() {
   return Boolean(token && document.visibilityState !== "hidden");
 }
 
+function tokenMissingMessage() {
+  return "token がありません。PC 側で `npm run phone` を再実行し、新しい URL を開いてください。";
+}
+
+function renderTokenRecoveryForm(container) {
+  if (!container) return;
+  const form = document.createElement("form");
+  form.className = "token-recovery-form";
+  const input = document.createElement("input");
+  input.type = "password";
+  input.autocomplete = "off";
+  input.placeholder = "接続キーを入力";
+  input.setAttribute("aria-label", "接続キー");
+  const button = document.createElement("button");
+  button.type = "submit";
+  button.textContent = "保存して接続";
+  const hint = document.createElement("small");
+  hint.textContent = "token はこの端末に保存し、URL には残しません。";
+  form.append(input, button, hint);
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const nextToken = input.value.trim();
+    if (!nextToken) return;
+    token = nextToken;
+    storedToken = nextToken;
+    try {
+      localStorage.setItem(tokenStorageKey, nextToken);
+      localStorage.removeItem("codexPhoneToken");
+    } catch {
+      // Storage may be unavailable; keep the token for the current page session.
+    }
+    rememberTokenForCurrentOrigin(nextToken);
+    const active = activeBridge();
+    if (active?.id) {
+      const updated = setBridgeToken(active, nextToken, true);
+      bridgeRegistry = { ...bridgeRegistry, bridges: (bridgeRegistry.bridges || []).map((entry) => (entry.id === active.id ? updated : entry)) };
+      persistBridgeRegistry();
+    } else {
+      ensureHomeBridge();
+    }
+    meta.textContent = "接続キーを保存しました";
+    connect({ preserveHistory: true });
+  });
+  container.appendChild(form);
+}
+
+function renderTokenMissingState() {
+  setReady(false);
+  setRunState("error", "接続キーなし");
+  meta.textContent = "接続キーがありません";
+  if (!lastDisplayedErrorSignature.includes("missing-token")) {
+    const body = addEntry("error", tokenMissingMessage());
+    renderTokenRecoveryForm(body);
+    lastDisplayedErrorSignature = "missing-token";
+    lastDisplayedErrorAt = Date.now();
+  }
+}
+
 function scheduleReconnect(reason = "reconnect", delay = 900) {
   if (!canReconnect() || reconnectTimer) return;
   reconnectTimer = window.setTimeout(() => {
@@ -4497,11 +5047,11 @@ async function uploadFile(file) {
     urlWithToken("/api/upload"),
     {
       method: "POST",
-      headers: {
+      headers: authHeadersForBridge(activeBridge(), {
         "content-type": file.type || "application/octet-stream",
         "x-file-name": encodeURIComponent(file.name || "upload"),
         "x-file-size": String(file.size || 0),
-      },
+      }),
       body: file,
     },
     uploadTimeoutMs,
@@ -4521,7 +5071,7 @@ function connect({ preserveHistory = false, freshThread = false } = {}) {
   const bridgeId = activeBridgeId;
   token = bridgeToken;
   if (!bridgeToken) {
-    addEntry("error", "URLに接続キーがありません。Mac側に表示されたURLをそのまま開いてください。");
+    renderTokenMissingState();
     return;
   }
   const provider = currentThreadProvider();
@@ -4536,7 +5086,7 @@ function connect({ preserveHistory = false, freshThread = false } = {}) {
   const selected = threadCache.find((thread) => thread.id === selectedThread);
   setThreadHeading(selected ? titleForThread(selected) : "新しいチャット");
 
-  ws = new WebSocket(wsUrlForBridge(bridge, provider, selectedThread, { fresh: freshThread && !selectedThread }));
+  ws = new WebSocket(wsUrlForBridge(bridge, provider, selectedThread, { fresh: freshThread && !selectedThread }), wsProtocolsForBridge(bridge));
   const socket = ws;
   connectButton.disabled = true;
   meta.textContent = "接続中";
@@ -4730,7 +5280,6 @@ composer.addEventListener("submit", (event) => {
     ws.send(
       JSON.stringify({
         type: "prompt",
-        token,
         clientMessageId: submission.id,
         text: text || "添付ファイルを確認してください。",
         attachments: attachmentsToSend,
@@ -4757,9 +5306,10 @@ interruptButton.addEventListener("click", () => {
   interruptRequestPending = true;
   pendingApproval = null;
   approval.classList.add("hidden");
+  renderApprovalStrip(null);
   setRunState("interrupting", "中断要求を送信中");
   try {
-    ws.send(JSON.stringify({ type: "interrupt", token }));
+    ws.send(JSON.stringify({ type: "interrupt" }));
   } catch (error) {
     interruptRequestPending = false;
     updateInterruptButton();
@@ -4769,22 +5319,24 @@ interruptButton.addEventListener("click", () => {
 
 approveButton.addEventListener("click", () => {
   if (!pendingApproval) return;
-  ws.send(JSON.stringify({ type: "approval", token, decision: "accept", request: pendingApproval }));
+  ws.send(JSON.stringify({ type: "approval", decision: "accept", request: pendingApproval }));
   appendTerminalEntry({ ts: Date.now(), kind: "approval", message: "承認しました" });
   showToast("承認を送信しました。");
   approval.classList.add("hidden");
   pendingApproval = null;
+  renderApprovalStrip(null);
   setRunState("running", "承認済み・処理中");
 });
 
 declineButton.addEventListener("click", () => {
   if (!pendingApproval) return;
   const reason = approvalReason?.value?.trim();
-  ws.send(JSON.stringify({ type: "approval", token, decision: "decline", request: pendingApproval }));
+  ws.send(JSON.stringify({ type: "approval", decision: "decline", request: pendingApproval }));
   appendTerminalEntry({ ts: Date.now(), kind: "approval", message: reason ? `拒否しました: ${reason}` : "拒否しました" });
   showToast("拒否を送信しました。");
   approval.classList.add("hidden");
   pendingApproval = null;
+  renderApprovalStrip(null);
   setRunState("running", "拒否済み・処理中");
 });
 
@@ -4798,6 +5350,13 @@ searchButton.addEventListener("click", () => {
   setSidebarVisible(true);
 });
 threadSearch.addEventListener("input", renderThreadList);
+for (const button of threadInboxTabButtons) {
+  button.addEventListener("click", () => {
+    threadInboxFilter = button.dataset.threadFilter || "recent";
+    localStorage.setItem(threadInboxFilterStorageKey, threadInboxFilter);
+    renderThreadList();
+  });
+}
 pluginsButton.addEventListener("click", showPlugins);
 automationsButton.addEventListener("click", showAutomations);
 settingsButton.addEventListener("click", showSettings);
@@ -4823,7 +5382,16 @@ promptInput.addEventListener("blur", () => {
   }, 80);
 });
 promptInput.addEventListener("click", keepComposerVisible);
-promptInput.addEventListener("input", saveDraftForActiveThread);
+promptInput.addEventListener("input", () => {
+  autoGrowPrompt();
+  saveDraftForActiveThread();
+});
+promptInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+    event.preventDefault();
+    composer.requestSubmit();
+  }
+});
 chatViewButton.addEventListener("click", () => setMainView("chat"));
 terminalViewButton.addEventListener("click", () => setMainView("terminal"));
 terminalFilter.addEventListener("change", () => {
@@ -5073,11 +5641,14 @@ document.querySelector(".conversation").addEventListener("touchstart", handleSwi
 document.querySelector(".conversation").addEventListener("touchend", handleSwipeEnd, { passive: true });
 artifactsTab.addEventListener("click", () => {
   showRightPanel();
-  renderArtifactIndex(artifactItems);
+  showReviewCenter("artifacts");
 });
 workspaceTab.addEventListener("click", showSettings);
 automationTab.addEventListener("click", showAutomations);
 statusButton.addEventListener("click", showStatus);
+for (const button of reviewTabButtons) {
+  button.addEventListener("click", () => showReviewCenter(button.dataset.reviewTab));
+}
 webSearchButton.addEventListener("click", () => {
   setActivePanelTab("web");
   promptInput.value = `${promptInput.value}${promptInput.value ? "\n" : ""}Web調査を使って確認してください。`;
@@ -5108,6 +5679,7 @@ applyTerminalDisplaySettings();
 setTerminalInputMode(terminalInputMode, { silent: true });
 updateTerminalFilterControls();
 renderQuickActions();
+renderTaskTemplates();
 restoreDraftForCurrentThread();
 setMainView(mainViewMode);
 try {

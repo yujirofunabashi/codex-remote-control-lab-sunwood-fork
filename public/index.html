@@ -61,6 +61,11 @@
         </nav>
         <div class="thread-section">
           <div class="section-title">最近のチャット</div>
+          <div id="threadInboxTabs" class="thread-inbox-tabs" role="tablist" aria-label="チャットの絞り込み">
+            <button type="button" class="active" data-thread-filter="attention" aria-selected="true">要対応</button>
+            <button type="button" data-thread-filter="running" aria-selected="false">実行中</button>
+            <button type="button" data-thread-filter="recent" aria-selected="false">最近</button>
+          </div>
           <input id="threadSearch" class="thread-search hidden" type="search" placeholder="チャットを検索" />
           <div id="threadList" class="thread-list"></div>
         </div>
@@ -168,6 +173,7 @@
                 <button type="button" id="bridgeAddSubmit">接続確認して追加</button>
               </div>
               <p id="bridgeAddStatus" class="bridge-add-status"></p>
+              <p class="bridge-security-note">public tunnel は非推奨です。SSH forwarding / VPN / mesh network を使い、base URL と token は分けて扱ってください。</p>
             </section>
           </div>
         </section>
@@ -290,6 +296,7 @@
             </section>
             <form id="composer" class="composer">
               <input id="fileInput" class="hidden" type="file" accept="image/*,audio/*,.m4a,.mp3,.wav,.aac,.flac,.ogg,.webm,.mp4" multiple />
+              <div id="approvalStrip" class="approval-strip hidden" aria-live="polite"></div>
               <div class="composer-status-bar">
                 <div id="runState" class="run-state" data-state="connecting" role="status" aria-live="polite">
                   <span class="run-state-dot" aria-hidden="true"></span>
@@ -297,6 +304,7 @@
                 </div>
                 <div id="quickActions" class="quick-actions" role="group" aria-label="ワンタップ入力"></div>
               </div>
+              <div id="taskTemplates" class="task-templates" role="group" aria-label="タスクテンプレート"></div>
               <div id="attachments" class="attachments" aria-live="polite"></div>
               <textarea id="prompt" rows="3" placeholder="フォローアップの変更を求める"></textarea>
               <div class="composer-footer">
@@ -372,6 +380,14 @@
                 <button type="button" class="panel-tab branch" id="automationTab" data-panel-tab="automation" title="自動処理" aria-label="自動処理"></button>
                 <button type="button" class="panel-tab terminal" id="statusButton" data-panel-tab="status" title="接続状態" aria-label="接続状態"></button>
                 <button type="button" class="panel-tab globe" id="webSearchButton" data-panel-tab="web" title="Web調査を追加" aria-label="Web調査を追加"></button>
+              </div>
+              <div class="review-tabs" role="tablist" aria-label="Review Center">
+                <button type="button" class="active" data-review-tab="summary" aria-selected="true">Summary</button>
+                <button type="button" data-review-tab="diff" aria-selected="false">Diff</button>
+                <button type="button" data-review-tab="tests" aria-selected="false">Tests</button>
+                <button type="button" data-review-tab="terminal" aria-selected="false">Terminal</button>
+                <button type="button" data-review-tab="artifacts" aria-selected="false">Artifacts</button>
+                <button type="button" data-review-tab="actions" aria-selected="false">Actions</button>
               </div>
               <div id="artifactList">
                 <button type="button" class="artifact-row has-badge" data-artifact="README.md">
