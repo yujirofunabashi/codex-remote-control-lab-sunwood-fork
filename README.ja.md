@@ -40,13 +40,13 @@ npm ci
 npm run phone
 ```
 
-次のような URL が表示されます。
+terminal には次のような伏せ字の bridge URL が表示されます。
 
 ```text
-http://192.168.11.8:45214/?token=...
+http://192.168.11.8:45214/?token=abcd…wxyz
 ```
 
-同じ Wi-Fi/LAN 上のスマホで、その URL をそのまま開きます。
+同じ Wi-Fi/LAN 上のスマホでは、private な起動通知で届いた token 付き URL を開くか、bridge URL を開いて local の `.phone-token` / `PHONE_TOKEN` 由来の token を入力します。
 
 ## 🧭 構成
 
@@ -96,21 +96,21 @@ PHONE_DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/... npm run phone
 PHONE_NOTIFY_TIMEOUT_MS=5000 npm run phone
 ```
 
-複数 bridge / 複数 worktree を 1 つの browser tab で扱う場合は、Bridge Fleet / Worktree Switchboard を使います。通常通り 1 つ目の bridge URL を開き、ヘッダーまたは sidebar の bridge/worktree pill を押して、残りの `http://192.168.x.x:45224/?token=...` を追加します。active bridge を切り替えると chat / terminal / thread / artifact / approval UI はその bridge の状態へ切り替わり、inactive bridge の稼働・エラー・承認待ちは global monitor / inbox に出ます。
+複数 bridge / 複数 worktree を 1 つの browser tab で扱う場合は、Bridge Fleet / Worktree Switchboard を使います。通常通り 1 つ目の bridge を開き、ヘッダーまたは sidebar の bridge/worktree pill から、残りの protected startup URL または base URL と token を追加します。active bridge を切り替えると chat / terminal / thread / artifact / approval UI はその bridge の状態へ切り替わり、inactive bridge の稼働・エラー・承認待ちは global monitor / inbox に出ます。
 
-各 bridge は token-protected な `GET /api/bridge/info` で label、port、cwd、branch、dirty summary、model、capabilities を返します。token は UI では mask され、保存する場合は browser localStorage、保存しない場合は sessionStorage に限定されます。`.phone-fleet.local.json` を作って `npm run phone:fleet` を使うと、複数 slot をまとめて起動できます。この local config は Git に入れないでください。
+各 bridge は token-protected な `GET /api/bridge/info` で label、port、cwd、branch、dirty summary、model、capabilities を返します。token は UI では mask され、host profile には base URL と metadata だけを保存し、保存 token は端末内の token store、保存しない token は sessionStorage に分けます。`.phone-fleet.local.json` を作って `npm run phone:fleet` を使うと、複数 slot をまとめて起動できます。この local config は Git に入れないでください。
 
 `CODEX_APP_SERVER_SOCK` または `CODEX_APP_SERVER_URL` を指定すると、bridge は新しい app-server を起動せず、既存の headless app-server に接続します。Codex Desktop 本体とライブ同期したい場合は、Desktop の通常ローカル会話画面ではなく、Desktop の Remote Connection と OCdex を同じ headless app-server に接続してください。Desktop の通常ローカル会話画面は専用の `stdio` app-server を使うため、外部 bridge からその画面へ直接ライブ注入する公開経路はありません。
 
 履歴同期は既定で有効です。Web 側の turn 完了後、bridge は `thread/read` と scan-backed な `thread/list` を実行して app-server の履歴/index を温めます。`/api/threads` も state DB 限定ではなく scan-and-repair で取得します。これにより Codex Desktop 側で thread を開き直す/再読込したときに、更新済み session を見つけやすくします。ただし、通常の Desktop 会話画面へライブ注入するものではありません。追加の履歴 refresh を止めたい場合は `CODEX_HISTORY_SYNC=0` を指定します。
 
-起動通知は opt-in です。`PHONE_NTFY_TOPIC` がある場合は ntfy topic へ、`PHONE_PUSHOVER_TOKEN` と `PHONE_PUSHOVER_USER` がある場合は Pushover へ、`PHONE_DISCORD_WEBHOOK_URL` がある場合は Discord へ bridge URL を送ります。`npm run phone` は local `.env` を読んでから環境変数を参照します。`PHONE_NTFY_SERVER` は既定で `https://ntfy.sh`、HTTPS 必須です。通知本文には token 付き URL が入るので、private/protected topic、account、channel を使い、値は local environment variables に置いてください。
+通知は opt-in です。`PHONE_NTFY_TOPIC` がある場合は ntfy topic へ、`PHONE_PUSHOVER_TOKEN` と `PHONE_PUSHOVER_USER` がある場合は Pushover へ、`PHONE_DISCORD_WEBHOOK_URL` がある場合は Discord へ起動 URL を送ります。作業 event 通知も使う場合は `PHONE_NOTIFY_EVENTS=1` を設定します。`approval_required`、`question_required`、`turn_completed`、`test_failed`、`connection_lost`、`history_sync_failed`、`long_running` を送信でき、`PHONE_NOTIFY_EVENT_DEDUPE_MS` で短時間の重複通知を抑制します。起動通知は互換性のため token 付き URL を含み得るので private/protected topic、account、channel 限定で使ってください。event 通知の URL には token を含めません。
 
 現在の bridge は次をサポートします。
 
 - Codex Desktop 風の sidebar / conversation / artifact panel / composer layout
 - 最近の thread 一覧と直接 resume
-- 複数 tokenized bridge URL を 1 tab に登録する Bridge Fleet / Worktree Switchboard
+- 複数 bridge profile を 1 tab に登録する Bridge Fleet / Worktree Switchboard
 - 登録済み bridge 全体の global running monitor と global approval inbox
 - thread ごとのアクセント色を browser localStorage に保存し、複数作業を見分けやすくする
 - チャット / ターミナル表示を切り替え、command・file change・承認・error などの監視ログを確認
@@ -131,6 +131,8 @@ PHONE_NOTIFY_TIMEOUT_MS=5000 npm run phone
 
 安全境界は変えていません。Codex app-server は `127.0.0.1` のまま、browser 操作は token-protected bridge を通り、terminal 操作 UI も認証なしの任意 shell 実行口を追加しません。
 
+公式 mobile 体験との位置づけは [公式 Codex Mobile との違い](docs/ja/guide/official-codex-mobile-comparison.md) を参照してください。
+
 ### モバイル terminal compact layout
 
 スマホ幅の terminal view では、Chat / Term 切替を header 内の小さな segmented control にまとめ、pathbar、toolbar、Text / Keys、status、quick actions、composer を compact 表示にします。通常の Safari tab でも terminal 表示領域を優先し、`Focus` / `Max` では pathbar、quick actions、artifact panel などを隠してさらに広く使えます。
@@ -145,9 +147,9 @@ terminal toolbar は普段は `Filter / All / Search / Auto / ...` の 1 行だ�
 
 `site.webmanifest`、touch icon、standalone detection に対応しています。PWA は表示領域を増やす補助であり、通常 Safari tab でも compact layout は有効です。環境により LAN HTTP では PWA 化が制限されることがあります。
 
-manifest の `start_url` には token を入れません。ホーム画面から起動して token が見つからない場合は、bridge が表示した token 付き URL で開き直してください。token 付き URL は公開 issue、共有チャット、スクリーンショット、配信に載せないでください。
+manifest の `start_url` には token を入れません。ホーム画面から起動して token が見つからない場合は、private な起動通知の URL で開き直すか、token 入力欄から local の `.phone-token` / `PHONE_TOKEN` を保存してください。token 付き URL は公開 issue、共有チャット、スクリーンショット、配信に載せないでください。
 
-Service Worker は既定では登録しません。過去の stale Service Worker が同一 scope に残っている場合だけ best-effort で unregister / cache cleanup を試みます。将来 Service Worker を有効化する場合も、`/api/*`、raw file、uploads、artifacts、terminal history、approval payload を cache しない方針を守ってください。
+Service Worker は secure context または localhost で app shell のみを cache します。`/api/*`、WebSocket、token 付き URL、raw file、uploads、artifacts、terminal history、approval payload は cache しません。LAN HTTP ではブラウザ制約により登録できない場合があります。
 
 ## 🖼️ UI Evidence
 
@@ -231,7 +233,7 @@ Mobile flow:
 
 - Codex app-server は `127.0.0.1` に保ちます。
 - 認証なしの Codex app-server を LAN や public interface に直接 bind しないでください。
-- 表示された `?token=...` 付き URL は local access key として扱い、公開 issue、共有チャット、スクリーンショット、配信には載せないでください。
+- `?token=...` 付きの起動 URL は local access key として扱い、公開 issue、共有チャット、スクリーンショット、配信には載せないでください。
 - bridge は `Ctrl+C` で停止します。terminal を閉じた場合や PC を再起動した後は、もう一度 `npm run phone` を実行します。
 - trusted LAN 外から使う場合は SSH forwarding、VPN、mesh network を優先してください。
 - 認証なしの public tunnel や raw port forwarding で bridge を公開しないでください。

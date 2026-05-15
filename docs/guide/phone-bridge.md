@@ -17,15 +17,15 @@ For the experimental Claude provider, run:
 npm run phone:claude
 ```
 
-The command prints one URL per LAN IPv4 address:
+The command prints one masked URL per LAN IPv4 address:
 
 ```text
-http://192.168.11.8:45214/?token=...
+http://192.168.11.8:45214/?token=abcd…wxyz
 ```
 
-Open the exact printed URL from a phone or another browser on the same network. Use the phone to send prompts, approve work, inspect artifacts, and then resume the same thread from the desktop browser when you return to the PC.
+Open a private tokenized startup URL from a protected notification channel, or open the bridge URL and enter the token from your local `.phone-token` / `PHONE_TOKEN` source. Use the phone to send prompts, approve work, inspect artifacts, and then resume the same thread from the desktop browser when you return to the PC.
 
-The printed URL includes `?token=...`. Keep that URL private. To stop the bridge, press `Ctrl+C` in the terminal that is running `npm run phone`. If the terminal is closed or the PC restarts, start it again with `npm run phone`.
+Any full `?token=...` URL is a local access key. Keep it private. To stop the bridge, press `Ctrl+C` in the terminal that is running `npm run phone`. If the terminal is closed or the PC restarts, start it again with `npm run phone`.
 
 ## Runtime Layout
 
@@ -74,13 +74,15 @@ PHONE_NTFY_TOPIC=your-private-topic npm run phone
 PHONE_PUSHOVER_TOKEN=app-token PHONE_PUSHOVER_USER=user-key npm run phone
 PHONE_DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/... npm run phone
 PHONE_NOTIFY_TIMEOUT_MS=5000 npm run phone
+PHONE_NOTIFY_EVENTS=1 npm run phone
+PHONE_NOTIFY_EVENT_DEDUPE_MS=60000 npm run phone
 ```
 
 For parallel operation, treat each `PHONE_UI_PORT` as a fixed workspace slot. Pin the slot with `PHONE_WORKDIR`, and switch Codex or Claude from the browser UI as needed. Settings saved from the browser UI use port-scoped `.env` keys such as `PHONE_WORKDIR_45224`, so one slot's worktree choice does not become every port's default. `PHONE_AGENT_PROVIDER` only sets the default provider for that slot after restart.
 
-Bridge Fleet / Worktree Switchboard manages those slots from one browser tab. Start each bridge on a different port, open one tokenized URL, then use the bridge/worktree pill to paste the remaining URLs. The active bridge drives the existing chat, terminal, thread, artifact, model, and approval UI; inactive bridges are polled through token-protected APIs for running state, errors, terminal tail, and approval requests.
+Bridge Fleet / Worktree Switchboard manages those slots from one browser tab. Start each bridge on a different port, open one bridge, then use the bridge/worktree pill to paste the remaining protected startup URLs or base URLs plus tokens. Saved host profiles keep base URLs and metadata separate from the local device token store. The active bridge drives the existing chat, terminal, thread, artifact, model, and approval UI; inactive bridges are polled through token-protected APIs for running state, errors, terminal tail, and approval requests.
 
-Each bridge exposes `GET /api/bridge/info?token=...` for fleet metadata: label, group, port, cwd, repo root, branch, short HEAD, dirty summary, model, and capabilities. The endpoint requires the bridge token and returns no phone token, app-server secret, webhook URL, or shell execution capability.
+Each bridge exposes token-protected `GET /api/bridge/info` for fleet metadata: label, group, port, cwd, repo root, branch, short HEAD, dirty summary, model, and capabilities. The endpoint requires the bridge token through the UI's auth header/cookie flow and returns no phone token, app-server secret, webhook URL, or shell execution capability.
 
 Optional fleet launcher:
 
@@ -104,7 +106,9 @@ npm run phone:fleet
 
 The repository ignores `.phone-fleet.local.json` and `.phone-bridges.local.json`. Keep those local because they can contain private worktree paths and registry details.
 
-Startup notifications are optional. If `PHONE_NTFY_TOPIC` is set, the bridge posts the ready URLs to that ntfy topic. If `PHONE_PUSHOVER_TOKEN` and `PHONE_PUSHOVER_USER` are set, it sends the same URLs through Pushover. If `PHONE_DISCORD_WEBHOOK_URL` is set, it posts them to Discord. `npm run phone` loads local `.env` values before reading these variables. `PHONE_NTFY_SERVER` defaults to `https://ntfy.sh` and must use HTTPS. Notification requests time out after `PHONE_NOTIFY_TIMEOUT_MS`, which defaults to 5000 ms. When a LAN IPv4 URL is available, the message includes the tokenized bridge URL, so use a private/protected topic, account, or channel and keep notification credentials out of Git. If no LAN IPv4 URL is detected, the notification omits provider link fields and tells you to check the host console.
+Startup notifications are optional. If `PHONE_NTFY_TOPIC` is set, the bridge posts the ready URLs to that ntfy topic. If `PHONE_PUSHOVER_TOKEN` and `PHONE_PUSHOVER_USER` are set, it sends the same URLs through Pushover. If `PHONE_DISCORD_WEBHOOK_URL` is set, it posts them to Discord. `npm run phone` loads local `.env` values before reading these variables. `PHONE_NTFY_SERVER` defaults to `https://ntfy.sh` and must use HTTPS. Notification requests time out after `PHONE_NOTIFY_TIMEOUT_MS`, which defaults to 5000 ms. When a LAN IPv4 URL is available, the startup message can include the tokenized bridge URL for compatibility, so use a private/protected topic, account, or channel and keep notification credentials out of Git. If no LAN IPv4 URL is detected, the notification omits provider link fields and tells you to check the host console.
+
+Set `PHONE_NOTIFY_EVENTS=1` to send structured work events through the same providers. Supported event types are `bridge_started`, `approval_required`, `question_required`, `turn_completed`, `test_failed`, `connection_lost`, `history_sync_failed`, and `long_running`. Event payloads include type, title, message, thread ID/title when available, project name, severity, created time, a token-free bridge URL, and optional extra fields. `PHONE_NOTIFY_EVENT_DEDUPE_MS` controls short-window dedupe for the same thread/event type. Event notifications never include the full phone token.
 
 Rate-limit display supports local, unofficial provider-specific snapshots. For Codex, set `PHONE_CODEX_RATE_LIMIT_REFRESH_COMMAND="node scripts/read-desktop-rate-limits.js"` to let the bridge read the Codex auth file at `~/.codex/auth.json`, call Codex Desktop's usage endpoint, normalize only the displayed remaining percentage/reset fields, and cache that small snapshot in `.phone-rate-limits.json`. The legacy `PHONE_RATE_LIMIT_REFRESH_COMMAND` name is still honored for Codex only, so Claude mode cannot accidentally show Codex limits. The bridge does not cache tokens or raw API responses; failures fall back to the last provider cache or `unavailable`. Set `PHONE_RATE_LIMIT_SOURCE=desktop` only when you intentionally want the older macOS Accessibility fallback against the Codex app UI.
 
@@ -123,6 +127,10 @@ Claude mode is intentionally narrower than Codex mode. It has Claude Code sessio
 - PC/mobile continuity through a shared bridge-managed thread
 - Bridge Fleet / Worktree Switchboard for multiple bridge/worktree slots in one tab
 - global running monitor and approval inbox across registered bridges
+- thread status badges and `要対応 / 実行中 / 最近` inbox filters
+- Review Center tabs for Summary, Diff, Tests, Terminal, Artifacts, and Actions
+- connection health panel for bridge, app-server, WebSocket, history sync, token age, notification providers, host, and LAN URL
+- PWA app shell caching that excludes `/api/*`, WebSocket, tokenized URLs, uploads, and raw file responses
 - cockpit header with thread position, run state, per-thread accent color, compact cwd, and a mini thread switcher
 - guarded swipe navigation that avoids text inputs, terminal logs, artifact previews, approval cards, and horizontal scrollers
 - chat / terminal view switching with unread badges and preserved drafts/scroll position
@@ -139,3 +147,9 @@ Claude mode is intentionally narrower than Codex mode. It has Claude Code sessio
 - LAN sharing for a single bridge-managed thread
 
 The terminal key row does not expose unauthenticated raw shell execution. `$` inserts a safe Codex command-request template, and bridge access remains token protected while the Codex app-server stays bound to localhost.
+
+## PWA Notes
+
+`site.webmanifest` is token-free and uses `display: standalone`. On secure contexts and localhost, the phone UI registers `service-worker.js` and caches only the app shell. API responses, WebSocket traffic, tokenized URLs, uploaded files, raw file routes, terminal history, and approval payloads are not cached. On plain LAN HTTP, browser rules may block Service Worker registration; the normal browser UI still works.
+
+After adding the bridge to the Home Screen, treat the stored token as private local device state. If the token is missing or rotated, open the protected startup URL once, or use the token entry field with the local `.phone-token` / `PHONE_TOKEN` value, so the UI can store the key locally without keeping it in the address bar.

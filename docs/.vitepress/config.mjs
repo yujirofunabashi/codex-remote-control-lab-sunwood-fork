@@ -30,6 +30,7 @@ export default defineConfig({
             text: "Guide",
             items: [
               { text: "Phone Bridge", link: "/guide/phone-bridge" },
+              { text: "Official Mobile Comparison", link: "/guide/official-codex-mobile-comparison" },
               { text: "Protocol Notes", link: "/guide/protocol" },
               { text: "Security", link: "/guide/security" },
               { text: "Contributing", link: "/guide/contributing" },
@@ -58,6 +59,7 @@ export default defineConfig({
             text: "ガイド",
             items: [
               { text: "Phone Bridge", link: "/ja/guide/phone-bridge" },
+              { text: "公式 Mobile との違い", link: "/ja/guide/official-codex-mobile-comparison" },
               { text: "Protocol Notes", link: "/ja/guide/protocol" },
               { text: "Security", link: "/ja/guide/security" },
               { text: "Contributing", link: "/ja/guide/contributing" },

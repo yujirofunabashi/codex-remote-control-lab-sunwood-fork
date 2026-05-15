@@ -11,15 +11,15 @@ npm ci
 npm run phone
 ```
 
-次のような URL が表示されます。
+terminal には LAN IPv4 ごとの伏せ字 URL が表示されます。
 
 ```text
-http://192.168.11.8:45214/?token=...
+http://192.168.11.8:45214/?token=abcd…wxyz
 ```
 
-同じネットワーク上のスマホや別ブラウザから、その URL をそのまま開きます。スマホから prompt 送信、承認、artifact 確認まで行い、PC に戻ったら同じ thread を desktop browser で resume できます。
+同じネットワーク上のスマホや別ブラウザから、private な起動通知で届いた token 付き URL を開くか、bridge URL を開いて local の `.phone-token` / `PHONE_TOKEN` 由来の token を入力します。スマホから prompt 送信、承認、artifact 確認まで行い、PC に戻ったら同じ thread を desktop browser で resume できます。
 
-表示された URL には `?token=...` が含まれます。この URL は private に扱ってください。bridge を止めるときは、`npm run phone` を実行している terminal で `Ctrl+C` を押します。terminal を閉じた場合や PC を再起動した場合は、もう一度 `npm run phone` を実行します。
+完全な `?token=...` URL は local access key です。private に扱ってください。bridge を止めるときは、`npm run phone` を実行している terminal で `Ctrl+C` を押します。terminal を閉じた場合や PC を再起動した場合は、もう一度 `npm run phone` を実行します。
 
 ## 構成
 
@@ -62,17 +62,21 @@ PHONE_NTFY_TOPIC=your-private-topic npm run phone
 PHONE_PUSHOVER_TOKEN=app-token PHONE_PUSHOVER_USER=user-key npm run phone
 PHONE_DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/... npm run phone
 PHONE_NOTIFY_TIMEOUT_MS=5000 npm run phone
+PHONE_NOTIFY_EVENTS=1 npm run phone
+PHONE_NOTIFY_EVENT_DEDUPE_MS=60000 npm run phone
 ```
 
 複数ポート運用では、各 `PHONE_UI_PORT` を固定 workspace slot として扱い、`PHONE_WORKDIR` で slot の worktree を指定します。Codex / Claude は browser UI から切り替えられ、`PHONE_AGENT_PROVIDER` は再起動後に最初に開く既定 provider だけを決めます。
 
-Bridge Fleet / Worktree Switchboard を使うと、その複数 slot を 1 つの browser tab で管理できます。bridge を別 port で起動し、1 つ目の tokenized URL を開いてから、bridge/worktree pill で残りの URL を貼り付けます。active bridge は既存の chat、terminal、thread、artifact、model、approval UI をそのまま駆動し、inactive bridge は token-protected API で稼働状態、error、terminal tail、approval request を監視します。
+Bridge Fleet / Worktree Switchboard を使うと、その複数 slot を 1 つの browser tab で管理できます。bridge を別 port で起動し、1 つ目の bridge を開いてから、bridge/worktree pill で残りの protected startup URL または base URL と token を貼り付けます。保存する host profile は base URL と metadata を token store から分けます。active bridge は既存の chat、terminal、thread、artifact、model、approval UI をそのまま駆動し、inactive bridge は token-protected API で稼働状態、error、terminal tail、approval request を監視します。
 
-各 bridge は fleet metadata 用に `GET /api/bridge/info?token=...` を公開します。返すのは label、group、port、cwd、repo root、branch、short HEAD、dirty summary、model、capabilities です。この endpoint も token 必須で、phone token、app-server secret、webhook URL、任意 shell 実行口は返しません。
+各 bridge は fleet metadata 用に token-protected `GET /api/bridge/info` を公開します。返すのは label、group、port、cwd、repo root、branch、short HEAD、dirty summary、model、capabilities です。この endpoint は UI の auth header / cookie 経由で token を要求し、phone token、app-server secret、webhook URL、任意 shell 実行口は返しません。
 
 まとめて起動したい場合は local 専用の `.phone-fleet.local.json` を作り、`npm run phone:fleet` を実行します。`.phone-fleet.local.json` と `.phone-bridges.local.json` は Git に入れないでください。private な worktree path や registry 情報を含み得ます。
 
-起動通知は任意です。`PHONE_NTFY_TOPIC` を設定すると ready URL を ntfy topic へ投稿します。`PHONE_PUSHOVER_TOKEN` と `PHONE_PUSHOVER_USER` を設定すると同じ URL を Pushover へ送ります。`PHONE_DISCORD_WEBHOOK_URL` を設定すると Discord へ投稿します。`npm run phone` は local `.env` を読んでから環境変数を参照します。`PHONE_NTFY_SERVER` は既定で `https://ntfy.sh`、HTTPS 必須です。通知 request は `PHONE_NOTIFY_TIMEOUT_MS` で timeout し、既定は 5000 ms です。LAN IPv4 URL がある場合、通知本文には token 付き bridge URL が入るため、private/protected topic、account、channel を使い、通知用 credential は Git に入れないでください。LAN IPv4 URL を検出できない場合は、provider の link field を省略し、host console を確認するよう通知します。
+起動通知は任意です。`PHONE_NTFY_TOPIC` を設定すると ready URL を ntfy topic へ投稿します。`PHONE_PUSHOVER_TOKEN` と `PHONE_PUSHOVER_USER` を設定すると同じ URL を Pushover へ送ります。`PHONE_DISCORD_WEBHOOK_URL` を設定すると Discord へ投稿します。`npm run phone` は local `.env` を読んでから環境変数を参照します。`PHONE_NTFY_SERVER` は既定で `https://ntfy.sh`、HTTPS 必須です。通知 request は `PHONE_NOTIFY_TIMEOUT_MS` で timeout し、既定は 5000 ms です。LAN IPv4 URL がある場合、起動通知は互換性のため token 付き bridge URL を含み得るため、private/protected topic、account、channel で使い、通知用 credential は Git に入れないでください。
+
+作業 event 通知を使う場合は `PHONE_NOTIFY_EVENTS=1` を設定します。対応 event は `bridge_started`、`approval_required`、`question_required`、`turn_completed`、`test_failed`、`connection_lost`、`history_sync_failed`、`long_running` です。payload には type、title、message、thread ID/title、project name、severity、created time、token なし bridge URL、extra を含めます。同じ thread / event type の短時間連投は `PHONE_NOTIFY_EVENT_DEDUPE_MS` で抑制します。event 通知には full token を含めません。
 
 レート制限表示は local の非公式 provider 別 snapshot に対応しています。Codex では `PHONE_CODEX_RATE_LIMIT_REFRESH_COMMAND="node scripts/read-desktop-rate-limits.js"` を設定すると、bridge は Codex auth file `~/.codex/auth.json` を読み、Codex Desktop が使う usage endpoint を呼び、表示に必要な残量 percentage/reset だけを正規化して `.phone-rate-limits.json` に cache します。従来の `PHONE_RATE_LIMIT_REFRESH_COMMAND` も Codex 用としてだけ維持しているため、Claude mode で Codex の制限値が混ざることは避けます。token や raw API response は cache しません。失敗時は前回の provider cache か `unavailable` に fallback します。Codex app UI の macOS Accessibility fallback を明示的に使う場合だけ `PHONE_RATE_LIMIT_SOURCE=desktop` を設定します。
 
@@ -89,6 +93,10 @@ background の thread 一覧 polling は、同じ error の連続表示を抑え
 - shared bridge-managed thread による PC/スマホ間の継続利用
 - 複数 bridge / worktree slot を 1 tab で扱う Bridge Fleet / Worktree Switchboard
 - 登録済み bridge 全体の global running monitor と approval inbox
+- thread status badge と `要対応 / 実行中 / 最近` inbox filter
+- Summary / Diff / Tests / Terminal / Artifacts / Actions を持つ Review Center
+- bridge、app-server、WebSocket、history sync、token age、notification provider、host、LAN URL を見る health panel
+- `/api/*`、WebSocket、token 付き URL、uploads、raw file response を除外する PWA app shell cache
 - thread 位置、稼働状態、thread 色、compact cwd、mini thread switcher をまとめた cockpit header
 - text input、terminal log、artifact preview、approval card、横スクロール領域では誤発火しない swipe navigation
 - unread badge と draft / scroll 復元つきの chat / terminal 切り替え
@@ -105,3 +113,9 @@ background の thread 一覧 polling は、同じ error の連続表示を抑え
 - bridge-managed thread を LAN 内の複数端末で共有
 
 terminal の key row は、認証なしの raw shell 実行口ではありません。`$` は Codex への安全なコマンド実行依頼テンプレートを挿入するだけで、bridge access は引き続き token protected、Codex app-server は localhost bind のままです。
+
+## PWA 注意
+
+`site.webmanifest` は token を含まず、`display: standalone` を使います。secure context または localhost では `service-worker.js` を登録し、app shell だけを cache します。API response、WebSocket、token 付き URL、upload、raw file route、terminal history、approval payload は cache しません。LAN HTTP ではブラウザ制約で Service Worker 登録ができないことがありますが、通常の browser UI はそのまま使えます。
+
+ホーム画面に追加した後も、保存された token はその端末の private state として扱ってください。token がない、または rotation した場合は、private な起動通知の URL を一度開くか、token 入力欄で local の `.phone-token` / `PHONE_TOKEN` を保存すると、UI は address bar に token を残さず再接続します。
