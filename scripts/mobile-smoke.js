@@ -197,6 +197,11 @@ async function run() {
     check("legacy pwd badge is gone", (await page.locator(".workspace-pwd-badge").count()) === 0);
     const workspaceStripDisplay = await page.locator("#workspaceIndicator").evaluate((el) => getComputedStyle(el).display);
     check("mobile workspace strip is visually hidden", workspaceStripDisplay === "none", `display=${workspaceStripDisplay}`);
+    const bridgeListState = await page.locator("#bridgeFleetList").evaluate((el) => ({
+      hidden: el.hidden,
+      rows: el.querySelectorAll(".bridge-fleet-row").length,
+    }));
+    check("single bridge row is not duplicated in the sidebar", bridgeListState.hidden && bridgeListState.rows === 0, JSON.stringify(bridgeListState));
 
     // Issue 5: header color button is quieter (smaller, neutral background).
     const colorBtn = await page.evaluate(() => {

@@ -2578,7 +2578,10 @@ function renderFleet() {
 
   if (bridgeFleetList) {
     bridgeFleetList.replaceChildren();
-    for (const entry of entries) {
+    const showBridgeList = entries.length > 1;
+    bridgeFleetList.hidden = !showBridgeList;
+    bridgeFleetList.setAttribute("aria-hidden", showBridgeList ? "false" : "true");
+    for (const entry of showBridgeList ? entries : []) {
       const state = getBridgeState(entry.id);
       const row = document.createElement("button");
       row.type = "button";
