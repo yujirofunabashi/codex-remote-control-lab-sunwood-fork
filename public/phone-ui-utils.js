@@ -196,7 +196,7 @@
 
   function redactSensitiveText(value) {
     return String(value || "")
-      .replace(/([?&]token=)[^&\s]+/gi, "$1[redacted]")
+      .replace(/([?&](?:token|key)=)[^&\s]+/gi, "$1[redacted]")
       .replace(/\b(PHONE_TOKEN=)[^\s]+/gi, "$1[redacted]")
       .replace(/\b(authorization:\s*bearer\s+)[A-Za-z0-9._~+/=-]{12,}/gi, "$1[redacted]")
       .replace(/\b(token:\s*)[A-Za-z0-9._~+/=-]{12,}/gi, "$1[redacted]");
@@ -209,12 +209,22 @@
       const secret = String(token || "");
       if (!secret) return "";
       if (secret.length <= 8) return "****";
-      return `${secret.slice(0, 3)}...${secret.slice(-3)}`;
+      return `${secret.slice(0, 4)}…${secret.slice(-4)}`;
     };
-    if (/[?&]token=/i.test(text)) {
-      return text.replace(/([?&]token=)([^&\s]+)/gi, (_, prefix, secret) => `${prefix}${mask(secret)}`);
+    if (/[?&](?:token|key)=/i.test(text)) {
+      return text.replace(/([?&](?:token|key)=)([^&\s]+)/gi, (_, prefix, secret) => `${prefix}${mask(secret)}`);
     }
     return mask(text);
+  }
+
+  function urlWithoutTokenParam(value) {
+    try {
+      const url = new URL(String(value));
+      url.searchParams.delete("token");
+      return url.toString();
+    } catch {
+      return String(value || "").replace(/([?&])token=[^&\s]*&?/gi, (match, prefix) => (match.endsWith("&") ? prefix : ""));
+    }
   }
 
   function normalizeBridgeBaseUrl(value, fallbackOrigin = "") {
@@ -287,15 +297,22 @@
       String(entry.label || parsed?.label || entry.workdirLabel || entry.workdirBasename || url.hostname || id).trim() || id;
     return {
       id,
+      name: String(entry.name || label).trim() || label,
       label,
       group: String(entry.group || "").trim(),
       baseUrl,
       token: String(entry.token || parsed?.token || ""),
+      kind: ["lan", "ssh-forward", "vpn", "mesh", "local"].includes(String(entry.kind || "").trim())
+        ? String(entry.kind || "").trim()
+        : "lan",
+      status: String(entry.status || "").trim(),
+      note: String(entry.note || "").trim(),
       color: sanitizeHexColor(entry.color) || "",
       workdir: String(entry.workdir || entry.cwd || "").trim(),
       port: Number(entry.port || parsed?.port || url.port || 0) || null,
       rememberToken: entry.rememberToken !== false,
       createdAt: Number(entry.createdAt || now),
+      lastUsedAt: Number(entry.lastUsedAt || entry.updatedAt || now),
       updatedAt: now,
     };
   }
@@ -312,13 +329,13 @@
     let inserted = false;
     for (const bridge of current) {
       if (bridge.id === normalized.id || normalizeBridgeBaseUrl(bridge.baseUrl) === normalized.baseUrl) {
-        next.push({ ...bridge, ...normalized, createdAt: bridge.createdAt || normalized.createdAt });
+        next.push({ ...bridge, ...normalized, token: "", createdAt: bridge.createdAt || normalized.createdAt });
         inserted = true;
       } else {
-        next.push(bridge);
+        next.push({ ...bridge, token: "" });
       }
     }
-    if (!inserted) next.push(normalized);
+    if (!inserted) next.push({ ...normalized, token: "" });
     return { ...registry, version: 1, bridges: next };
   }
 
@@ -395,6 +412,74 @@
     return value;
   }
 
+  const threadStatusMeta = {
+    approval_required: { key: "approval_required", label: "承認待ち", tone: "approval", group: "attention", priority: 100 },
+    question_required: { key: "question_required", label: "質問あり", tone: "question", group: "attention", priority: 90 },
+    test_failed: { key: "test_failed", label: "テスト失敗", tone: "error", group: "attention", priority: 80 },
+    error: { key: "error", label: "エラー", tone: "error", group: "attention", priority: 70 },
+    running: { key: "running", label: "実行中", tone: "running", group: "running", priority: 60 },
+    syncing: { key: "syncing", label: "同期中", tone: "syncing", group: "running", priority: 50 },
+    diff_available: { key: "diff_available", label: "差分あり", tone: "diff", group: "recent", priority: 40 },
+    disconnected: { key: "disconnected", label: "接続切れ", tone: "error", group: "attention", priority: 35 },
+    done: { key: "done", label: "完了", tone: "done", group: "recent", priority: 10 },
+    recent: { key: "recent", label: "最近", tone: "recent", group: "recent", priority: 20 },
+  };
+
+  function threadStatusFromKey(key) {
+    return threadStatusMeta[key] || threadStatusMeta.recent;
+  }
+
+  function textHasQuestion(text) {
+    return /(\?|？|質問|確認したい|教えてください|どちら|選んで|判断してください)/i.test(String(text || ""));
+  }
+
+  function textLooksLikeTestFailure(text) {
+    return /(npm (?:run )?test|pnpm test|yarn test|pytest|vitest|jest|test failed|tests? failed|テスト失敗|失敗しました)/i.test(
+      String(text || ""),
+    );
+  }
+
+  function deriveThreadStatus(thread = {}, runtimeState = {}) {
+    const threadId = String(thread.id || runtimeState.threadId || "");
+    const selected = runtimeState.selectedThread && threadId && runtimeState.selectedThread === threadId;
+    const runs = Array.isArray(runtimeState.bridgeRuns) ? runtimeState.bridgeRuns : [];
+    const runForThread =
+      runs.find((item) => String(item.threadId || "") === threadId) ||
+      (selected ? { run: { state: runtimeState.currentRunState }, pendingApproval: runtimeState.pendingApproval } : null);
+    const runState = String(runForThread?.run?.state || (selected ? runtimeState.currentRunState : thread.runState || "") || "");
+    const pendingApproval = Boolean(runForThread?.pendingApproval || (selected && runtimeState.pendingApproval));
+    const terminalText = [
+      thread.preview,
+      thread.name,
+      thread.status,
+      thread.error,
+      ...(Array.isArray(runForThread?.terminalTail) ? runForThread.terminalTail.map((entry) => `${entry.message || ""}\n${entry.detail || ""}`) : []),
+      ...(Array.isArray(runtimeState.terminalEntries) && selected
+        ? runtimeState.terminalEntries.map((entry) => `${entry.message || ""}\n${entry.detail || ""}`)
+        : []),
+    ].join("\n");
+
+    if (pendingApproval || runState === "approval") return threadStatusFromKey("approval_required");
+    if (textHasQuestion(terminalText) && (selected || runState === "ready" || runState === "done")) return threadStatusFromKey("question_required");
+    if (textLooksLikeTestFailure(terminalText)) return threadStatusFromKey("test_failed");
+    if (runState === "error") return threadStatusFromKey("error");
+    if (["running", "streaming", "interrupting"].includes(runState)) return threadStatusFromKey("running");
+    if (runState === "syncing") return threadStatusFromKey("syncing");
+    if (runState === "disconnected") return threadStatusFromKey("disconnected");
+    if (thread.dirty || thread.hasDiff || thread.diffAvailable) return threadStatusFromKey("diff_available");
+    if (["done", "completed", "interrupted"].includes(runState)) return threadStatusFromKey("done");
+    return threadStatusFromKey("recent");
+  }
+
+  function sortThreadsForInbox(threads = [], runtimeState = {}) {
+    return [...threads].sort((a, b) => {
+      const aStatus = deriveThreadStatus(a, runtimeState);
+      const bStatus = deriveThreadStatus(b, runtimeState);
+      if (bStatus.priority !== aStatus.priority) return bStatus.priority - aStatus.priority;
+      return Number(b.updatedAt || b.updated_at || b.createdAt || 0) - Number(a.updatedAt || a.updated_at || a.createdAt || 0);
+    });
+  }
+
   return {
     defaultThreadPalette,
     terminalHistoryLimit,
@@ -419,6 +504,7 @@
     sameWorkspaceThreadRecord,
     redactSensitiveText,
     maskToken,
+    urlWithoutTokenParam,
     normalizeBridgeBaseUrl,
     bridgeIdFromBaseUrl,
     parseBridgeUrl,
@@ -434,5 +520,8 @@
     visibleTerminalEntries,
     shouldConfirmDangerousKey,
     keyIntentText,
+    deriveThreadStatus,
+    sortThreadsForInbox,
+    threadStatusFromKey,
   };
 });

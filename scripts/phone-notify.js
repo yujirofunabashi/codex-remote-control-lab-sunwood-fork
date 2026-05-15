@@ -49,6 +49,36 @@ function notificationTimeoutMs(env = process.env) {
   return Number.isFinite(value) && value > 0 ? value : 5000;
 }
 
+function notificationEventDedupeMs(env = process.env) {
+  const value = Number(envValue(env, "PHONE_NOTIFY_EVENT_DEDUPE_MS") || 60_000);
+  return Number.isFinite(value) && value >= 0 ? value : 60_000;
+}
+
+function notificationEventsEnabled(env = process.env) {
+  return /^(1|true|yes|on)$/i.test(String(envValue(env, "PHONE_NOTIFY_EVENTS") || ""));
+}
+
+function stripTokenFromUrl(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  try {
+    const url = new URL(text);
+    url.searchParams.delete("token");
+    url.searchParams.delete("key");
+    return url.toString();
+  } catch {
+    return text.replace(/([?&])(?:token|key)=[^&\s]*&?/gi, (match, prefix) => (match.endsWith("&") ? prefix : ""));
+  }
+}
+
+function redactNotificationText(value) {
+  return String(value || "")
+    .replace(/([?&])(?:token|key)=[^&\s]*&?/gi, (match, prefix) => (match.endsWith("&") ? prefix : ""))
+    .replace(/\b(PHONE_TOKEN=)[^\s]+/gi, "$1[redacted]")
+    .replace(/\b(authorization:\s*bearer\s+)[A-Za-z0-9._~+/=-]{12,}/gi, "$1[redacted]")
+    .replace(/\b(token:\s*)[A-Za-z0-9._~+/=-]{12,}/gi, "$1[redacted]");
+}
+
 function notificationMessage(urls) {
   const visibleUrls = urls.length ? urls : ["No LAN URL was detected. Check the bridge console on the host."];
   return [
@@ -77,9 +107,62 @@ function taskNotificationMessage(event = {}) {
   if (event.turnId) lines.push(`Turn: ${event.turnId}`);
   if (event.model) lines.push(`Model: ${event.model}`);
   if (event.workdir) lines.push(`Workdir: ${event.workdir}`);
-  if (event.message) lines.push("", String(event.message));
-  if (Array.isArray(event.urls) && event.urls.length) lines.push("", "Links:", ...event.urls);
-  else if (event.url) lines.push("", event.url);
+  if (event.message) lines.push("", redactNotificationText(event.message));
+  if (Array.isArray(event.urls) && event.urls.length) lines.push("", "Links:", ...event.urls.map(stripTokenFromUrl));
+  else if (event.url) lines.push("", stripTokenFromUrl(event.url));
+  return redactNotificationText(lines.join("\n"));
+}
+
+function eventSeverity(event = {}) {
+  const severity = String(event.severity || "").toLowerCase();
+  if (severity === "error" || severity === "warning" || severity === "info") return severity;
+  if (/failed|lost|error/i.test(event.type || event.status || "")) return "error";
+  if (/approval|required|long_running|sync/i.test(event.type || "")) return "warning";
+  return "info";
+}
+
+function eventTags(event = {}) {
+  const severity = eventSeverity(event);
+  if (event.type === "approval_required" || event.type === "question_required") return "bell,computer";
+  if (severity === "error") return "warning,computer";
+  if (severity === "warning") return "hourglass,computer";
+  return "white_check_mark,computer";
+}
+
+function normalizeEvent(event = {}) {
+  const type = String(event.type || event.status || "bridge_started");
+  const severity = eventSeverity({ ...event, type });
+  const title = String(event.title || type.replace(/_/g, " "));
+  const createdAt = event.createdAt || new Date().toISOString();
+  return {
+    type,
+    title: redactNotificationText(title),
+    message: redactNotificationText(event.message || title),
+    threadId: event.threadId || "",
+    threadTitle: redactNotificationText(event.threadTitle || ""),
+    projectName: redactNotificationText(event.projectName || ""),
+    severity,
+    createdAt,
+    url: stripTokenFromUrl(event.url || ""),
+    extra: event.extra && typeof event.extra === "object" ? event.extra : {},
+  };
+}
+
+function eventNotificationMessage(event = {}) {
+  const normalized = normalizeEvent(event);
+  const lines = [
+    normalized.title,
+    "",
+    normalized.message,
+    "",
+    `Type: ${normalized.type}`,
+    `Severity: ${normalized.severity}`,
+    `Created: ${normalized.createdAt}`,
+  ];
+  if (normalized.projectName) lines.push(`Project: ${normalized.projectName}`);
+  if (normalized.threadTitle) lines.push(`Thread title: ${normalized.threadTitle}`);
+  if (normalized.threadId) lines.push(`Thread: ${normalized.threadId}`);
+  if (normalized.url) lines.push("", normalized.url);
   return lines.join("\n");
 }
 
@@ -213,18 +296,54 @@ async function notifyBridgeUrls(urls, options = {}) {
 }
 
 async function notifyTaskEvent(event = {}, options = {}) {
+  const status = event.status || "updated";
+  const statusToType = {
+    approval: "approval_required",
+    completed: "turn_completed",
+    interrupted: "turn_completed",
+    failed: "test_failed",
+  };
+  return notifyEvent(
+    {
+      type: statusToType[status] || status,
+      title: `${event.provider || "Codex"} task ${taskStatusLabel(status)}`,
+      message: taskNotificationMessage({ ...event, url: stripTokenFromUrl(event.url), urls: (event.urls || []).map(stripTokenFromUrl) }),
+      threadId: event.threadId,
+      projectName: event.projectName || event.workdir?.split(/[\\/]/).filter(Boolean).pop() || "",
+      severity: status === "failed" ? "error" : status === "approval" ? "warning" : "info",
+      url: event.url,
+      extra: {
+        provider: event.provider,
+        turnId: event.turnId,
+        model: event.model,
+      },
+    },
+    options,
+  );
+}
+
+const recentEventNotifications = new Map();
+
+async function notifyEvent(event = {}, options = {}) {
   const env = options.env || process.env;
+  if (!notificationEventsEnabled(env) && !options.force) return [];
   const fetchImpl = options.fetch || fetch;
   const targets = notificationTargets(env);
   const timeoutMs = notificationTimeoutMs(env);
-  const provider = event.provider || "Codex";
-  const status = event.status || "updated";
+  const dedupeMs = notificationEventDedupeMs(env);
+  const normalized = normalizeEvent(event);
+  const dedupeKey = `${normalized.type}:${normalized.threadId || normalized.projectName || normalized.url || "global"}`;
+  const now = Date.now();
+  const lastSentAt = recentEventNotifications.get(dedupeKey) || 0;
+  if (dedupeMs && now - lastSentAt < dedupeMs) return [];
+  recentEventNotifications.set(dedupeKey, now);
+
   const notification = {
-    title: `${provider} task ${taskStatusLabel(status)}`,
-    tags: status === "failed" ? "warning,computer" : status === "approval" ? "bell,computer" : "white_check_mark,computer",
-    clickUrl: event.url,
-    clickTitle: "Open phone bridge thread",
-    message: taskNotificationMessage(event),
+    title: normalized.title,
+    tags: eventTags(normalized),
+    clickUrl: normalized.url,
+    clickTitle: "Open phone bridge",
+    message: eventNotificationMessage(normalized),
   };
   const results = [];
 
@@ -244,10 +363,16 @@ async function notifyTaskEvent(event = {}, options = {}) {
 
 module.exports = {
   bridgeUrls,
+  eventNotificationMessage,
+  notificationEventDedupeMs,
+  notificationEventsEnabled,
   notificationMessage,
   notificationTargets,
   notificationTimeoutMs,
+  redactNotificationText,
+  notifyEvent,
   notifyTaskEvent,
   notifyBridgeUrls,
+  stripTokenFromUrl,
   taskNotificationMessage,
 };

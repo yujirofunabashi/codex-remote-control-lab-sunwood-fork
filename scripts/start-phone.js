@@ -8,7 +8,7 @@ const { execFileSync, spawn } = require("child_process");
 const WebSocket = require("ws");
 const { bridgeKeyForRequest, shouldDisposeIdleBridge, shouldPromoteBridgeKey } = require("./bridge-state");
 const { isHistorySyncEnabled, runHistorySync } = require("./history-sync");
-const { bridgeUrls, notifyBridgeUrls, notifyTaskEvent } = require("./phone-notify");
+const { bridgeUrls, notificationTargets, notifyBridgeUrls, notifyEvent, notifyTaskEvent, stripTokenFromUrl } = require("./phone-notify");
 const { settingEnvKeysForSlot, slotEnvKey, slotSettingValue } = require("./phone-slot-settings");
 const { findLiveBridge, readThreadSnapshot } = require("./thread-read");
 
@@ -402,8 +402,11 @@ const phoneBridgeColor = String(process.env.PHONE_BRIDGE_COLOR || "").trim();
 let notificationBridgeUrls = [];
 let codexProcess = null;
 let codexStartPromise = null;
+let lastBridgeEventAt = 0;
+let lastHistorySync = { enabled: historySyncEnabled, lastSuccessAt: null, lastFailureAt: null, lastError: "" };
 const historyLimit = 80;
 const idleBridgeTtlMs = Number(process.env.PHONE_IDLE_BRIDGE_TTL_MS || 60 * 60 * 1000);
+const longRunningNotifyMs = positiveNumber(process.env.PHONE_NOTIFY_LONG_RUNNING_MS, 10 * 60 * 1000);
 const imageExtensions = new Map([
   [".png", "image/png"],
   [".jpg", "image/jpeg"],
@@ -603,6 +606,87 @@ function getToken() {
   const token = crypto.randomBytes(18).toString("base64url");
   fs.writeFileSync(tokenPath, `${token}\n`, { mode: 0o600 });
   return token;
+}
+
+function maskTokenValue(value) {
+  const text = String(value || "");
+  if (!text) return "";
+  if (text.length <= 8) return "****";
+  return `${text.slice(0, 4)}…${text.slice(-4)}`;
+}
+
+function tokenMetadata(phoneToken) {
+  let createdAt = null;
+  let ageMs = null;
+  let source = "env";
+  if (!process.env.PHONE_TOKEN && fs.existsSync(tokenPath)) {
+    source = "file";
+    const stat = fs.statSync(tokenPath);
+    createdAt = stat.birthtimeMs || stat.ctimeMs || stat.mtimeMs;
+    ageMs = Math.max(0, Date.now() - createdAt);
+  }
+  return {
+    present: Boolean(phoneToken),
+    masked: maskTokenValue(phoneToken),
+    source,
+    createdAt: createdAt ? new Date(createdAt).toISOString() : null,
+    ageMs,
+  };
+}
+
+function maskTokenInUrl(value) {
+  return String(value || "").replace(/([?&](?:token|key)=)([^&\s]+)/gi, (_, prefix, raw) => `${prefix}${maskTokenValue(raw)}`);
+}
+
+function decodeBase64Url(value) {
+  try {
+    const normalized = String(value || "").replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+    return Buffer.from(padded, "base64").toString("utf8");
+  } catch {
+    return "";
+  }
+}
+
+function cookieValue(header, name) {
+  const target = `${name}=`;
+  for (const part of String(header || "").split(";")) {
+    const item = part.trim();
+    if (!item.startsWith(target)) continue;
+    try {
+      return decodeURIComponent(item.slice(target.length));
+    } catch {
+      return item.slice(target.length);
+    }
+  }
+  return "";
+}
+
+function requestTokenFromHeaders(headers = {}) {
+  const authorization = String(headers.authorization || headers.Authorization || "");
+  const bearer = authorization.match(/^Bearer\s+(.+)$/i);
+  if (bearer) return bearer[1].trim();
+  const headerToken = headers["x-phone-token"] || headers["X-Phone-Token"];
+  if (headerToken) return String(headerToken).trim();
+  const cookieToken = cookieValue(headers.cookie || headers.Cookie, "codex_phone_token");
+  if (cookieToken) return cookieToken;
+  for (const protocol of String(headers["sec-websocket-protocol"] || "").split(",")) {
+    const trimmed = protocol.trim();
+    if (trimmed.startsWith("phone-token.")) return decodeBase64Url(trimmed.slice("phone-token.".length));
+  }
+  return "";
+}
+
+function requestToken(url) {
+  return url.searchParams.get("token") || requestTokenFromHeaders(url._phoneHeaders || {});
+}
+
+function redactSensitiveText(value) {
+  return String(value || "")
+    .replace(/([?&](?:token|key)=)[^&\s]+/gi, "$1[redacted]")
+    .replace(/\b(PHONE_TOKEN=)[^\s]+/gi, "$1[redacted]")
+    .replace(/\b(authorization:\s*bearer\s+)[A-Za-z0-9._~+/=-]{12,}/gi, "$1[redacted]")
+    .replace(/\b(token:\s*)[A-Za-z0-9._~+/=-]{12,}/gi, "$1[redacted]");
 }
 
 function parseEnvValues(filePath) {
@@ -887,29 +971,37 @@ function preferredBridgeUrl(urls = notificationBridgeUrls) {
   }) || urls[0] || "";
 }
 
-function bridgeUrlForThread(threadId, provider = agentProvider) {
+function bridgeUrlForThread(threadId, provider = agentProvider, { includeToken = false } = {}) {
   const base = preferredBridgeUrl();
   if (!base) return "";
   try {
     const url = new URL(base);
+    if (!includeToken) {
+      url.searchParams.delete("token");
+      url.searchParams.delete("key");
+    }
     if (threadId) url.searchParams.set("thread", threadId);
     url.searchParams.set("provider", normalizeProvider(provider));
     return url.toString();
   } catch {
-    return base;
+    return includeToken ? base : stripTokenFromUrl(base);
   }
 }
 
-function bridgeUrlsForThread(threadId, provider = agentProvider) {
+function bridgeUrlsForThread(threadId, provider = agentProvider, { includeToken = false } = {}) {
   return notificationBridgeUrls
     .map((base) => {
       try {
         const url = new URL(base);
+        if (!includeToken) {
+          url.searchParams.delete("token");
+          url.searchParams.delete("key");
+        }
         if (threadId) url.searchParams.set("thread", threadId);
         url.searchParams.set("provider", normalizeProvider(provider));
         return url.toString();
       } catch {
-        return "";
+        return includeToken ? base : stripTokenFromUrl(base);
       }
     })
     .filter(Boolean);
@@ -937,6 +1029,62 @@ function notifyRunEvent(status, { provider = agentProvider, threadId, turnId, me
   })
     .then((results) => logNotifyResults(`task ${status}`, results))
     .catch((error) => console.warn(`[notify] task ${status} error: ${error.message}`));
+}
+
+function notifyBridgeEvent(type, payload = {}) {
+  const provider = normalizeProvider(payload.provider || agentProvider);
+  const threadId = payload.threadId || "";
+  const projectName = payload.projectName || path.basename(workdir);
+  const event = {
+    type,
+    title: payload.title || `${type.replace(/_/g, " ")}: ${projectName}`,
+    message: payload.message || "",
+    threadId,
+    threadTitle: payload.threadTitle || "",
+    projectName,
+    severity: payload.severity || "info",
+    createdAt: new Date().toISOString(),
+    url: payload.url || bridgeUrlForThread(threadId, provider),
+    extra: {
+      provider,
+      model: payload.model || modelForProvider(provider),
+      turnId: payload.turnId || "",
+      ...payload.extra,
+    },
+  };
+  notifyEvent(event)
+    .then((results) => logNotifyResults(`event ${type}`, results))
+    .catch((error) => console.warn(`[notify] event ${type} error: ${error.message}`));
+}
+
+function scheduleLongRunningNotification(bridge, turnId) {
+  clearLongRunningNotification(bridge);
+  if (!bridge || !turnId || !longRunningNotifyMs) return;
+  bridge.longRunningTimer = setTimeout(() => {
+    if (!bridge.activeTurnId && !bridge.activeProcess) return;
+    notifyBridgeEvent("long_running", {
+      provider: bridge.provider || agentProvider,
+      threadId: bridge.threadId,
+      turnId,
+      severity: "warning",
+      title: "Codex task is still running",
+      message: `${path.basename(workdir)} の処理が長時間続いています。`,
+    });
+  }, longRunningNotifyMs);
+  bridge.longRunningTimer.unref?.();
+}
+
+function clearLongRunningNotification(bridge) {
+  if (!bridge?.longRunningTimer) return;
+  clearTimeout(bridge.longRunningTimer);
+  bridge.longRunningTimer = null;
+}
+
+function latestAssistantQuestion(bridge) {
+  const assistant = [...(bridge?.history || [])].reverse().find((entry) => entry.type === "assistant" && entry.text);
+  const text = String(assistant?.text || "");
+  if (!/(\?|？|確認してください|どちら|選んで|教えてください|必要ですか)/.test(text)) return "";
+  return text.split(/\r?\n/).filter(Boolean).slice(-3).join("\n").slice(0, 500);
 }
 
 function waitForReady(timeoutMs = 10_000) {
@@ -1162,7 +1310,7 @@ function applyCors(req, res) {
   res.setHeader("access-control-allow-origin", origin);
   res.setHeader("vary", "Origin");
   res.setHeader("access-control-allow-methods", "GET,POST,OPTIONS");
-  res.setHeader("access-control-allow-headers", "content-type,authorization");
+  res.setHeader("access-control-allow-headers", "content-type,authorization,x-phone-token,x-file-name,x-file-size");
   res.setHeader("access-control-max-age", "600");
 }
 
@@ -1175,7 +1323,7 @@ function sendJson(res, status, body) {
 }
 
 function requireToken(url, phoneToken, res) {
-  if (url.searchParams.get("token") === phoneToken) return true;
+  if (requestToken(url) === phoneToken) return true;
   sendJson(res, 401, { error: "invalid token" });
   return false;
 }
@@ -1227,7 +1375,7 @@ function parseJsonish(value) {
 }
 
 function compactCodexError(raw) {
-  const text = String(raw || "").trim();
+  const text = redactSensitiveText(raw).trim();
   const parsed = parseJsonish(text);
   const root = parsed && typeof parsed === "object" ? parsed : {};
   const error = root.error && typeof root.error === "object" ? root.error : root;
@@ -1681,11 +1829,7 @@ function summarizeLiveItem(item, phase = "completed") {
 const terminalHistoryLimit = 300;
 
 function redactTerminalText(value) {
-  return String(value || "")
-    .replace(/([?&]token=)[^&\s]+/gi, "$1[redacted]")
-    .replace(/\b(PHONE_TOKEN=)[^\s]+/gi, "$1[redacted]")
-    .replace(/\b(token:\s*)[A-Za-z0-9._~+/=-]{12,}/gi, "$1[redacted]")
-    .slice(0, 1200);
+  return redactSensitiveText(value).slice(0, 1200);
 }
 
 function terminalKindForStatus(text) {
@@ -1990,6 +2134,7 @@ class SharedBridge {
     this.turnStarted = false;
     this.interruptRequested = false;
     this.idleDisposeTimer = null;
+    this.longRunningTimer = null;
     this.upstream = createUpstreamWebSocket();
     this.bindUpstream();
   }
@@ -2044,6 +2189,7 @@ class SharedBridge {
     const previous = this.runState || {};
     if (state !== "approval") this.pendingApproval = null;
     this.runState = next;
+    lastBridgeEventAt = Date.now();
     if (previous.state !== state || previous.label !== label || previous.turnId !== turnId) {
       this.emit("runState", next);
     }
@@ -2095,6 +2241,7 @@ class SharedBridge {
   }
 
   emit(type, payload = {}) {
+    lastBridgeEventAt = Date.now();
     const terminalEntry = this.appendTerminal(terminalEntryForBridgeMessage(type, payload, this));
     const body = JSON.stringify({ type, ...(terminalEntry ? { terminalEntry } : {}), ...payload });
     for (const client of this.clients) {
@@ -2125,6 +2272,7 @@ class SharedBridge {
 
   dispose() {
     this.cancelIdleDispose();
+    clearLongRunningNotification(this);
     if (this.upstream && this.upstream.readyState !== WebSocket.CLOSED) {
       this.upstream.close();
     }
@@ -2244,6 +2392,7 @@ class SharedBridge {
           this.activeTurnId = msg.result.turn.id;
           this.streamingStarted = false;
           this.turnStarted = false;
+          scheduleLongRunningNotification(this, this.activeTurnId);
           this.setBridgeRunState("running", "Agent 処理中", this.activeTurnId);
           this.emit("turn", { status: "started", turnId: this.activeTurnId, run: this.runPayload() });
           if (this.interruptRequested) {
@@ -2309,8 +2458,20 @@ class SharedBridge {
         this.activeTurnId = null;
         this.streamingStarted = false;
         this.turnStarted = false;
+        clearLongRunningNotification(this);
         this.setBridgeRunState(wasInterrupted ? "interrupted" : "done", wasInterrupted ? "中断しました" : "完了しました", completedTurnId);
         this.emit("turn", { status: "completed", turnId: completedTurnId, run: this.runPayload() });
+        const question = latestAssistantQuestion(this);
+        if (question) {
+          notifyBridgeEvent("question_required", {
+            provider: this.provider,
+            threadId: this.threadId,
+            turnId: completedTurnId,
+            severity: "warning",
+            title: "Question requires your input",
+            message: question,
+          });
+        }
         notifyRunEvent(wasInterrupted ? "interrupted" : "completed", {
           provider: this.provider,
           model: this.model,
@@ -2327,6 +2488,14 @@ class SharedBridge {
         this.pendingApproval = msg;
         this.setBridgeRunState("approval", "承認待ち", this.activeTurnId);
         this.emit("approval", { request: msg });
+        notifyBridgeEvent("approval_required", {
+          provider: this.provider,
+          threadId: this.threadId,
+          turnId: this.activeTurnId,
+          severity: "warning",
+          title: "Approval required",
+          message: msg.method,
+        });
         notifyRunEvent("approval", {
           provider: this.provider,
           model: this.model,
@@ -2345,6 +2514,7 @@ class SharedBridge {
           return;
         }
         this.interruptRequested = false;
+        clearLongRunningNotification(this);
         this.setBridgeRunState("error", "エラー", this.activeTurnId);
         this.emit("error", { text: error.text });
         notifyRunEvent("failed", {
@@ -2363,8 +2533,17 @@ class SharedBridge {
     this.upstream.on("error", (error) => {
       if (!this.ready) this.startupFailed = true;
       this.interruptRequested = false;
+      clearLongRunningNotification(this);
       this.emit("error", { text: error.message });
       if (this.activeTurnId) this.setBridgeRunState("error", "接続エラー", this.activeTurnId);
+      notifyBridgeEvent("connection_lost", {
+        provider: this.provider,
+        threadId: this.threadId,
+        turnId: this.activeTurnId,
+        severity: "error",
+        title: "Codex connection lost",
+        message: error.message,
+      });
       if (shouldStartCodexServer && isCodexConnectionFailure(error)) {
         ensureCodexServerRunning().catch((restartError) => {
           this.emit("error", { text: `Codex app-serverを再起動できませんでした: ${restartError.message}` });
@@ -2383,8 +2562,17 @@ class SharedBridge {
     this.upstream.on("close", () => {
       if (!this.ready) this.startupFailed = true;
       this.interruptRequested = false;
+      clearLongRunningNotification(this);
       this.emit("status", { text: "Codex接続が閉じました" });
       if (this.activeTurnId) this.setBridgeRunState("error", "接続が閉じました", this.activeTurnId);
+      notifyBridgeEvent("connection_lost", {
+        provider: this.provider,
+        threadId: this.threadId,
+        turnId: this.activeTurnId,
+        severity: "warning",
+        title: "Codex connection closed",
+        message: "Codex app-server connection closed.",
+      });
       if (shouldStartCodexServer) {
         ensureCodexServerRunning().catch((error) => {
           this.emit("error", { text: `Codex app-serverを再起動できませんでした: ${error.message}` });
@@ -2483,6 +2671,7 @@ class SharedBridge {
   syncHistory(reason) {
     const enabled = historySyncEnabledForProvider(this.provider);
     if (!this.threadId || !enabled) return;
+    lastHistorySync.enabled = enabled;
     runHistorySync({
       threadId: this.threadId,
       workdir,
@@ -2490,9 +2679,20 @@ class SharedBridge {
       enabled,
     })
       .then((result) => {
-        if (!result.skipped) this.emit("status", { text: `履歴同期を更新しました (${reason})` });
+        if (!result.skipped) {
+          lastHistorySync = { enabled, lastSuccessAt: new Date().toISOString(), lastFailureAt: lastHistorySync.lastFailureAt, lastError: "" };
+          this.emit("status", { text: `履歴同期を更新しました (${reason})` });
+        }
       })
       .catch((error) => {
+        lastHistorySync = { enabled, lastSuccessAt: lastHistorySync.lastSuccessAt, lastFailureAt: new Date().toISOString(), lastError: error.message };
+        notifyBridgeEvent("history_sync_failed", {
+          provider: this.provider,
+          threadId: this.threadId,
+          severity: "error",
+          title: "History sync failed",
+          message: error.message,
+        });
         this.emit("status", { text: `履歴同期に失敗しました: ${error.message}` });
       });
   }
@@ -2595,6 +2795,7 @@ class ClaudeBridge {
     this.streamingStarted = false;
     this.interruptRequested = false;
     this.idleDisposeTimer = null;
+    this.longRunningTimer = null;
   }
 
   addClient(browser) {
@@ -2645,6 +2846,7 @@ class ClaudeBridge {
     const previous = this.runState || {};
     if (state !== "approval") this.pendingApproval = null;
     this.runState = next;
+    lastBridgeEventAt = Date.now();
     if (previous.state !== state || previous.label !== label || previous.turnId !== turnId) {
       this.emit("runState", next);
     }
@@ -2695,6 +2897,7 @@ class ClaudeBridge {
   }
 
   emit(type, payload = {}) {
+    lastBridgeEventAt = Date.now();
     const terminalEntry = this.appendTerminal(terminalEntryForBridgeMessage(type, payload, this));
     const body = JSON.stringify({ type, ...(terminalEntry ? { terminalEntry } : {}), ...payload });
     for (const client of this.clients) {
@@ -2778,6 +2981,7 @@ class ClaudeBridge {
     const turnId = `claude-turn:${crypto.randomUUID()}`;
     this.activeTurnId = turnId;
     this.streamingStarted = false;
+    scheduleLongRunningNotification(this, turnId);
     this.setBridgeRunState("running", "Agent 処理中", turnId);
     this.appendHistory({ type: "user", text: displayText, attachments: savedImages });
     this.emit("user", { text: displayText, attachments: savedImages, clientMessageId });
@@ -2812,6 +3016,7 @@ class ClaudeBridge {
       this.activeProcess = null;
       this.activeTurnId = null;
       this.streamingStarted = false;
+      clearLongRunningNotification(this);
       return true;
     };
 
@@ -2907,6 +3112,17 @@ class ClaudeBridge {
         if (assistantText.trim()) this.appendHistory({ type: "assistant", text: assistantText, outputGroup: turnId });
         this.setBridgeRunState("done", "完了しました", turnId);
         this.emit("turn", { status: "completed", turnId, run: this.runPayload() });
+        const question = latestAssistantQuestion(this);
+        if (question) {
+          notifyBridgeEvent("question_required", {
+            provider: this.provider,
+            threadId: this.threadId,
+            turnId,
+            severity: "warning",
+            title: "Question requires your input",
+            message: question,
+          });
+        }
         notifyRunEvent("completed", { provider: this.provider, model: this.model, threadId: this.threadId, turnId });
       } else if (wasInterrupted) {
         if (assistantText.trim()) this.appendHistory({ type: "assistant", text: assistantText, outputGroup: turnId });
@@ -2992,7 +3208,7 @@ async function bindBrowser(browser, phoneToken, threadId, provider = agentProvid
       bridge.emitTo(browser, "error", { text: `Invalid browser message: ${error.message}` });
       return;
     }
-    if (msg.token !== phoneToken) {
+    if (msg.token && msg.token !== phoneToken) {
       bridge.emitTo(browser, "error", { text: "Invalid token" });
       browser.close();
       return;
@@ -3012,7 +3228,148 @@ function bridgeSummaries() {
     run: typeof bridge.runPayload === "function" ? bridge.runPayload() : null,
     pendingApproval: bridge.pendingApproval || null,
     terminalTail: Array.isArray(bridge.terminalHistory) ? bridge.terminalHistory.slice(-12) : [],
+    lastEventAt: lastBridgeEventAt || null,
   }));
+}
+
+function healthBridgeSummaries() {
+  return bridgeSummaries().map((bridge) => ({
+    threadId: bridge.threadId,
+    clients: bridge.clients,
+    ready: bridge.ready,
+    provider: bridge.provider,
+    run: bridge.run,
+    pendingApproval: Boolean(bridge.pendingApproval),
+    lastEventAt: bridge.lastEventAt,
+  }));
+}
+
+function activeClientCount() {
+  return Array.from(bridges.values()).reduce((sum, bridge) => sum + bridge.clients.size, 0);
+}
+
+function tokenFreeLanUrls() {
+  return notificationBridgeUrls.map(stripTokenFromUrl).filter(Boolean);
+}
+
+function enabledNotificationProviders(env = process.env) {
+  return notificationTargets(env).map((target) => target.type);
+}
+
+function shortOutput(value, maxBytes = 24_000) {
+  const text = redactSensitiveText(value);
+  if (Buffer.byteLength(text, "utf8") <= maxBytes) return { text, truncated: false };
+  return { text: Buffer.from(text).subarray(0, maxBytes).toString("utf8"), truncated: true };
+}
+
+function gitOutputLimited(cwd, args, maxBytes = 24_000) {
+  try {
+    const output = execFileSync("git", ["-C", cwd, ...args], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 1500,
+      maxBuffer: maxBytes * 2,
+    });
+    return { ...shortOutput(output.trim(), maxBytes), error: "" };
+  } catch (error) {
+    return { text: "", truncated: false, error: redactSensitiveText(error.message) };
+  }
+}
+
+function reviewDiffPayload() {
+  const repoRoot = gitOutput(["rev-parse", "--show-toplevel"]);
+  if (!repoRoot) {
+    return {
+      isGitRepo: false,
+      workdir,
+      statusShort: "",
+      diffStat: "",
+      files: [],
+      truncated: false,
+      message: "Git repository was not detected.",
+    };
+  }
+  const status = gitOutputLimited(workdir, ["status", "--short"], 12_000);
+  const stat = gitOutputLimited(workdir, ["diff", "--stat"], 12_000);
+  const files = status.text
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .slice(0, 80)
+    .map((line) => ({ status: line.slice(0, 2).trim() || "?", path: line.slice(3).trim() }));
+  return {
+    isGitRepo: true,
+    workdir,
+    repoRoot,
+    branch: currentGitBranch() || null,
+    statusShort: status.text,
+    diffStat: stat.text,
+    files,
+    truncated: Boolean(status.truncated || stat.truncated),
+    error: status.error || stat.error || "",
+  };
+}
+
+function terminalEntriesForThread(threadId = "", provider = "") {
+  const bridge = threadId ? findBridgeByThreadId(threadId, provider) || findLiveBridge(bridges, threadId) : null;
+  if (bridge?.terminalHistory) return bridge.terminalHistory.slice(-120);
+  const newest = Array.from(bridges.values())
+    .filter((candidate) => !provider || candidate.provider === provider)
+    .sort((a, b) => (b.runState?.updatedAt || 0) - (a.runState?.updatedAt || 0))[0];
+  return newest?.terminalHistory?.slice(-120) || [];
+}
+
+function reviewTestsPayload(threadId = "", provider = "") {
+  const terminal = terminalEntriesForThread(threadId, provider);
+  const testEntries = terminal.filter((entry) => /(npm (?:run )?(?:test|check)|npm test|pnpm test|yarn test|vitest|jest|pytest|docs:build)/i.test(entry.message || ""));
+  const errorEntries = terminal.filter((entry) => entry.kind === "error" || /failed|error|失敗|エラー/i.test(`${entry.message || ""}\n${entry.detail || ""}`));
+  const lastCommand = testEntries.length ? testEntries[testEntries.length - 1] : null;
+  const failed = errorEntries.some((entry) => /test|check|failed|失敗/i.test(`${entry.message || ""}\n${entry.detail || ""}`));
+  return {
+    threadId,
+    lastCommand: lastCommand?.message || "",
+    status: lastCommand ? (failed ? "failed" : "unknown") : "empty",
+    failureSummary: errorEntries
+      .slice(-4)
+      .map((entry) => entry.detail || entry.message)
+      .join("\n")
+      .slice(0, 4000),
+    terminalTail: terminal.slice(-30),
+  };
+}
+
+async function healthPayload(phoneToken, requestedProvider = agentProvider) {
+  const summaries = bridgeSummaries();
+  const appServerConnected =
+    requestedProvider === "claude" ? true : codexSocketPath || !shouldStartCodexServer ? appServerClient.ready : await isCodexReady();
+  const bridgeState = summaries.some((item) => item.run?.state === "error")
+    ? "degraded"
+    : appServerConnected
+      ? "alive"
+      : "degraded";
+  return {
+    ok: bridgeState !== "error",
+    bridge: bridgeState,
+    appServer: requestedProvider === "claude" ? "local-process" : appServerConnected ? "connected" : "disconnected",
+    websocket: activeClientCount() ? "connected" : "disconnected",
+    historySync: {
+      enabled: historySyncEnabledForProvider(requestedProvider),
+      lastSuccessAt: lastHistorySync.lastSuccessAt,
+      lastFailureAt: lastHistorySync.lastFailureAt,
+      lastError: lastHistorySync.lastError,
+    },
+    activeClients: activeClientCount(),
+    workdir,
+    model: modelForProvider(requestedProvider),
+    token: tokenMetadata(phoneToken),
+    notification: {
+      eventsEnabled: /^(1|true|yes|on)$/i.test(String(process.env.PHONE_NOTIFY_EVENTS || "")),
+      providers: enabledNotificationProviders(),
+    },
+    hostName: os.hostname(),
+    lanUrls: tokenFreeLanUrls(),
+    lastEventAt: lastBridgeEventAt ? new Date(lastBridgeEventAt).toISOString() : null,
+    bridges: healthBridgeSummaries(),
+  };
 }
 
 function localThreadList(provider = "") {
@@ -3078,10 +3435,27 @@ async function main() {
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
+    url._phoneHeaders = req.headers;
     applyCors(req, res);
     if (req.method === "OPTIONS") {
       res.writeHead(204, { "cache-control": "no-store" });
       res.end();
+      return;
+    }
+    if (url.pathname === "/healthz" || url.pathname === "/readyz") {
+      sendJson(res, 200, { ok: true, bridge: "alive", uptimeSeconds: Math.round(process.uptime()) });
+      return;
+    }
+    if (url.pathname === "/api/session" || url.pathname === "/api/auth/status") {
+      if (!requireToken(url, phoneToken, res)) return;
+      sendJson(res, 200, { ok: true, authenticated: true, token: tokenMetadata(phoneToken) });
+      return;
+    }
+    if (url.pathname === "/api/health") {
+      if (!requireToken(url, phoneToken, res)) return;
+      const requestedProvider = queryProvider(url, res);
+      if (!requestedProvider) return;
+      sendJson(res, 200, await healthPayload(phoneToken, requestedProvider));
       return;
     }
     if (url.pathname === "/api/info") {
@@ -3301,11 +3675,26 @@ async function main() {
         codexSocketPath: codexSocketPath || null,
         managedCodexServer,
         historySyncEnabled: historySyncEnabledForProvider(requestedProvider),
+        health: await healthPayload(phoneToken, requestedProvider),
+        token: tokenMetadata(phoneToken),
         rateLimits: await rateLimitSnapshot({ provider: requestedProvider, refresh: refreshRateLimits }),
         uiPort,
         codexPort,
         bridges: bridgeSummaries(),
       });
+      return;
+    }
+    if (url.pathname === "/api/review/diff") {
+      if (!requireToken(url, phoneToken, res)) return;
+      sendJson(res, 200, reviewDiffPayload());
+      return;
+    }
+    if (url.pathname === "/api/review/tests") {
+      if (!requireToken(url, phoneToken, res)) return;
+      const threadId = String(url.searchParams.get("thread") || "").trim();
+      const requestedProvider = queryProvider(url, res, threadId?.startsWith("claude:") ? "claude" : agentProvider);
+      if (!requestedProvider) return;
+      sendJson(res, 200, reviewTestsPayload(threadId, requestedProvider));
       return;
     }
     if (url.pathname === "/api/approval") {
@@ -3472,11 +3861,12 @@ async function main() {
 
   server.on("upgrade", (req, socket, head) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
+    url._phoneHeaders = req.headers;
     if (url.pathname !== "/bridge") {
       socket.destroy();
       return;
     }
-    if (url.searchParams.get("token") !== phoneToken) {
+    if (requestToken(url) !== phoneToken) {
       socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
       socket.destroy();
       return;
@@ -3507,7 +3897,7 @@ async function main() {
     notificationBridgeUrls = urls;
     console.log("");
     console.log("Codex shared browser bridge is ready.");
-    for (const url of urls) console.log(`  ${url}`);
+    for (const url of urls) console.log(`  ${maskTokenInUrl(url)}`);
     console.log("");
     console.log(`Workdir: ${workdir}`);
     console.log(`Default provider: ${agentProvider}`);
@@ -3518,11 +3908,19 @@ async function main() {
     console.log(`Codex:   ${managedCodexServer ? codexUrl : codexSocketPath || codexUrl}`);
     console.log(`Claude:  ${claudeBin}`);
     console.log(`Fleet registry entry: ${JSON.stringify({ id: phoneBridgeId, label: phoneBridgeLabel, group: phoneBridgeGroup, baseUrl: `http://LAN-IP:${uiPort}`, token: "***", port: uiPort })}`);
-    console.log("Open the same URL from PC and phone to share one bridge thread.");
+    console.log("Open the private tokenized bridge URL from your protected startup channel to share one bridge thread.");
+    console.log("The terminal output masks the local access key by default.");
     console.log("Press Ctrl+C to stop.");
 
     notifyBridgeUrls(urls).then((results) => {
       logNotifyResults("startup", results);
+    });
+    notifyBridgeEvent("bridge_started", {
+      severity: "info",
+      title: "Phone bridge started",
+      message: `${phoneBridgeLabel} is ready on ${tokenFreeLanUrls()[0] || `http://localhost:${uiPort}/`}`,
+      projectName: path.basename(workdir),
+      url: tokenFreeLanUrls()[0] || "",
     });
   });
 
@@ -3543,5 +3941,8 @@ if (require.main === module) {
 module.exports = {
   manifestHrefForRequest,
   manifestPayloadForRequest,
+  maskTokenValue,
+  requestTokenFromHeaders,
   safeProxyBasePath,
+  tokenMetadata,
 };

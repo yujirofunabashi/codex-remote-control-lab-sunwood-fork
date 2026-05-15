@@ -124,8 +124,8 @@ async function main() {
   }
 
   const first = config.bridges[0];
-  console.log(`Manager URL: open the first bridge at http://LAN-IP:${first.phonePort}/?token=<printed-by-child>`);
-  console.log("Add the remaining printed tokenized URLs from Bridge Fleet in the UI.");
+  console.log(`Manager URL: open the first bridge at http://LAN-IP:${first.phonePort}/ and enter that bridge token if prompted.`);
+  console.log("Add the remaining protected startup URLs or base URLs plus tokens from Bridge Fleet in the UI.");
 }
 
 if (require.main === module) {
