@@ -1087,6 +1087,10 @@ function latestAssistantQuestion(bridge) {
   return text.split(/\r?\n/).filter(Boolean).slice(-3).join("\n").slice(0, 500);
 }
 
+function latestQuestionFromHistory(history = []) {
+  return latestAssistantQuestion({ history });
+}
+
 function waitForReady(timeoutMs = 10_000) {
   const url = `http://127.0.0.1:${codexPort}/readyz`;
   return new Promise((resolve, reject) => {
@@ -1964,6 +1968,9 @@ function idleRunStateFromHistory(history = []) {
   const lastConversationEntry = [...history].reverse().find((entry) => entry.type === "user" || entry.type === "assistant");
   if (!lastConversationEntry) return { state: "ready", label: "未実行・送信できます", turnId: null };
   if (lastConversationEntry.type === "assistant") {
+    if (latestQuestionFromHistory(history)) {
+      return { state: "question", label: "返信待ち", turnId: lastConversationEntry.outputGroup || null };
+    }
     return { state: "done", label: "前回完了・送信できます", turnId: lastConversationEntry.outputGroup || null };
   }
   return { state: "ready", label: "前回送信済み・応答未確認", turnId: lastConversationEntry.outputGroup || null };
@@ -2459,9 +2466,13 @@ class SharedBridge {
         this.streamingStarted = false;
         this.turnStarted = false;
         clearLongRunningNotification(this);
-        this.setBridgeRunState(wasInterrupted ? "interrupted" : "done", wasInterrupted ? "中断しました" : "完了しました", completedTurnId);
-        this.emit("turn", { status: "completed", turnId: completedTurnId, run: this.runPayload() });
         const question = latestAssistantQuestion(this);
+        this.setBridgeRunState(
+          wasInterrupted ? "interrupted" : question ? "question" : "done",
+          wasInterrupted ? "中断しました" : question ? "返信待ち" : "完了しました",
+          completedTurnId,
+        );
+        this.emit("turn", { status: "completed", turnId: completedTurnId, run: this.runPayload() });
         if (question) {
           notifyBridgeEvent("question_required", {
             provider: this.provider,
@@ -3110,9 +3121,9 @@ class ClaudeBridge {
       this.interruptRequested = false;
       if (code === 0 && !wasInterrupted) {
         if (assistantText.trim()) this.appendHistory({ type: "assistant", text: assistantText, outputGroup: turnId });
-        this.setBridgeRunState("done", "完了しました", turnId);
-        this.emit("turn", { status: "completed", turnId, run: this.runPayload() });
         const question = latestAssistantQuestion(this);
+        this.setBridgeRunState(question ? "question" : "done", question ? "返信待ち" : "完了しました", turnId);
+        this.emit("turn", { status: "completed", turnId, run: this.runPayload() });
         if (question) {
           notifyBridgeEvent("question_required", {
             provider: this.provider,
