@@ -167,6 +167,8 @@ async function run() {
     await page.goto(`${origin}/?token=${token}`, { waitUntil: "networkidle" });
     await page.waitForSelector('[data-state="ready"], [data-state="done"]');
     await page.waitForTimeout(300);
+    const pwaDismiss = page.locator("[data-pwa-dismiss]");
+    if (await pwaDismiss.count()) await pwaDismiss.click();
 
     // Issue 3: the title is the real thread name, not the old fixed label.
     const title = (await page.locator("#threadTitle").textContent())?.trim();
@@ -202,6 +204,25 @@ async function run() {
       rows: el.querySelectorAll(".bridge-fleet-row").length,
     }));
     check("single bridge row is not duplicated in the sidebar", bridgeListState.hidden && bridgeListState.rows === 0, JSON.stringify(bridgeListState));
+    const userFacingLabels = await page.evaluate(() => ({
+      fleet: document.querySelector("#fleetCurrentLabel")?.textContent?.trim(),
+      bridge: document.querySelector("#bridgePillLabel")?.textContent?.trim(),
+      chatTab: document.querySelector("#chatViewButton")?.textContent?.trim(),
+      logTab: document.querySelector("#terminalViewButton")?.textContent?.trim(),
+      statusTitle: document.querySelector("#statusButton")?.getAttribute("title"),
+    }));
+    check("internal bridge label is replaced in connection labels", userFacingLabels.fleet === "現在の接続先" && userFacingLabels.bridge === "現在の接続先", JSON.stringify(userFacingLabels));
+    check("main tabs use Japanese user-facing labels", userFacingLabels.chatTab?.includes("チャット") && userFacingLabels.logTab?.includes("ログ"), JSON.stringify(userFacingLabels));
+    check("status panel is named for connection state", userFacingLabels.statusTitle === "接続状態", JSON.stringify(userFacingLabels));
+    await page.locator("#bridgePill").click();
+    await page.waitForTimeout(120);
+    const connectionSheetText = await page.locator("#bridgeFleetSheet").innerText();
+    check(
+      "connection sheet hides internal terminology",
+      !/(Home bridge|Bridge Fleet|Worktree|\btoken\b)/.test(connectionSheetText),
+      connectionSheetText.replace(/\s+/g, " ").slice(0, 240),
+    );
+    await page.locator("#closeBridgeFleet").click();
 
     // Issue 5: header color button is quieter (smaller, neutral background).
     const colorBtn = await page.evaluate(() => {

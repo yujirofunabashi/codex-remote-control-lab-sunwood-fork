@@ -132,6 +132,7 @@ test("redactSensitiveText masks bridge tokens and auth-like secrets", () => {
 test("bridge URL helpers parse tokenized URLs and host port token lines", () => {
   assert.equal(normalizeBridgeBaseUrl("http://192.168.1.20:45224/?token=secret"), "http://192.168.1.20:45224");
   assert.deepEqual(parseBridgeUrl("http://192.168.1.20:45224/?token=secret").token, "secret");
+  assert.deepEqual(parseBridgeUrl("http://192.168.1.20:45224/?key=secret").token, "secret");
   assert.deepEqual(parseBridgeUrl("192.168.1.20 45234 tok123").baseUrl, "http://192.168.1.20:45234");
   assert.equal(maskToken("secret123456"), "sec...456");
   assert.equal(maskToken("http://x/?token=secret123456"), "http://x/?token=sec...456");

@@ -256,7 +256,7 @@
     if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(urlText)) urlText = `http://${urlText}`;
     try {
       const url = new URL(urlText, options.fallbackOrigin || undefined);
-      const token = explicitToken || url.searchParams.get("token") || "";
+      const token = explicitToken || url.searchParams.get("token") || url.searchParams.get("key") || "";
       const baseUrl = normalizeBridgeBaseUrl(url.href, options.fallbackOrigin || "");
       if (!baseUrl) return null;
       const base = new URL(baseUrl);

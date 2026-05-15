@@ -18,7 +18,7 @@
   <body>
     <main class="app-shell">
       <button type="button" class="sidebar-scrim" id="sidebarScrim" aria-label="チャット一覧を閉じる"></button>
-      <aside class="sidebar" id="threadSidebar" aria-label="スレッド">
+      <aside class="sidebar" id="threadSidebar" aria-label="チャット">
         <div class="sidebar-windowbar" aria-hidden="true">
           <span class="window-actions">
             <span class="window-action split"></span>
@@ -26,19 +26,19 @@
             <span class="window-chevron right"></span>
           </span>
         </div>
-        <section class="fleet-sidebar" aria-label="Bridge Fleet">
+        <section class="fleet-sidebar" aria-label="接続先">
           <button type="button" class="fleet-current" id="fleetDashboardButton" aria-haspopup="dialog" aria-expanded="false">
             <span class="fleet-current-dot" aria-hidden="true"></span>
             <span class="fleet-current-main">
-              <strong id="fleetCurrentLabel">Home bridge</strong>
+              <strong id="fleetCurrentLabel">現在の接続先</strong>
               <small id="fleetCurrentMeta">接続準備中</small>
             </span>
             <span id="fleetCurrentBadges" class="fleet-current-badges"></span>
           </button>
-          <div id="bridgeFleetList" class="bridge-fleet-list" aria-label="登録済み bridge"></div>
+          <div id="bridgeFleetList" class="bridge-fleet-list" aria-label="登録済み接続先"></div>
           <button type="button" class="nav-command muted add-bridge-command" id="addBridgeButton">
             <span class="command-icon plus-icon" aria-hidden="true"></span>
-            <span>Bridge を追加</span>
+            <span>接続先を追加</span>
           </button>
         </section>
         <nav class="primary-nav">
@@ -52,11 +52,11 @@
           </button>
           <button type="button" class="nav-command muted" id="pluginsButton">
             <span class="command-icon plugin-icon" aria-hidden="true"></span>
-            <span>プラグイン</span>
+            <span>追加機能</span>
           </button>
           <button type="button" class="nav-command muted" id="automationsButton">
             <span class="command-icon automation-icon" aria-hidden="true"></span>
-            <span>オートメーション</span>
+            <span>自動処理</span>
           </button>
         </nav>
         <div class="thread-section">
@@ -76,36 +76,36 @@
             <span class="mobile-toggle-icon" aria-hidden="true"></span>
           </button>
           <div class="title-stack">
-            <h1 id="threadTitle">新しい共有thread</h1>
+            <h1 id="threadTitle">新しいチャット</h1>
             <p id="meta">接続準備中</p>
           </div>
-          <button type="button" class="bridge-pill" id="bridgePill" aria-label="Worktree switchboard を開く" aria-haspopup="dialog">
+          <button type="button" class="bridge-pill" id="bridgePill" aria-label="接続先を切り替え" aria-haspopup="dialog">
             <span class="bridge-pill-dot" aria-hidden="true"></span>
             <span class="bridge-pill-main">
-              <strong id="bridgePillLabel">Home</strong>
+              <strong id="bridgePillLabel">接続先</strong>
               <small id="bridgePillMeta">:----</small>
             </span>
           </button>
-          <button type="button" class="thread-position-pill" id="threadPositionPill" aria-label="スレッド切替を開く" aria-haspopup="dialog">
+          <button type="button" class="thread-position-pill" id="threadPositionPill" aria-label="チャット切替を開く" aria-haspopup="dialog">
             <span id="threadPositionText">--/--</span>
             <span id="threadStateText">接続中</span>
           </button>
           <div class="main-view-bar">
             <div class="main-view-toggle" role="group" aria-label="表示モード">
               <button type="button" id="chatViewButton" class="main-view-button active" data-main-view="chat" aria-pressed="true" aria-selected="true">
-                <span aria-hidden="true">□</span><span>Chat</span><span id="chatUnreadBadge" class="view-unread-badge hidden"></span>
+                <span aria-hidden="true">□</span><span>チャット</span><span id="chatUnreadBadge" class="view-unread-badge hidden"></span>
               </button>
               <button type="button" id="terminalViewButton" class="main-view-button" data-main-view="terminal" aria-pressed="false" aria-selected="false">
-                <span aria-hidden="true">&gt;_</span><span>Term</span><span id="terminalUnreadBadge" class="view-unread-badge hidden"></span>
+                <span aria-hidden="true">&gt;_</span><span>ログ</span><span id="terminalUnreadBadge" class="view-unread-badge hidden"></span>
               </button>
             </div>
             <div id="swipeFeedback" class="swipe-feedback hidden" aria-live="polite"></div>
           </div>
-          <div class="thread-nav" aria-label="スレッド移動">
-            <button type="button" class="thread-nav-button prev" id="prevThread" title="前のスレッド" aria-label="前のスレッド"></button>
-            <button type="button" class="thread-nav-button next" id="nextThread" title="次のスレッド" aria-label="次のスレッド"></button>
+          <div class="thread-nav" aria-label="チャット移動">
+            <button type="button" class="thread-nav-button prev" id="prevThread" title="前のチャット" aria-label="前のチャット"></button>
+            <button type="button" class="thread-nav-button next" id="nextThread" title="次のチャット" aria-label="次のチャット"></button>
           </div>
-          <button type="button" class="header-color-button" id="headerThreadColorButton" title="現在のスレッド色" aria-label="現在のスレッド色を変更"></button>
+          <button type="button" class="header-color-button" id="headerThreadColorButton" title="現在のチャット色" aria-label="現在のチャット色を変更"></button>
           <div class="title-actions">
             <button id="connect" type="button" class="icon-button" title="再接続" aria-label="再接続">↻</button>
             <button type="button" class="icon-button mobile-settings-button" id="mobileSettingsButton" title="設定" aria-label="設定">⚙︎</button>
@@ -127,41 +127,41 @@
             <span id="branchName" class="branch-name">--</span>
           </span>
         </button>
-        <section id="threadColorPopover" class="thread-color-popover hidden" role="dialog" aria-label="スレッド色"></section>
-        <section id="threadSwitcher" class="thread-switcher hidden" role="dialog" aria-modal="false" aria-label="スレッド切替">
+        <section id="threadColorPopover" class="thread-color-popover hidden" role="dialog" aria-label="チャット色"></section>
+        <section id="threadSwitcher" class="thread-switcher hidden" role="dialog" aria-modal="false" aria-label="チャット切替">
           <header class="thread-switcher-header">
-            <strong>スレッド切替</strong>
-            <button type="button" id="closeThreadSwitcher" aria-label="スレッド切替を閉じる">×</button>
+            <strong>チャット切替</strong>
+            <button type="button" id="closeThreadSwitcher" aria-label="チャット切替を閉じる">×</button>
           </header>
           <div id="threadSwitcherList" class="thread-switcher-list"></div>
         </section>
-        <section id="bridgeFleetSheet" class="bridge-fleet-sheet hidden" role="dialog" aria-modal="false" aria-label="Bridge Fleet / Worktree Switchboard">
+        <section id="bridgeFleetSheet" class="bridge-fleet-sheet hidden" role="dialog" aria-modal="false" aria-label="接続先一覧">
           <header class="bridge-fleet-header">
             <div>
-              <strong>Bridge Fleet</strong>
-              <small id="bridgeFleetSummary">登録済み bridge を監視します</small>
+              <strong>接続先一覧</strong>
+              <small id="bridgeFleetSummary">登録済み接続先を確認します</small>
             </div>
-            <button type="button" id="closeBridgeFleet" aria-label="Bridge Fleet を閉じる">×</button>
+            <button type="button" id="closeBridgeFleet" aria-label="接続先一覧を閉じる">×</button>
           </header>
           <div class="bridge-fleet-grid">
             <section class="bridge-fleet-panel">
-              <div class="bridge-fleet-panel-title">Worktrees</div>
+              <div class="bridge-fleet-panel-title">作業場所</div>
               <div id="bridgeFleetSheetList" class="bridge-fleet-sheet-list"></div>
             </section>
             <section class="bridge-fleet-panel">
-              <div class="bridge-fleet-panel-title">Global approvals</div>
+              <div class="bridge-fleet-panel-title">承認待ち</div>
               <div id="globalApprovalInbox" class="global-approval-inbox"></div>
             </section>
             <section class="bridge-fleet-panel">
-              <div class="bridge-fleet-panel-title">Running monitor</div>
+              <div class="bridge-fleet-panel-title">実行中の処理</div>
               <div id="globalRunningMonitor" class="global-running-monitor"></div>
             </section>
             <section class="bridge-fleet-panel add-bridge-panel">
-              <div class="bridge-fleet-panel-title">Add bridge</div>
-              <textarea id="bridgeAddInput" rows="4" placeholder="http://192.168.x.x:45224/?token=...&#10;または 192.168.x.x 45224 token"></textarea>
+              <div class="bridge-fleet-panel-title">接続先を追加</div>
+              <textarea id="bridgeAddInput" rows="4" placeholder="http://192.168.x.x:45224/?key=...&#10;または 192.168.x.x 45224 接続キー"></textarea>
               <label class="bridge-remember-row">
                 <input id="bridgeRememberToken" type="checkbox" checked />
-                <span>この端末に token を保存</span>
+                <span>この端末に接続キーを保存</span>
               </label>
               <div class="bridge-add-actions">
                 <button type="button" class="secondary" id="bridgeAddClear">クリア</button>
@@ -176,88 +176,88 @@
           <section class="conversation" aria-label="会話">
             <section id="globalApprovalBanner" class="global-approval-banner hidden" aria-live="polite"></section>
             <div id="log" class="log" aria-live="polite"></div>
-            <section id="mainTerminalView" class="terminal-view hidden" aria-label="ターミナルログ">
+            <section id="mainTerminalView" class="terminal-view hidden" aria-label="実行ログ">
               <header class="terminal-card-header">
                 <div class="terminal-identity">
                   <span class="terminal-status-dot" aria-hidden="true"></span>
                   <div>
-                    <strong id="terminalStatusTitle">Codex CLI TUI</strong>
+                    <strong id="terminalStatusTitle">実行ログ</strong>
                     <small id="terminalSessionMeta">接続準備中</small>
                   </div>
                 </div>
                 <div class="terminal-card-actions">
-                  <button type="button" id="terminalFocusButton" class="terminal-icon-tool" aria-label="ターミナルをフォーカス表示">Focus</button>
-                  <div class="terminal-font-controls" aria-label="ターミナル文字サイズ">
-                    <span>Font</span>
+                  <button type="button" id="terminalFocusButton" class="terminal-icon-tool" aria-label="ログを拡大表示">拡大</button>
+                  <div class="terminal-font-controls" aria-label="ログ文字サイズ">
+                    <span>文字</span>
                     <button type="button" id="terminalFontDown" aria-label="文字サイズを小さく">A-</button>
                     <button type="button" id="terminalFontReset" aria-label="文字サイズを標準に">A</button>
                     <button type="button" id="terminalFontUp" aria-label="文字サイズを大きく">A+</button>
                   </div>
                 </div>
               </header>
-              <div class="terminal-toolbar" aria-label="ターミナルログ操作">
+              <div class="terminal-toolbar" aria-label="実行ログ操作">
                 <div class="terminal-toolbar-compact">
-                  <button type="button" id="terminalFilterSheetButton" class="terminal-compact-tool" aria-haspopup="dialog" aria-expanded="false">Filter</button>
-                  <button type="button" id="terminalCurrentFilterPill" class="terminal-current-filter" aria-haspopup="dialog">All</button>
+                  <button type="button" id="terminalFilterSheetButton" class="terminal-compact-tool" aria-haspopup="dialog" aria-expanded="false">絞り込み</button>
+                  <button type="button" id="terminalCurrentFilterPill" class="terminal-current-filter" aria-haspopup="dialog">すべて</button>
                   <button type="button" id="terminalCompactSearchButton" class="terminal-compact-tool terminal-compact-search" aria-haspopup="dialog">
-                    <span aria-hidden="true">Search</span>
+                    <span aria-hidden="true">検索</span>
                     <span id="terminalCompactSearchCount">0</span>
                   </button>
-                  <button type="button" id="terminalAutoScrollMini" class="terminal-compact-tool active" aria-pressed="true">Auto</button>
-                  <button type="button" id="terminalToolsButton" class="terminal-compact-tool terminal-tools-more" aria-label="ターミナルツールを開く" aria-haspopup="dialog" aria-expanded="false">⋯</button>
+                  <button type="button" id="terminalAutoScrollMini" class="terminal-compact-tool active" aria-pressed="true">自動</button>
+                  <button type="button" id="terminalToolsButton" class="terminal-compact-tool terminal-tools-more" aria-label="ログ表示設定を開く" aria-haspopup="dialog" aria-expanded="false">⋯</button>
                 </div>
-                <div id="terminalToolsSheet" class="terminal-tools-sheet hidden" role="dialog" aria-modal="false" aria-label="ターミナルツール">
+                <div id="terminalToolsSheet" class="terminal-tools-sheet hidden" role="dialog" aria-modal="false" aria-label="ログ表示設定">
                   <header class="terminal-tools-sheet-header">
-                    <strong>Terminal tools</strong>
-                    <button type="button" id="terminalToolsClose" aria-label="ターミナルツールを閉じる">×</button>
+                    <strong>ログ表示設定</strong>
+                    <button type="button" id="terminalToolsClose" aria-label="ログ表示設定を閉じる">×</button>
                   </header>
-                  <select id="terminalFilter" class="terminal-filter hidden" aria-label="ターミナルログの絞り込み">
-                    <option value="all">all</option>
-                    <option value="command">command</option>
-                    <option value="file">file</option>
-                    <option value="status">status</option>
-                    <option value="error">error</option>
-                    <option value="approval">approval</option>
+                  <select id="terminalFilter" class="terminal-filter hidden" aria-label="実行ログの絞り込み">
+                    <option value="all">すべて</option>
+                    <option value="command">コマンド</option>
+                    <option value="file">ファイル</option>
+                    <option value="status">状態</option>
+                    <option value="error">エラー</option>
+                    <option value="approval">承認</option>
                   </select>
-                  <div class="terminal-filter-chips" role="toolbar" aria-label="ターミナルログの絞り込み">
-                    <button type="button" class="terminal-filter-chip active" data-terminal-filter="all" aria-pressed="true">All</button>
-                    <button type="button" class="terminal-filter-chip" data-terminal-filter="command" aria-pressed="false">Cmd</button>
-                    <button type="button" class="terminal-filter-chip" data-terminal-filter="file" aria-pressed="false">Files</button>
-                    <button type="button" class="terminal-filter-chip" data-terminal-filter="status" aria-pressed="false">Status</button>
-                    <button type="button" class="terminal-filter-chip" data-terminal-filter="error" aria-pressed="false">Errors</button>
-                    <button type="button" class="terminal-filter-chip" data-terminal-filter="approval" aria-pressed="false">Approval</button>
+                  <div class="terminal-filter-chips" role="toolbar" aria-label="実行ログの絞り込み">
+                    <button type="button" class="terminal-filter-chip active" data-terminal-filter="all" aria-pressed="true">すべて</button>
+                    <button type="button" class="terminal-filter-chip" data-terminal-filter="command" aria-pressed="false">コマンド</button>
+                    <button type="button" class="terminal-filter-chip" data-terminal-filter="file" aria-pressed="false">ファイル</button>
+                    <button type="button" class="terminal-filter-chip" data-terminal-filter="status" aria-pressed="false">状態</button>
+                    <button type="button" class="terminal-filter-chip" data-terminal-filter="error" aria-pressed="false">エラー</button>
+                    <button type="button" class="terminal-filter-chip" data-terminal-filter="approval" aria-pressed="false">承認</button>
                   </div>
                   <div class="terminal-search">
-                    <input id="terminalSearchInput" type="search" placeholder="Search" aria-label="ターミナルログを検索" />
+                    <input id="terminalSearchInput" type="search" placeholder="検索" aria-label="実行ログを検索" />
                     <span id="terminalSearchCount">0</span>
                     <button type="button" id="terminalSearchPrev" aria-label="前の一致">↑</button>
                     <button type="button" id="terminalSearchNext" aria-label="次の一致">↓</button>
                   </div>
-                  <div class="terminal-sheet-actions" role="toolbar" aria-label="ターミナル表示設定">
-                    <button type="button" id="terminalWrapToggle" class="terminal-tool active" aria-pressed="true">Wrap</button>
-                    <button type="button" id="terminalAutoScroll" class="terminal-tool active" aria-pressed="true">Auto-scroll</button>
-                    <button type="button" id="terminalClear" class="terminal-tool" title="クライアント表示だけをクリア">Clear visible</button>
-                    <button type="button" id="terminalCopy" class="terminal-tool">Copy visible</button>
+                  <div class="terminal-sheet-actions" role="toolbar" aria-label="ログ表示設定">
+                    <button type="button" id="terminalWrapToggle" class="terminal-tool active" aria-pressed="true">折り返し</button>
+                    <button type="button" id="terminalAutoScroll" class="terminal-tool active" aria-pressed="true">自動スクロール</button>
+                    <button type="button" id="terminalClear" class="terminal-tool" title="この端末の表示だけを消す">表示を消す</button>
+                    <button type="button" id="terminalCopy" class="terminal-tool">表示をコピー</button>
                   </div>
-                  <div class="terminal-sheet-actions" role="toolbar" aria-label="ターミナル詳細設定">
+                  <div class="terminal-sheet-actions" role="toolbar" aria-label="ログ詳細設定">
                     <button type="button" class="terminal-tool" data-terminal-font="down">A-</button>
                     <button type="button" class="terminal-tool" data-terminal-font="reset">A</button>
                     <button type="button" class="terminal-tool" data-terminal-font="up">A+</button>
-                    <button type="button" id="terminalMaxSheetButton" class="terminal-tool">Max</button>
-                    <button type="button" id="terminalQuickbarPin" class="terminal-tool" aria-pressed="false">QuickBar</button>
+                    <button type="button" id="terminalMaxSheetButton" class="terminal-tool">最大化</button>
+                    <button type="button" id="terminalQuickbarPin" class="terminal-tool" aria-pressed="false">クイック操作</button>
                   </div>
-                  <p class="terminal-tools-note">Clear はこの端末の表示だけを消します。Copy は既存のマスク処理後の表示ログだけをコピーします。</p>
+                  <p class="terminal-tools-note">表示を消す操作はこの端末だけに反映されます。コピーは伏せ字処理後の表示ログだけをコピーします。</p>
                 </div>
               </div>
               <div id="terminalTranscript" class="terminal-transcript" role="log" aria-live="off" aria-relevant="additions text"></div>
               <button type="button" id="terminalLatestButton" class="terminal-latest-button hidden">最新へ</button>
             </section>
-            <div id="terminalOps" class="terminal-ops hidden" aria-label="ターミナル操作">
-              <div class="terminal-mode-toggle" role="group" aria-label="ターミナル入力モード">
-                <button type="button" id="terminalTextMode" class="active" aria-pressed="true">Text</button>
-                <button type="button" id="terminalKeysMode" aria-pressed="false">Keys</button>
+            <div id="terminalOps" class="terminal-ops hidden" aria-label="ログ操作">
+              <div class="terminal-mode-toggle" role="group" aria-label="ログ入力モード">
+                <button type="button" id="terminalTextMode" class="active" aria-pressed="true">文章</button>
+                <button type="button" id="terminalKeysMode" aria-pressed="false">キー操作</button>
               </div>
-              <div class="terminal-key-row" aria-label="TUIキー候補">
+              <div class="terminal-key-row" aria-label="操作キー候補">
                 <button type="button" data-terminal-key="Tab">Tab</button>
                 <button type="button" data-terminal-key="Esc">Esc</button>
                 <button type="button" data-terminal-key="Ctrl+C" class="danger">Ctrl+C</button>
@@ -307,11 +307,11 @@
                       <path d="M9.5 3H13v3.5M6.5 13H3V9.5M13 3l-5 5M3 13l5-5" />
                     </svg>
                   </button>
-                  <button type="button" class="terminal-input-mode-button" id="terminalInputModeButton" aria-pressed="false">Text</button>
+                  <button type="button" class="terminal-input-mode-button" id="terminalInputModeButton" aria-pressed="false">文章</button>
                   <button type="button" class="access-button" id="accessButton">フルアクセス</button>
                 </div>
                 <div class="composer-right">
-                  <button type="button" class="thinking-button" id="thinkingButton" title="インテリジェンス"></button>
+                  <button type="button" class="thinking-button" id="thinkingButton" title="思考の深さ"></button>
                   <button type="button" id="modelButton" class="model-button">5.5-M</button>
                   <button type="button" class="voice-button" id="voiceButton" title="音声入力" aria-label="音声入力"></button>
                   <button type="button" id="interruptRun" class="interrupt-button hidden" title="現在の処理を中断" aria-label="現在の処理を中断">
@@ -327,18 +327,18 @@
                   </button>
                 </div>
               </div>
-              <div id="modelMenu" class="model-menu hidden" role="menu" aria-label="モデルとインテリジェンス">
+              <div id="modelMenu" class="model-menu hidden" role="menu" aria-label="モデルと思考の深さ">
                 <section class="rate-limit-card" aria-live="polite">
                   <div class="rate-limit-title">残りのレート制限</div>
                   <div class="rate-limit-list" id="rateLimitList">
                     <span class="rate-limit-empty">未取得</span>
                   </div>
                 </section>
-                <div class="model-menu-label">インテリジェンス</div>
-                <button type="button" class="model-menu-row" data-reasoning="L" title="Low" aria-label="Low">L</button>
-                <button type="button" class="model-menu-row" data-reasoning="M" title="Medium" aria-label="Medium">M<span class="checkmark">✓</span></button>
-                <button type="button" class="model-menu-row" data-reasoning="H" title="High" aria-label="High">H</button>
-                <button type="button" class="model-menu-row" data-reasoning="XH" title="Extra High" aria-label="Extra High">XH</button>
+                <div class="model-menu-label">思考の深さ</div>
+                <button type="button" class="model-menu-row" data-reasoning="L" title="軽め" aria-label="軽め">L</button>
+                <button type="button" class="model-menu-row" data-reasoning="M" title="標準" aria-label="標準">M<span class="checkmark">✓</span></button>
+                <button type="button" class="model-menu-row" data-reasoning="H" title="深め" aria-label="深め">H</button>
+                <button type="button" class="model-menu-row" data-reasoning="XH" title="最大" aria-label="最大">XH</button>
                 <div class="model-menu-separator"></div>
                 <button type="button" class="model-menu-row submenu-row" data-model-choice="gpt-5.5">GPT-5.5<span class="chevron">›</span></button>
                 <button type="button" class="model-menu-row submenu-row" data-model-choice="gpt-5.4">GPT-5.4<span class="chevron">›</span></button>
@@ -360,17 +360,17 @@
             </section>
           </section>
 
-          <aside class="artifact-panel" aria-label="アーティファクト">
+          <aside class="artifact-panel" aria-label="ファイル">
             <section class="panel-card panel-card-main">
               <div class="panel-title">
-                <span id="artifactTitle">アーティファクト</span>
-                <button type="button" class="panel-close" id="closePanelButton" title="閉じる" aria-label="アーティファクトを閉じる">×</button>
+                <span id="artifactTitle">ファイル</span>
+                <button type="button" class="panel-close" id="closePanelButton" title="閉じる" aria-label="ファイルを閉じる">×</button>
               </div>
               <div class="panel-tabs" role="toolbar" aria-label="右パネルを切り替え">
-                <button type="button" class="panel-tab file active" id="artifactsTab" data-panel-tab="artifacts" title="アーティファクト" aria-label="アーティファクト"></button>
-                <button type="button" class="panel-tab folder" id="workspaceTab" data-panel-tab="workspace" title="作業ディレクトリ" aria-label="作業ディレクトリ"></button>
-                <button type="button" class="panel-tab branch" id="automationTab" data-panel-tab="automation" title="オートメーション" aria-label="オートメーション"></button>
-                <button type="button" class="panel-tab terminal" id="statusButton" data-panel-tab="status" title="バックグラウンド" aria-label="バックグラウンド"></button>
+                <button type="button" class="panel-tab file active" id="artifactsTab" data-panel-tab="artifacts" title="ファイル" aria-label="ファイル"></button>
+                <button type="button" class="panel-tab folder" id="workspaceTab" data-panel-tab="workspace" title="作業場所" aria-label="作業場所"></button>
+                <button type="button" class="panel-tab branch" id="automationTab" data-panel-tab="automation" title="自動処理" aria-label="自動処理"></button>
+                <button type="button" class="panel-tab terminal" id="statusButton" data-panel-tab="status" title="接続状態" aria-label="接続状態"></button>
                 <button type="button" class="panel-tab globe" id="webSearchButton" data-panel-tab="web" title="Web調査を追加" aria-label="Web調査を追加"></button>
               </div>
               <div id="artifactList">

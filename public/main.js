@@ -291,7 +291,7 @@ function renderViewportDebug() {
     panel = document.createElement("aside");
     panel.id = "viewportDebugPanel";
     panel.className = "viewport-debug-panel";
-    panel.setAttribute("aria-label", "Viewport diagnostics");
+    panel.setAttribute("aria-label", "表示領域の診断");
     document.body.appendChild(panel);
   }
   const terminalRect = terminalTranscript?.getBoundingClientRect?.();
@@ -301,16 +301,16 @@ function renderViewportDebug() {
   const workspaceRect = workspaceIndicator?.getBoundingClientRect?.();
   const diagnostics = pwaDiagnosticsSnapshot();
   panel.textContent = [
-    `terminal ${Math.round(terminalRect?.height || 0)}px`,
-    `visual ${Math.round(window.visualViewport?.height || window.innerHeight)}px`,
-    `composer ${Math.round(composerRect?.height || 0)}px`,
-    `header ${Math.round(titleRect?.height || 0)}px`,
-    `pathbar ${Math.round(workspaceRect?.height || 0)}px`,
-    `toolbar ${Math.round(toolbarRect?.height || 0)}px`,
-    `display ${diagnostics.displayMode}`,
-    `manifest token-free ${diagnostics.manifestTokenFree ? "yes" : "no"}`,
-    `sw ${diagnostics.serviceWorker}`,
-    `token ${diagnostics.tokenAvailable ? "available" : "missing"}`,
+    `ログ ${Math.round(terminalRect?.height || 0)}px`,
+    `表示領域 ${Math.round(window.visualViewport?.height || window.innerHeight)}px`,
+    `入力欄 ${Math.round(composerRect?.height || 0)}px`,
+    `ヘッダー ${Math.round(titleRect?.height || 0)}px`,
+    `作業場所 ${Math.round(workspaceRect?.height || 0)}px`,
+    `操作列 ${Math.round(toolbarRect?.height || 0)}px`,
+    `表示モード ${diagnostics.displayMode}`,
+    `起動URLの接続キー ${diagnostics.manifestTokenFree ? "なし" : "あり"}`,
+    `ホーム画面保存 ${diagnostics.serviceWorker}`,
+    `接続キー ${diagnostics.tokenAvailable ? "あり" : "なし"}`,
   ].join("\n");
 }
 
@@ -351,8 +351,8 @@ function showPwaInstallHint() {
   hint.innerHTML = `
     <div>
       <strong>ホーム画面に追加</strong>
-      <span>${secure ? "standalone では表示領域が少し増えます。" : "LAN HTTP では PWA 制限があります。通常表示はこのまま使えます。"}</span>
-      <small>${hasToken ? "start_url に token は保存しません。" : "起動できない時は token 付き URL で開き直してください。"}</small>
+      <span>${secure ? "ホーム画面版では表示領域が少し増えます。" : "ローカル接続ではホーム画面版に制限があります。通常表示はこのまま使えます。"}</span>
+      <small>${hasToken ? "接続キーはホーム画面の起動URLに保存しません。" : "起動できない時は接続キー付きURLで開き直してください。"}</small>
     </div>
     <button type="button" data-pwa-dismiss>閉じる</button>
   `;
@@ -446,7 +446,7 @@ function ensureHomeBridge() {
   const home = normalizeBridgeEntry(
     {
       id: homeBridgeId,
-      label: "Home bridge",
+      label: "現在の接続先",
       baseUrl: homeBridgeBaseUrl(),
       token: "",
       port: Number(location.port || 0) || null,
@@ -797,7 +797,7 @@ function applyCurrentThreadAccent() {
 const runStateText = {
   connecting: "接続中",
   ready: "未実行・送信できます",
-  running: "Agent 処理中",
+  running: "処理中",
   streaming: "回答生成中",
   approval: "承認待ち",
   interrupting: "中断中",
@@ -867,14 +867,13 @@ function shortId(value) {
 
 function updateTerminalHeader() {
   if (!terminalStatusTitle || !terminalSessionMeta) return;
-  terminalStatusTitle.textContent = `${providerLabel(currentThreadProvider())} CLI TUI`;
+  terminalStatusTitle.textContent = `${providerLabel(currentThreadProvider())} 実行ログ`;
   const connected = connectionReady && ws?.readyState === WebSocket.OPEN;
   const pieces = [
-    connected ? "connected" : currentRunState === "connecting" ? "connecting" : "disconnected",
-    selectedThread ? shortId(selectedThread) : "new thread",
+    connected ? "接続済み" : currentRunState === "connecting" ? "接続中" : "切断",
+    selectedThread ? shortId(selectedThread) : "新しいチャット",
     selectedModel || selectedModelLabel,
-    accessMode.sandboxMode,
-    accessMode.approvalPolicy,
+    accessMode.label,
   ].filter(Boolean);
   terminalSessionMeta.textContent = pieces.join(" / ");
   mainTerminalView.dataset.state = currentRunState;
@@ -905,15 +904,15 @@ function setTerminalFocusMode(enabled) {
   if (enabled) {
     closeRightPanel();
     setSidebarVisible(false);
-    terminalFocusButton?.setAttribute("aria-label", "ターミナルのフォーカス表示を閉じる");
-    terminalFocusButton.textContent = "Close";
-    if (terminalMaxSheetButton) terminalMaxSheetButton.textContent = "Exit Max";
+    terminalFocusButton?.setAttribute("aria-label", "ログ拡大表示を閉じる");
+    terminalFocusButton.textContent = "戻す";
+    if (terminalMaxSheetButton) terminalMaxSheetButton.textContent = "元に戻す";
     mainTerminalView?.focus?.({ preventScroll: true });
-    showToast("ターミナル focus mode");
+    showToast("ログを拡大表示しました。");
   } else if (terminalFocusButton) {
-    terminalFocusButton.setAttribute("aria-label", "ターミナルをフォーカス表示");
-    terminalFocusButton.textContent = "Focus";
-    if (terminalMaxSheetButton) terminalMaxSheetButton.textContent = "Max";
+    terminalFocusButton.setAttribute("aria-label", "ログを拡大表示");
+    terminalFocusButton.textContent = "拡大";
+    if (terminalMaxSheetButton) terminalMaxSheetButton.textContent = "最大化";
   }
   updateQuickBarVisibility();
   measureTerminalLayout();
@@ -1204,12 +1203,12 @@ function selectModel(model) {
 function titleForThread(thread) {
   const raw = thread.name || thread.preview || thread.cwd || "";
   const firstLine = raw.split("\n").find(Boolean) || "";
-  if (!firstLine || firstLine === thread.id || isOpaqueThreadId(firstLine)) return "名前未設定のthread";
+  if (!firstLine || firstLine === thread.id || isOpaqueThreadId(firstLine)) return "名前未設定のチャット";
   return firstLine.length > 54 ? `${firstLine.slice(0, 54)}...` : firstLine;
 }
 
 function setThreadHeading(title) {
-  if (threadTitle) threadTitle.textContent = title || "新しい共有thread";
+  if (threadTitle) threadTitle.textContent = title || "新しいチャット";
 }
 
 function isOpaqueThreadId(value) {
@@ -1965,14 +1964,17 @@ function updateTerminalLatestButton() {
 
 function terminalFilterLabel(filter = terminalFilterMode) {
   const labels = {
-    all: "All",
-    command: "Cmd",
-    file: "Files",
-    status: "Status",
-    error: "Errors",
-    approval: "Approval",
+    all: "すべて",
+    command: "コマンド",
+    file: "ファイル",
+    status: "状態",
+    error: "エラー",
+    approval: "承認",
+    user: "ユーザー",
+    assistant: "返信",
+    lifecycle: "処理",
   };
-  return labels[filter] || "All";
+  return labels[filter] || "状態";
 }
 
 function toggleTerminalToolsSheet(open) {
@@ -1995,7 +1997,7 @@ function setTerminalAutoScroll(enabled, { toast = true, render = true } = {}) {
     if (terminalTranscript) terminalTranscript.scrollTop = terminalTranscript.scrollHeight;
     if (render) renderTerminalTranscript();
   } else if (toast) {
-    showToast("ターミナル auto-scroll を一時停止しました。");
+    showToast("ログの自動スクロールを一時停止しました。");
   }
   updateTerminalLatestButton();
 }
@@ -2003,9 +2005,9 @@ function setTerminalAutoScroll(enabled, { toast = true, render = true } = {}) {
 function updateTerminalInputModeButton() {
   document.body.dataset.terminalInputMode = terminalInputMode;
   if (terminalInputModeButton) {
-    terminalInputModeButton.textContent = terminalInputMode === "keys" ? "Keys" : "Text";
+    terminalInputModeButton.textContent = terminalInputMode === "keys" ? "キー操作" : "文章";
     terminalInputModeButton.setAttribute("aria-pressed", String(terminalInputMode === "keys"));
-    terminalInputModeButton.title = terminalInputMode === "keys" ? "Keys mode" : "Text mode";
+    terminalInputModeButton.title = terminalInputMode === "keys" ? "キー操作モード" : "文章入力モード";
   }
   terminalQuickbarPinButton?.classList.toggle("active", terminalQuickbarPinned);
   terminalQuickbarPinButton?.setAttribute("aria-pressed", String(terminalQuickbarPinned));
@@ -2058,7 +2060,7 @@ function renderTerminalTranscript() {
   if (!entries.length) {
     const empty = document.createElement("div");
     empty.className = "terminal-empty";
-    empty.textContent = query ? "検索条件に一致するログはありません。" : "このスレッドのターミナルログはまだありません。";
+    empty.textContent = query ? "検索条件に一致するログはありません。" : "このチャットの実行ログはまだありません。";
     terminalTranscript.appendChild(empty);
     return;
   }
@@ -2071,7 +2073,7 @@ function renderTerminalTranscript() {
     time.textContent = terminalTimestampLabel(entry.ts);
     const kind = document.createElement("span");
     kind.className = "terminal-kind";
-    kind.textContent = normalizeTerminalKind(entry.kind);
+    kind.textContent = terminalFilterLabel(normalizeTerminalKind(entry.kind));
     const message = document.createElement("span");
     message.className = "terminal-message";
     message.textContent = entry.message || "";
@@ -2081,7 +2083,7 @@ function renderTerminalTranscript() {
       const openFile = document.createElement("button");
       openFile.type = "button";
       openFile.className = "terminal-open-file";
-      openFile.textContent = "Preview";
+      openFile.textContent = "表示";
       openFile.addEventListener("click", () => showArtifact(filePath));
       row.appendChild(openFile);
     }
@@ -2152,17 +2154,17 @@ function terminalHistoryFromChatHistory(history = []) {
 
 function terminalEntryFromMessage(msg) {
   const now = Date.now();
-  if (msg.type === "runState") return { ts: now, kind: "status", message: `run state: ${msg.label || msg.state || "updated"}` };
+  if (msg.type === "runState") return { ts: now, kind: "status", message: `状態: ${msg.label || runStateShortLabel(msg.state) || "更新"}` };
   if (msg.type === "status") {
     const text = String(msg.text || "");
     const kind = /^\$\s/.test(text) ? "command" : /file changes|ファイル/i.test(text) ? "file" : "status";
     return { ts: now, kind, message: text };
   }
   if (msg.type === "error") return { ts: now, kind: "error", message: msg.text || "エラー" };
-  if (msg.type === "approval") return { ts: now, kind: "approval", message: `approval requested: ${msg.request?.method || "request"}` };
-  if (msg.type === "turn") return { ts: now, kind: "lifecycle", message: `turn ${msg.status || "updated"}${msg.turnId ? `: ${msg.turnId}` : ""}` };
-  if (msg.type === "user") return { ts: now, kind: "user", message: "user prompt sent" };
-  if (msg.type === "event" && msg.event?.method) return { ts: now, kind: "status", message: `event: ${msg.event.method}` };
+  if (msg.type === "approval") return { ts: now, kind: "approval", message: `承認リクエスト: ${approvalLabelForRequest(msg.request)}` };
+  if (msg.type === "turn") return { ts: now, kind: "lifecycle", message: `処理${msg.status === "completed" ? "完了" : msg.status === "started" ? "開始" : "更新"}${msg.turnId ? `: ${msg.turnId}` : ""}` };
+  if (msg.type === "user") return { ts: now, kind: "user", message: "入力を送信しました" };
+  if (msg.type === "event" && msg.event?.method) return { ts: now, kind: "status", message: `状態更新: ${msg.event.method}` };
   return null;
 }
 
@@ -2181,7 +2183,7 @@ function renderApprovalRequest(request) {
   approvalText.textContent = JSON.stringify(request?.params || request || {}, null, 2);
   if (approvalReason) approvalReason.value = "";
   approval.classList.remove("hidden");
-  appendTerminalEntry({ ts: Date.now(), kind: "approval", message: `${label} approval pending` });
+  appendTerminalEntry({ ts: Date.now(), kind: "approval", message: `${label}の承認待ち` });
 }
 
 function handleTerminalMessage(msg) {
@@ -2410,26 +2412,26 @@ function updateThreadNavigation() {
     prevThreadButton.disabled = disabledByRun || !previous;
     prevThreadButton.title = disabledByRun
       ? pendingApproval
-        ? "承認待ちのためスレッド移動を止めています"
+        ? "承認待ちのためチャット移動を止めています"
         : threadSwitchBusy
-          ? "スレッド切替中です"
-          : "実行中はスレッド移動を止めています"
+          ? "チャット切替中です"
+          : "実行中はチャット移動を止めています"
       : previous
         ? `← 前: ${titleForThread(previous)}`
-        : "同じ作業ツリー内に前のスレッドはありません";
+        : "同じ作業場所内に前のチャットはありません";
     prevThreadButton.setAttribute("aria-label", prevThreadButton.title);
   }
   if (nextThreadButton) {
     nextThreadButton.disabled = disabledByRun || !next;
     nextThreadButton.title = disabledByRun
       ? pendingApproval
-        ? "承認待ちのためスレッド移動を止めています"
+        ? "承認待ちのためチャット移動を止めています"
         : threadSwitchBusy
-          ? "スレッド切替中です"
-          : "実行中はスレッド移動を止めています"
+          ? "チャット切替中です"
+          : "実行中はチャット移動を止めています"
       : next
         ? `次 →: ${titleForThread(next)}`
-        : "同じ作業ツリー内に次のスレッドはありません";
+        : "同じ作業場所内に次のチャットはありません";
     nextThreadButton.setAttribute("aria-label", nextThreadButton.title);
   }
   updateHeaderStatus();
@@ -2499,12 +2501,18 @@ function bridgeStateLabel(entry, state = getBridgeState(entry.id)) {
   return run.state || "ready";
 }
 
+function bridgeDisplayLabel(entry = {}, fallback = "接続先") {
+  const label = String(entry?.label || "").trim();
+  if (!label || label === "Home" || label === "Home bridge") return fallback;
+  return label;
+}
+
 function bridgeMetaText(entry, state = getBridgeState(entry.id)) {
   const info = state.info || {};
   const status = state.status || {};
   const port = entry.port || info.uiPort || status.uiPort || "";
   const branch = info.branch || status.gitBranch || "";
-  const dirty = info.dirty === true ? "dirty" : info.dirty === false ? "clean" : "";
+  const dirty = info.dirty === true ? "変更あり" : info.dirty === false ? "変更なし" : "";
   const cwd = info.cwd || info.workdir || entry.workdir || status.workdir || "";
   const name = cwd ? cwd.split(/[\\/]/).filter(Boolean).pop() : "";
   return [port ? `:${port}` : "", branch, dirty, name].filter(Boolean).join(" / ") || "未確認";
@@ -2564,9 +2572,9 @@ function renderFleet() {
     bridgePill.dataset.state = bridgeStateLabel(active || { id: activeBridgeId }, activeState);
     bridgePill.style.setProperty("--bridge-color", activeColor);
   }
-  if (bridgePillLabel) bridgePillLabel.textContent = active?.label || "Home";
+  if (bridgePillLabel) bridgePillLabel.textContent = bridgeDisplayLabel(active, "接続先");
   if (bridgePillMeta) bridgePillMeta.textContent = bridgeMetaText(active || { id: activeBridgeId }, activeState);
-  if (fleetCurrentLabel) fleetCurrentLabel.textContent = active?.label || "Home bridge";
+  if (fleetCurrentLabel) fleetCurrentLabel.textContent = bridgeDisplayLabel(active, "現在の接続先");
   if (fleetCurrentMeta) fleetCurrentMeta.textContent = bridgeMetaText(active || { id: activeBridgeId }, activeState);
   if (fleetCurrentBadges) {
     fleetCurrentBadges.replaceChildren();
@@ -2587,21 +2595,21 @@ function renderFleet() {
       row.type = "button";
       row.className = entry.id === activeBridgeId ? "bridge-fleet-row active" : "bridge-fleet-row";
       row.style.setProperty("--bridge-color", bridgeColorFor(entry));
-      row.title = `${entry.label} ${bridgeMetaText(entry, state)}`;
+      row.title = `${bridgeDisplayLabel(entry)} ${bridgeMetaText(entry, state)}`;
       const dot = document.createElement("span");
       dot.className = "bridge-row-dot";
       dot.style.backgroundColor = bridgeColorFor(entry);
       const main = document.createElement("span");
       main.className = "bridge-row-main";
       const title = document.createElement("strong");
-      title.textContent = entry.label || entry.id;
+      title.textContent = bridgeDisplayLabel(entry, entry.id);
       const small = document.createElement("small");
       small.textContent = bridgeMetaText(entry, state);
       main.append(title, small);
       const badges = document.createElement("span");
       badges.className = "bridge-row-badges";
       const stateName = bridgeStateLabel(entry, state);
-      if (["running", "streaming", "syncing", "interrupting"].includes(stateName)) badges.appendChild(fleetBadge("run", "running"));
+      if (["running", "streaming", "syncing", "interrupting"].includes(stateName)) badges.appendChild(fleetBadge("実行中", "running"));
       if (stateName === "approval") badges.appendChild(fleetBadge("承認", "approval"));
       if (stateName === "error" || stateName === "disconnected") badges.appendChild(fleetBadge("切断", "error"));
       row.append(dot, main, badges);
@@ -2618,7 +2626,7 @@ function renderBridgeFleetSheet() {
   const entries = bridgeRegistry.bridges || [];
   if (bridgeFleetSummary) {
     const approvals = collectPendingApprovals().length;
-    bridgeFleetSummary.textContent = `${entries.length} bridge / ${approvals} approval / active ${activeBridge()?.label || "Home"}`;
+    bridgeFleetSummary.textContent = `接続先 ${entries.length}件 / 承認待ち ${approvals}件 / 表示中 ${bridgeDisplayLabel(activeBridge(), "現在の接続先")}`;
   }
   if (bridgeFleetSheetList) {
     bridgeFleetSheetList.replaceChildren();
@@ -2635,9 +2643,9 @@ function renderBridgeFleetSheet() {
       const main = document.createElement("span");
       main.className = "bridge-row-main";
       const title = document.createElement("strong");
-      title.textContent = entry.label || entry.id;
+      title.textContent = bridgeDisplayLabel(entry, entry.id);
       const small = document.createElement("small");
-      small.textContent = `${entry.baseUrl} / token ${entry.rememberToken === false ? "session" : "saved"} ${maskToken(effectiveBridgeToken(entry))}`;
+      small.textContent = `${entry.baseUrl} / 接続キー ${entry.rememberToken === false ? "この画面だけ" : "保存済み"} ${maskToken(effectiveBridgeToken(entry))}`;
       main.append(title, small);
       header.append(dot, main, fleetBadge(runStateShortLabel(bridgeStateLabel(entry, state)), bridgeStateLabel(entry, state) === "approval" ? "approval" : ""));
       const metaLine = document.createElement("small");
@@ -2664,8 +2672,8 @@ function renderBridgeFleetSheet() {
       copyButton.className = "secondary";
       copyButton.textContent = "コピー";
       copyButton.addEventListener("click", async () => {
-        await copyTextToClipboard(`${entry.label} ${entry.baseUrl} token=${maskToken(effectiveBridgeToken(entry))}`);
-        showToast("masked bridge info をコピーしました。");
+        await copyTextToClipboard(`${bridgeDisplayLabel(entry, entry.id)} ${entry.baseUrl} 接続キー=${maskToken(effectiveBridgeToken(entry))}`);
+        showToast("伏せ字にした接続先情報をコピーしました。");
       });
       const removeButton = document.createElement("button");
       removeButton.type = "button";
@@ -2697,7 +2705,7 @@ function renderGlobalApprovalInbox() {
     const card = document.createElement("article");
     card.className = "global-approval-card";
     const title = document.createElement("strong");
-    title.textContent = `${item.bridge.label || item.bridge.id} / ${shortId(item.threadId) || "thread"}`;
+    title.textContent = `${bridgeDisplayLabel(item.bridge, item.bridge.id)} / ${shortId(item.threadId) || "チャット"}`;
     const summary = document.createElement("small");
     summary.textContent = approvalSummaryText(item.request);
     const pre = document.createElement("pre");
@@ -2735,7 +2743,7 @@ function renderGlobalRunningMonitor() {
     const main = document.createElement("span");
     main.className = "bridge-row-main";
     const title = document.createElement("strong");
-    title.textContent = entry.label || entry.id;
+    title.textContent = bridgeDisplayLabel(entry, entry.id);
     const small = document.createElement("small");
     small.textContent = `${runStateShortLabel(summary.run?.state || bridgeStateLabel(entry, state))} / ${formatRelativeTime(state.lastEventAt) || "now"}`;
     main.append(title, small);
@@ -2759,14 +2767,14 @@ function renderGlobalApprovalBanner() {
   text.textContent = `${approvals.length}件の承認待ちがあります。`;
   const open = document.createElement("button");
   open.type = "button";
-  open.textContent = "Inbox";
+  open.textContent = "承認一覧";
   open.addEventListener("click", openBridgeFleet);
   globalApprovalBanner.append(text, open);
 }
 
 async function fetchJsonForBridge(entry, path, options = {}) {
   const bridgeToken = effectiveBridgeToken(entry);
-  if (!bridgeToken) throw new Error("bridge token is missing");
+  if (!bridgeToken) throw new Error("接続キーがありません");
   const response = await fetchWithTimeout(urlWithBridgeToken(path, entry), {
     ...options,
     headers: {
@@ -2892,7 +2900,7 @@ async function setActiveBridge(bridgeId, { silent = false } = {}) {
   setWorkspaceMeta({});
   renderTerminalTranscript();
   renderFleet();
-  if (!silent) showToast(`${activeBridge()?.label || "bridge"} に切り替えました。`);
+  if (!silent) showToast(`${bridgeDisplayLabel(activeBridge())} に切り替えました。`);
   await refreshBridgeState(bridgeId).catch(() => {});
   loadArtifacts();
   loadThreads({ background: true }).finally(() => connect());
@@ -2902,7 +2910,7 @@ function removeBridge(bridgeId) {
   if (bridgeId === homeBridgeId) return;
   const entry = bridgeById(bridgeId);
   if (!entry) return;
-  if (!window.confirm(`${entry.label || entry.id} をこの端末から削除します。token も忘れます。`)) return;
+  if (!window.confirm(`${bridgeDisplayLabel(entry, entry.id)} をこの端末から削除します。接続キーも忘れます。`)) return;
   delete bridgeSessionTokens[bridgeId];
   saveBridgeSessionTokens();
   bridgeRegistry = uiUtils.removeBridgeFromRegistry
@@ -2939,7 +2947,7 @@ async function addBridgeEntriesFromInput() {
     for (const line of lines) {
       const parsed = uiUtils.parseBridgeUrl ? uiUtils.parseBridgeUrl(line, { fallbackOrigin: location.origin }) : null;
       if (!parsed?.baseUrl || !parsed.token) {
-        results.push(`失敗: URL/token を読めません (${line.slice(0, 40)})`);
+        results.push(`失敗: URLまたは接続キーを読めません (${line.slice(0, 40)})`);
         continue;
       }
       let entry = normalizeBridgeEntry({ baseUrl: parsed.baseUrl, token: parsed.token, rememberToken: remember }, { fallbackOrigin: location.origin });
@@ -2961,7 +2969,7 @@ async function addBridgeEntriesFromInput() {
           bridgeSessionTokens[entry.id] = parsed.token;
         }
         bridgeRegistry = uiUtils.upsertBridgeRegistry ? uiUtils.upsertBridgeRegistry(bridgeRegistry, entry) : { ...bridgeRegistry, bridges: [...(bridgeRegistry.bridges || []), entry] };
-        results.push(`追加: ${entry.label}`);
+        results.push(`追加: ${bridgeDisplayLabel(entry, entry.id)}`);
       } catch (error) {
         results.push(`失敗: ${entry.baseUrl} ${error.message}`);
       }
@@ -2978,7 +2986,7 @@ async function addBridgeEntriesFromInput() {
 
 async function sendGlobalApproval(item, decision) {
   if (decision === "accept" && /command|file|write|edit|apply/i.test(JSON.stringify(item.request || {}))) {
-    if (!window.confirm(`${item.bridge.label || item.bridge.id} の承認を送信します。対象を確認しましたか？`)) return;
+    if (!window.confirm(`${bridgeDisplayLabel(item.bridge, item.bridge.id)} の承認を送信します。対象を確認しましたか？`)) return;
   }
   try {
     await fetchJsonForBridge(item.bridge, "/api/approval", {
@@ -2991,7 +2999,7 @@ async function sendGlobalApproval(item, decision) {
       }),
     });
     if (item.bridgeId === activeBridgeId) {
-      appendTerminalEntry({ ts: Date.now(), kind: "approval", message: decision === "accept" ? "approval accepted" : "approval declined" });
+      appendTerminalEntry({ ts: Date.now(), kind: "approval", message: decision === "accept" ? "承認しました" : "拒否しました" });
       pendingApproval = null;
       approval.classList.add("hidden");
       setRunState("running", decision === "accept" ? "承認済み・処理中" : "拒否済み・処理中");
@@ -3005,24 +3013,24 @@ async function sendGlobalApproval(item, decision) {
 
 function selectAdjacentThread(direction, source = "button") {
   if (liveTurnActive || pendingApproval || threadSwitchBusy) {
-    showSwipeFeedback(pendingApproval ? "承認待ちのためスレッド切り替えを止めています。" : "実行中はスレッド切り替えを止めています。");
+    showSwipeFeedback(pendingApproval ? "承認待ちのためチャット切替を止めています。" : "実行中はチャット切替を止めています。");
     return;
   }
   const target = adjacentThread(direction);
   if (!target) {
-    showSwipeFeedback(direction > 0 ? "同じ作業ツリー内に次のスレッドはありません。" : "同じ作業ツリー内に前のスレッドはありません。");
+    showSwipeFeedback(direction > 0 ? "同じ作業場所内に次のチャットはありません。" : "同じ作業場所内に前のチャットはありません。");
     return;
   }
   selectThread(target.id);
-  showToast(`${direction > 0 ? "次" : "前"}のスレッドへ切り替えました。`);
-  showSwipeFeedback(`${direction > 0 ? "次" : "前"}のスレッドへ切り替えました。`);
-  if (source === "swipe") addStatus(`${direction > 0 ? "左" : "右"}スワイプでスレッドを切り替えました。`);
+  showToast(`${direction > 0 ? "次" : "前"}のチャットへ切り替えました。`);
+  showSwipeFeedback(`${direction > 0 ? "次" : "前"}のチャットへ切り替えました。`);
+  if (source === "swipe") addStatus(`${direction > 0 ? "左" : "右"}スワイプでチャットを切り替えました。`);
 }
 
 function showInitialSwipeHint() {
   if (localStorage.getItem(swipeHintStorageKey) || !window.matchMedia("(max-width: 820px)").matches) return;
   localStorage.setItem(swipeHintStorageKey, "1");
-  window.setTimeout(() => showSwipeFeedback("左右スワイプで同じ作業ツリー内の前後へ移動できます。"), 800);
+  window.setTimeout(() => showSwipeFeedback("左右スワイプで同じ作業場所内の前後へ移動できます。"), 800);
 }
 
 function renderThreadSwitcher() {
@@ -3032,7 +3040,7 @@ function renderThreadSwitcher() {
   if (!threads.length) {
     const empty = document.createElement("div");
     empty.className = "thread-switcher-empty";
-    empty.textContent = "同じ作業ツリー内のスレッドはありません。";
+    empty.textContent = "同じ作業場所内のチャットはありません。";
     threadSwitcherList.appendChild(empty);
     return;
   }
@@ -3143,7 +3151,7 @@ function renderThreadColorSettings(thread = null, options = {}) {
 
   const title = document.createElement("div");
   title.className = "theme-settings-title";
-  title.textContent = thread ? "スレッド色" : "現在のスレッド色";
+  title.textContent = thread ? "チャット色" : "現在のチャット色";
   group.appendChild(title);
 
   const current = document.createElement("div");
@@ -3164,12 +3172,12 @@ function renderThreadColorSettings(thread = null, options = {}) {
     button.className = sanitizeHexColor(color) === activeColor ? "active" : "";
     button.style.backgroundColor = color;
     button.title = color;
-    button.setAttribute("aria-label", `スレッド色 ${color}`);
+    button.setAttribute("aria-label", `チャット色 ${color}`);
     if (sanitizeHexColor(color) === activeColor) button.setAttribute("aria-current", "true");
     button.addEventListener("click", () => {
       setThreadColorOverride(key, color);
       if (!thread || thread.id === selectedThread) applyCurrentThreadAccent();
-      showToast(`スレッド色を ${color} に変更しました。`);
+      showToast(`チャット色を ${color} に変更しました。`);
       if (options.inline) openThreadColorPopover(thread);
       else openThreadColorPanel(thread);
     });
@@ -3182,13 +3190,13 @@ function renderThreadColorSettings(thread = null, options = {}) {
   const input = document.createElement("input");
   input.type = "color";
   input.value = activeColor;
-  input.setAttribute("aria-label", "任意のスレッド色");
+  input.setAttribute("aria-label", "任意のチャット色");
   const applyButton = document.createElement("button");
   applyButton.type = "button";
   applyButton.textContent = "適用";
   applyButton.addEventListener("click", () => {
     setThreadColorOverride(key, input.value);
-    showToast(`スレッド色を ${sanitizeHexColor(input.value)} に変更しました。`);
+    showToast(`チャット色を ${sanitizeHexColor(input.value)} に変更しました。`);
     if (options.inline) openThreadColorPopover(thread);
     else openThreadColorPanel(thread);
   });
@@ -3198,7 +3206,7 @@ function renderThreadColorSettings(thread = null, options = {}) {
   resetButton.textContent = "自動色に戻す";
   resetButton.addEventListener("click", () => {
     resetThreadColorOverride(key);
-    showToast("スレッド色を自動に戻しました。");
+    showToast("チャット色を自動に戻しました。");
     if (options.inline) openThreadColorPopover(thread);
     else openThreadColorPanel(thread);
   });
@@ -3221,7 +3229,7 @@ function renderThreadColorSettings(thread = null, options = {}) {
 }
 
 function openThreadColorPanel(thread = null) {
-  clearPanel("スレッド色", "workspace");
+  clearPanel("チャット色", "workspace");
   artifactList.replaceChildren();
   renderThreadColorSettings(thread);
 }
@@ -3235,11 +3243,11 @@ function openThreadColorPopover(thread = null) {
   const header = document.createElement("div");
   header.className = "thread-color-popover-header";
   const title = document.createElement("strong");
-  title.textContent = "スレッド色";
+  title.textContent = "チャット色";
   const close = document.createElement("button");
   close.type = "button";
   close.textContent = "×";
-  close.setAttribute("aria-label", "スレッド色を閉じる");
+  close.setAttribute("aria-label", "チャット色を閉じる");
   close.addEventListener("click", closeThreadColorPopover);
   header.append(title, close);
   threadColorPopover.appendChild(header);
@@ -3378,7 +3386,7 @@ async function refreshSelectedThread() {
     const message = error.message || String(error);
     if (message !== lastThreadRefreshError) {
       lastThreadRefreshError = message;
-      addStatus(`thread更新を読めませんでした: ${message}`);
+      addStatus(`チャット更新を読めませんでした: ${message}`);
     }
   } finally {
     selectedThreadRefreshActive = false;
@@ -3391,13 +3399,13 @@ function resetMissingSelectedThread(threadId) {
   selectedThread = "";
   lastHistorySignature = "";
   renderHistory([]);
-  setThreadHeading("新しい共有thread");
+  setThreadHeading("新しいチャット");
   updateUrlThread();
   renderThreadList();
   restoreDraftForCurrentThread();
   applyCurrentThreadAccent();
   renderTerminalTranscript();
-  addStatus("選択中のthreadが見つからないため、新しいthreadに戻しました。");
+  addStatus("選択中のチャットが見つからないため、新しいチャットに戻しました。");
   closeSocket({ suppressReconnect: true });
   setReady(false);
   connect();
@@ -3410,7 +3418,7 @@ async function loadArtifacts() {
     renderArtifactIndex(result.data || []);
     getBridgeState(activeBridgeId).artifactItems = artifactItems;
   } catch (error) {
-    addEntry("error", `artifact一覧を読めませんでした: ${error.message}`);
+    addEntry("error", `ファイル一覧を読めませんでした: ${error.message}`);
   }
 }
 
@@ -3437,7 +3445,7 @@ function syncReadyThread(threadId) {
   selectedThread = threadId;
   updateUrlThread();
   const selected = threadCache.find((thread) => thread.id === selectedThread);
-  setThreadHeading(selected ? titleForThread(selected) : "新しい共有thread");
+  setThreadHeading(selected ? titleForThread(selected) : "新しいチャット");
   const nextKey = currentThreadColorKey();
   migrateThreadScopedState(previousKey, nextKey);
   activeDraftKey = nextKey;
@@ -3582,7 +3590,7 @@ function renderPanelSection(title, rows, emptyText) {
 
 function pluginDisplayName(plugin) {
   const summary = plugin?.summary || plugin || {};
-  return summary.interface?.displayName || summary.name || summary.id || "プラグイン";
+  return summary.interface?.displayName || summary.name || summary.id || "追加機能";
 }
 
 function pluginStatusKey(plugin) {
@@ -3602,7 +3610,7 @@ function pluginStatusLabel(status) {
 
 function skillSourceLabel(source) {
   const value = String(source || "").trim();
-  if (value.startsWith("plugin:")) return "プラグイン由来";
+  if (value.startsWith("plugin:")) return "追加機能由来";
   if (value === "project") return "プロジェクト";
   if (value === "user") return "ユーザー";
   if (value === "codex") return "Codex";
@@ -3647,7 +3655,7 @@ function normalizeExtensionView(view) {
 }
 
 function extensionViewLabel(view) {
-  return view === "skills" ? "スキル" : "プラグイン";
+  return view === "skills" ? "スキル" : "追加機能";
 }
 
 function extensionCountLabel(state) {
@@ -3692,7 +3700,7 @@ function addExtensionSwitch() {
   const switcher = document.createElement("div");
   switcher.className = "extension-switch";
   switcher.setAttribute("role", "tablist");
-  switcher.setAttribute("aria-label", "プラグインとスキルを切り替え");
+  switcher.setAttribute("aria-label", "追加機能とスキルを切り替え");
   for (const view of ["plugins", "skills"]) {
     const state = extensionPanelState?.[view];
     const button = document.createElement("button");
@@ -3773,12 +3781,12 @@ function renderArtifactIndex(items) {
   artifactItems = items;
   if (menuButton) {
     menuButton.removeAttribute("data-badge");
-    menuButton.title = artifactItems.length ? `メニュー / アーティファクト ${artifactItems.length} 件` : "メニュー";
+    menuButton.title = artifactItems.length ? `メニュー / ファイル ${artifactItems.length} 件` : "メニュー";
     menuButton.setAttribute("aria-label", menuButton.title);
   }
   activeArtifactPath = "";
   setActivePanelTab("artifacts");
-  artifactTitle.textContent = "アーティファクト";
+  artifactTitle.textContent = "ファイル";
   artifactList.classList.add("artifact-browser-list");
   renderArtifactRows();
   hideArtifactPreview();
@@ -3791,7 +3799,7 @@ function renderArtifactRows() {
     const row = addPanelRow(item.name, item.path, () => showArtifact(item.path), { badge: icon });
     row.classList.toggle("active", item.path === activeArtifactPath);
   }
-  if (!artifactItems.length) addPanelRow("アーティファクトは見つかりませんでした");
+  if (!artifactItems.length) addPanelRow("ファイルは見つかりませんでした");
 }
 
 function hideArtifactPreview() {
@@ -3816,7 +3824,7 @@ function showToolError(name, error) {
 }
 
 async function showPlugins() {
-  clearPanel("プラグイン / スキル", "extensions");
+  clearPanel("追加機能 / スキル", "extensions");
   extensionPanelState = {
     plugins: { rows: null, error: "" },
     skills: { rows: null, error: "" },
@@ -3828,7 +3836,7 @@ async function showPlugins() {
     extensionPanelState.plugins.rows = collectPluginRows(pluginsResult.value);
   } else {
     extensionPanelState.plugins.error = pluginsResult.reason.message;
-    addEntry("error", `プラグイン: ${pluginsResult.reason.message}`);
+    addEntry("error", `追加機能: ${pluginsResult.reason.message}`);
   }
 
   if (skillsResult.status === "fulfilled") {
@@ -3841,15 +3849,15 @@ async function showPlugins() {
 }
 
 async function showAutomations() {
-  clearPanel("オートメーション", "automation");
+  clearPanel("自動処理", "automation");
   addPanelRow("読み込み中...");
   try {
     const result = await apiGet("/api/automations");
     artifactList.replaceChildren();
     for (const automation of result.data || []) addPanelRow(automation.name, automation.status);
-    if (!artifactList.children.length) addPanelRow("登録済みオートメーションはありません");
+    if (!artifactList.children.length) addPanelRow("登録済み自動処理はありません");
   } catch (error) {
-    showToolError("オートメーション", error);
+    showToolError("自動処理", error);
   }
 }
 
@@ -3876,9 +3884,8 @@ async function showSettings() {
     const config = result.config?.config || {};
     addPanelRow("認証", result.auth?.authMethod || "unknown");
     addPanelRow("既定モデル", config.model || selectedModel || "unknown");
-    addPanelRow("承認", accessMode.approvalPolicy);
-    addPanelRow("サンドボックス", accessMode.sandboxMode);
-    addPanelRow("作業ディレクトリ", localResult.value?.active?.workdir || "");
+    addPanelRow("許可範囲", accessMode.label);
+    addPanelRow("作業場所", localResult.value?.active?.workdir || "");
     if (result.errors?.length) addPanelRow("補足エラー", result.errors.join(" / "));
   } catch (error) {
     if (renderSeq !== settingsRenderSeq) return;
@@ -3991,9 +3998,9 @@ function renderLocalSettings(payload) {
   const form = document.createElement("form");
   form.className = "settings-form";
   form.append(
-    settingField("Provider", providerSelect),
+    settingField("使用AI", providerSelect),
     settingField("モデル", modelSelect),
-    settingField("作業ディレクトリ", workspaceSelect),
+    settingField("作業場所", workspaceSelect),
     settingField("候補にないフォルダを追加", manualRow),
     historyLabel,
     status,
@@ -4015,7 +4022,7 @@ function renderLocalSettings(payload) {
     const nextProvider = providerSelect.value || "codex";
     updateProviderDependentControls();
     switchThreadProvider(nextProvider);
-    setSettingsStatus(status, "Providerを切り替えました。保存するとこのポートの既定になります。");
+    setSettingsStatus(status, "使用AIを切り替えました。保存するとこのポートの既定になります。");
   });
   updateProviderDependentControls();
 
@@ -4033,8 +4040,8 @@ function renderLocalSettings(payload) {
       workspaceItems = result.options || workspaceItems;
       renderWorkspaceOptions(workspaceSelect, workspaceItems, result.workspace?.path || nextPath);
       manualInput.value = "";
-      setSettingsStatus(status, "候補に追加しました。保存すると次回起動の作業ディレクトリになります。");
-      addStatus("作業ディレクトリ候補を追加しました。");
+      setSettingsStatus(status, "候補に追加しました。保存すると次回起動の作業場所になります。");
+      addStatus("作業場所候補を追加しました。");
     } catch (error) {
       setSettingsStatus(status, error.message, "error");
     } finally {
@@ -4057,7 +4064,7 @@ function renderLocalSettings(payload) {
       workspaceItems = result.options?.workspaces || workspaceItems;
       renderWorkspaceOptions(workspaceSelect, workspaceItems, result.settings?.workdir || workspaceSelect.value);
       switchThreadProvider(providerSelect.value);
-      setSettingsStatus(status, result.restartRequired ? "保存しました。作業ディレクトリやモデルは再起動で既定に反映します。" : "保存しました。", result.restartRequired ? "warning" : "");
+      setSettingsStatus(status, result.restartRequired ? "保存しました。作業場所やモデルは再起動で既定に反映します。" : "保存しました。", result.restartRequired ? "warning" : "");
       addStatus("起動設定を保存しました。");
     } catch (error) {
       setSettingsStatus(status, error.message, "error");
@@ -4069,7 +4076,7 @@ function renderLocalSettings(payload) {
   restartButton.addEventListener("click", async () => {
     restartButton.disabled = true;
     setSettingsStatus(status, "再起動中...");
-    addStatus("phone bridgeを再起動しています。");
+    addStatus("スマホ接続を再起動しています。");
     try {
       await apiPost("/api/restart", {});
     } catch (error) {
@@ -4212,34 +4219,34 @@ function startVoiceInput() {
 }
 
 async function showStatus() {
-  clearPanel("バックグラウンド", "status");
+  clearPanel("接続状態", "status");
   try {
     const result = await apiGet(`/api/status?provider=${encodeURIComponent(currentThreadProvider())}`);
-    addPanelRow("UI port", String(result.uiPort));
-    addPanelRow("Provider", result.provider || "codex");
-    if (result.defaultProvider && result.defaultProvider !== result.provider) addPanelRow("既定Provider", result.defaultProvider);
-    if (result.codexUrl) addPanelRow("Codex app-server", result.codexUrl);
+    addPanelRow("画面ポート", String(result.uiPort));
+    addPanelRow("使用AI", result.provider || "codex");
+    if (result.defaultProvider && result.defaultProvider !== result.provider) addPanelRow("既定の使用AI", result.defaultProvider);
+    if (result.codexUrl) addPanelRow("Mac側の接続先", result.codexUrl);
     latestRateLimits = result.rateLimits || null;
     renderRateLimitCard(latestRateLimits);
     addRateLimitPanelRows(latestRateLimits);
     addPanelRow("履歴同期", result.historySyncEnabled ? "有効" : "無効");
-    addPanelRow("作業ディレクトリ", result.workdir);
-    addPanelRow("Repo", result.repoName || "--");
+    addPanelRow("作業場所", result.workdir);
+    addPanelRow("リポジトリ", result.repoName || "--");
     addPanelRow("現在地", result.workspaceLocation || "--");
-    addPanelRow("Git branch", result.gitBranch || "--");
+    addPanelRow("作業ブランチ", result.gitBranch || "--");
     setWorkspaceMeta(result);
     for (const bridge of result.bridges || []) {
-      addPanelRow(bridge.threadId || "thread準備中", `${bridge.clients}端末 / ${bridge.ready ? "ready" : "starting"}`);
+      addPanelRow(bridge.threadId || "チャット準備中", `${bridge.clients}端末 / ${bridge.ready ? "準備完了" : "開始中"}`);
     }
   } catch (error) {
-    showToolError("バックグラウンド", error);
+    showToolError("接続状態", error);
   }
 }
 
 async function showArtifact(path) {
   showRightPanel();
   setActivePanelTab("artifacts");
-  artifactTitle.textContent = "アーティファクト";
+  artifactTitle.textContent = "ファイル";
   artifactList.classList.add("artifact-browser-list");
   activeArtifactPath = path;
   renderArtifactRows();
@@ -4263,7 +4270,7 @@ async function showArtifact(path) {
       </div>
       <p>読み込みに失敗しました: ${escapeHtml(error.message)}</p>
     `;
-    addEntry("error", `アーティファクト: ${error.message}`);
+    addEntry("error", `ファイル: ${error.message}`);
   }
 }
 
@@ -4377,7 +4384,7 @@ function setTerminalInputMode(mode, { silent = false } = {}) {
   updateTerminalInputModeButton();
   updateQuickBarVisibility();
   if (silent) return;
-  appendTerminalEntry({ ts: Date.now(), kind: "lifecycle", message: `terminal input mode: ${terminalInputMode}` });
+  appendTerminalEntry({ ts: Date.now(), kind: "lifecycle", message: `ログ入力モード: ${terminalInputMode === "keys" ? "キー操作" : "文章"}` });
 }
 
 function showTerminalHelper(text) {
@@ -4400,14 +4407,14 @@ function handleTerminalKey(key) {
     }
     if (!window.confirm("実行中の処理へ中断要求を送ります。続けますか？")) return;
     interruptButton.click();
-    appendTerminalEntry({ ts: Date.now(), kind: "lifecycle", message: "danger key confirmed: Ctrl+C" });
+    appendTerminalEntry({ ts: Date.now(), kind: "lifecycle", message: "中断キーを確認しました: Ctrl+C" });
     return;
   }
   if (key === "Ctrl+L") {
     terminalHistories.set(currentThreadColorKey(), []);
     renderTerminalTranscript();
-    showToast("表示中のターミナルログをクリアしました。");
-    appendTerminalEntry({ ts: Date.now(), kind: "lifecycle", message: "client terminal view cleared" });
+    showToast("表示中の実行ログをクリアしました。");
+    appendTerminalEntry({ ts: Date.now(), kind: "lifecycle", message: "この端末の実行ログ表示を消しました" });
     return;
   }
   if (key === "Backspace") {
@@ -4422,14 +4429,14 @@ function handleTerminalKey(key) {
     return;
   }
   const text = uiUtils.keyIntentText ? uiUtils.keyIntentText(key) : key;
-  if (key === "$") showTerminalHelper("$ は shell 直接実行ではなく、Codex への安全な実行依頼テンプレートを挿入します。");
-  if (key === "/") showTerminalHelper("/ から Codex slash command や作業指示を書き始められます。");
+  if (key === "$") showTerminalHelper("$ は直接実行ではなく、Codex への安全な実行依頼テンプレートを挿入します。");
+  if (key === "/") showTerminalHelper("/ から操作コマンドや作業指示を書き始められます。");
   if (terminalInputMode === "keys" && text.startsWith("[") && text.endsWith("]")) {
-    insertPromptText(`TUIで ${text} キー相当の操作をしてください。`);
+    insertPromptText(`操作画面で ${text} キー相当の操作をしてください。`);
   } else {
     insertPromptText(text);
   }
-  appendTerminalEntry({ ts: Date.now(), kind: "user", message: `key intent: ${key}` });
+  appendTerminalEntry({ ts: Date.now(), kind: "user", message: `キー操作: ${key}` });
 }
 
 function formatBytes(bytes) {
@@ -4514,7 +4521,7 @@ function connect({ preserveHistory = false, freshThread = false } = {}) {
   const bridgeId = activeBridgeId;
   token = bridgeToken;
   if (!bridgeToken) {
-    addEntry("error", "URLに token がありません。Mac側に表示されたURLをそのまま開いてください。");
+    addEntry("error", "URLに接続キーがありません。Mac側に表示されたURLをそのまま開いてください。");
     return;
   }
   const provider = currentThreadProvider();
@@ -4527,7 +4534,7 @@ function connect({ preserveHistory = false, freshThread = false } = {}) {
     renderHistory([]);
   }
   const selected = threadCache.find((thread) => thread.id === selectedThread);
-  setThreadHeading(selected ? titleForThread(selected) : "新しい共有thread");
+  setThreadHeading(selected ? titleForThread(selected) : "新しいチャット");
 
   ws = new WebSocket(wsUrlForBridge(bridge, provider, selectedThread, { fresh: freshThread && !selectedThread }));
   const socket = ws;
@@ -4539,8 +4546,8 @@ function connect({ preserveHistory = false, freshThread = false } = {}) {
     state.connected = true;
     state.lastError = "";
     lastWsMessageAt = Date.now();
-    setRunState("connecting", "Agent に接続中");
-    addEntry("status", "Macの共有ブリッジへ接続しました。");
+    setRunState("connecting", "接続中");
+    addEntry("status", "Mac側に接続しました。");
   });
 
   socket.addEventListener("message", (event) => {
@@ -4570,7 +4577,7 @@ function connect({ preserveHistory = false, freshThread = false } = {}) {
       applyServerRunState(msg.run || { state: "ready" });
       applyCurrentThreadAccent();
       updateThreadNavigation();
-      addEntry("status", `共有${msg.provider || "codex"} thread ready: ${msg.threadId}`);
+      addEntry("status", `チャットを開きました: ${msg.threadId}`);
       return;
     }
     handleTerminalMessage(msg);
@@ -4626,7 +4633,7 @@ function connect({ preserveHistory = false, freshThread = false } = {}) {
     }
     if (msg.type === "turn" && msg.status === "started") {
       if (msg.turnId && !assistantEntry) liveOutputGroup = msg.turnId;
-      applyServerRunState(msg.run || { state: "running", label: "Agent 処理中", turnId: msg.turnId });
+      applyServerRunState(msg.run || { state: "running", label: "処理中", turnId: msg.turnId });
       updateThreadNavigation();
       return;
     }
@@ -4718,7 +4725,7 @@ composer.addEventListener("submit", (event) => {
     appendTerminalEntry({
       ts: Date.now(),
       kind: "status",
-      message: `user prompt sent${attachmentsToSend.length ? ` (${attachmentsToSend.length} attachments)` : ""}`,
+      message: `入力を送信しました${attachmentsToSend.length ? `（添付 ${attachmentsToSend.length}件）` : ""}`,
     });
     ws.send(
       JSON.stringify({
@@ -4763,7 +4770,7 @@ interruptButton.addEventListener("click", () => {
 approveButton.addEventListener("click", () => {
   if (!pendingApproval) return;
   ws.send(JSON.stringify({ type: "approval", token, decision: "accept", request: pendingApproval }));
-  appendTerminalEntry({ ts: Date.now(), kind: "approval", message: "approval accepted" });
+  appendTerminalEntry({ ts: Date.now(), kind: "approval", message: "承認しました" });
   showToast("承認を送信しました。");
   approval.classList.add("hidden");
   pendingApproval = null;
@@ -4774,7 +4781,7 @@ declineButton.addEventListener("click", () => {
   if (!pendingApproval) return;
   const reason = approvalReason?.value?.trim();
   ws.send(JSON.stringify({ type: "approval", token, decision: "decline", request: pendingApproval }));
-  appendTerminalEntry({ ts: Date.now(), kind: "approval", message: reason ? `approval declined: ${reason}` : "approval declined" });
+  appendTerminalEntry({ ts: Date.now(), kind: "approval", message: reason ? `拒否しました: ${reason}` : "拒否しました" });
   showToast("拒否を送信しました。");
   approval.classList.add("hidden");
   pendingApproval = null;
@@ -4868,7 +4875,7 @@ terminalAutoScrollMini?.addEventListener("click", () => setTerminalAutoScroll(!t
 terminalClearButton.addEventListener("click", () => {
   terminalHistories.set(currentThreadColorKey(), []);
   renderTerminalTranscript();
-  showToast("表示中のターミナルログだけをクリアしました。");
+  showToast("表示中の実行ログだけをクリアしました。");
 });
 terminalCopyButton.addEventListener("click", async () => {
   const text = currentTerminalHistory()
@@ -4877,9 +4884,9 @@ terminalCopyButton.addEventListener("click", async () => {
     .join("\n");
   try {
     await copyTextToClipboard(text);
-    showToast("表示中のターミナルログをコピーしました。");
+    showToast("表示中の実行ログをコピーしました。");
   } catch (error) {
-    addStatus(`ターミナルログをコピーできませんでした: ${error.message}`);
+    addStatus(`実行ログをコピーできませんでした: ${error.message}`);
   }
 });
 terminalLatestButton?.addEventListener("click", () => {
