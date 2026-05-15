@@ -224,6 +224,28 @@ async function run() {
     );
     await page.locator("#closeBridgeFleet").click();
 
+    await page.locator("#mobileThreads").click();
+    await page.waitForTimeout(120);
+    await page.locator("#addBridgeButton").click();
+    await page.waitForTimeout(180);
+    const addConnectionSheet = await page.evaluate(() => {
+      const sheet = document.querySelector("#bridgeFleetSheet");
+      const input = document.querySelector("#bridgeAddInput");
+      return {
+        hidden: sheet?.classList.contains("hidden"),
+        sidebarVisible: document.body.classList.contains("show-sidebar"),
+        inputInSheet: Boolean(input && sheet?.contains(input)),
+        activeId: document.activeElement?.id || "",
+      };
+    });
+    check(
+      "add connection command opens the connection sheet",
+      addConnectionSheet && !addConnectionSheet.hidden && !addConnectionSheet.sidebarVisible && addConnectionSheet.inputInSheet,
+      JSON.stringify(addConnectionSheet),
+    );
+    check("add connection command focuses the input", addConnectionSheet?.activeId === "bridgeAddInput", JSON.stringify(addConnectionSheet));
+    await page.locator("#closeBridgeFleet").click();
+
     // Issue 5: header color button is quieter (smaller, neutral background).
     const colorBtn = await page.evaluate(() => {
       const el = document.querySelector("#headerThreadColorButton");

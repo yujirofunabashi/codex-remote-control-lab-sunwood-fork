@@ -3101,11 +3101,18 @@ function removeBridge(bridgeId) {
   renderFleet();
 }
 
-function openBridgeFleet() {
+function openBridgeFleet(options = {}) {
+  const focusAdd = options?.focusAdd === true;
   bridgeFleetSheet?.classList.remove("hidden");
   fleetDashboardButton?.setAttribute("aria-expanded", "true");
   setSidebarVisible(false);
   renderFleet();
+  if (focusAdd && bridgeAddInput) {
+    window.requestAnimationFrame(() => {
+      bridgeAddInput.scrollIntoView({ block: "center", behavior: "smooth" });
+      bridgeAddInput.focus({ preventScroll: true });
+    });
+  }
 }
 
 function closeBridgeFleet() {
@@ -5492,7 +5499,7 @@ terminalOps?.addEventListener("click", (event) => {
 });
 fleetDashboardButton?.addEventListener("click", openBridgeFleet);
 bridgePill?.addEventListener("click", openBridgeFleet);
-addBridgeButton?.addEventListener("click", openBridgeFleet);
+addBridgeButton?.addEventListener("click", () => openBridgeFleet({ focusAdd: true }));
 closeBridgeFleetButton?.addEventListener("click", closeBridgeFleet);
 bridgeAddClear?.addEventListener("click", () => {
   if (bridgeAddInput) bridgeAddInput.value = "";
@@ -5615,7 +5622,12 @@ document.addEventListener("click", (event) => {
     if (!threadSwitcher.contains(event.target) && !threadPositionPill?.contains(event.target)) closeThreadSwitcher();
   }
   if (!bridgeFleetSheet?.classList.contains("hidden")) {
-    if (!bridgeFleetSheet.contains(event.target) && !bridgePill?.contains(event.target) && !fleetDashboardButton?.contains(event.target)) {
+    if (
+      !bridgeFleetSheet.contains(event.target) &&
+      !bridgePill?.contains(event.target) &&
+      !fleetDashboardButton?.contains(event.target) &&
+      !addBridgeButton?.contains(event.target)
+    ) {
       closeBridgeFleet();
     }
   }
