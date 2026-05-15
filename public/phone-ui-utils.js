@@ -129,6 +129,19 @@
     };
   }
 
+  function effectiveAppViewportHeight(env = {}, options = {}) {
+    const vars = options.viewportVars || visualViewportVars(env);
+    const innerHeight = Math.max(0, Math.round(Number(env?.innerHeight || vars.visualViewportHeight || 0)));
+    const visualHeight = Math.max(0, Math.round(Number(vars.visualViewportHeight || innerHeight || 0)));
+    const keyboardInset = Math.max(0, Math.round(Number(vars.keyboardInset || 0)));
+    const keyboardThreshold = Math.max(0, Math.round(Number(options.keyboardThreshold ?? 80)));
+    const standalone =
+      typeof options.standalone === "boolean" ? options.standalone : isStandaloneDisplayMode(env);
+
+    if (keyboardInset > keyboardThreshold && !standalone && innerHeight > visualHeight) return innerHeight;
+    return visualHeight || innerHeight;
+  }
+
   function terminalCompactState(options = {}) {
     const mainViewMode = options.mainViewMode === "terminal" ? "terminal" : "chat";
     const mobile = Boolean(options.mobile ?? isMobileViewport(options.width));
@@ -396,6 +409,7 @@
     isMobileViewport,
     isStandaloneDisplayMode,
     visualViewportVars,
+    effectiveAppViewportHeight,
     terminalCompactState,
     shouldShowQuickBar,
     canSuggestPwaInstall,

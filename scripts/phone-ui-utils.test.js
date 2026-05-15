@@ -26,6 +26,7 @@ const {
   shouldShowQuickBar,
   isStandaloneDisplayMode,
   terminalCompactState,
+  effectiveAppViewportHeight,
   upsertBridgeRegistry,
   visualViewportVars,
   visibleTerminalEntries,
@@ -95,6 +96,20 @@ test("viewport, standalone, compact mode, and quickbar helpers are stable", () =
     visualViewportOffsetTop: 0,
     keyboardInset: 180,
   });
+  assert.equal(
+    effectiveAppViewportHeight(
+      { innerHeight: 800, visualViewport: { height: 620, offsetTop: 0 } },
+      { standalone: false },
+    ),
+    800,
+  );
+  assert.equal(
+    effectiveAppViewportHeight(
+      { innerHeight: 800, visualViewport: { height: 620, offsetTop: 0 } },
+      { standalone: true },
+    ),
+    620,
+  );
   assert.deepEqual(terminalCompactState({ mainViewMode: "terminal", width: 390, maxMode: true }).max, true);
   assert.equal(shouldShowQuickBar({ mainViewMode: "terminal", inputFocused: false, inputMode: "keys" }), true);
   assert.equal(shouldShowQuickBar({ mainViewMode: "chat", inputFocused: true, inputMode: "keys" }), false);

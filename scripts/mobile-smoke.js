@@ -190,9 +190,13 @@ async function run() {
     check("status and quick actions sit on one row", bandRows && bandRows.sameRow);
     check("run-state reads as a label (no border)", bandRows && bandRows.runStateBordered === "0px");
 
-    // Issue 4: workspace strip shows repo / location / branch with quiet tags.
+    // Issue 4: workspace details remain in the DOM for a11y/details, but the
+    // duplicate strip is hidden on mobile because the bridge pill already
+    // identifies the active worktree.
     check("workspace tags use quiet labels", (await page.locator(".workspace-tag").count()) === 2);
     check("legacy pwd badge is gone", (await page.locator(".workspace-pwd-badge").count()) === 0);
+    const workspaceStripDisplay = await page.locator("#workspaceIndicator").evaluate((el) => getComputedStyle(el).display);
+    check("mobile workspace strip is visually hidden", workspaceStripDisplay === "none", `display=${workspaceStripDisplay}`);
 
     // Issue 5: header color button is quieter (smaller, neutral background).
     const colorBtn = await page.evaluate(() => {
@@ -226,20 +230,35 @@ async function run() {
     check("composer stays within the viewport when focused", composerFit.bottom <= composerFit.viewport + 2, JSON.stringify(composerFit));
     if (wantShots) await page.screenshot({ path: path.join(shotsDir, "composer-focus.png") });
 
-    // Issue 1: with the soft keyboard open, .workspace already tracks the visual
-    // viewport, so the composer must hug the keyboard top with no phantom gap.
+    // Issue 1: browser Safari reports a smaller visualViewport while keeping a
+    // taller layout viewport. The app shell should keep filling that layout
+    // viewport so we do not create a blank band below the composer.
     const keyboardLayout = await page.evaluate(() => {
       const keyboard = 336;
       const visible = window.innerHeight - keyboard;
       document.documentElement.style.setProperty("--visual-viewport-height", `${visible}px`);
+      document.documentElement.style.setProperty("--app-viewport-height", `${window.innerHeight}px`);
       document.documentElement.style.setProperty("--keyboard-inset", `${keyboard}px`);
       document.body.classList.add("keyboard-open");
+      const shell = document.querySelector(".app-shell").getBoundingClientRect();
       const composer = document.querySelector("#composer").getBoundingClientRect();
-      return { visible, composerBottom: Math.round(composer.bottom), gapBelowComposer: Math.round(visible - composer.bottom) };
+      return {
+        visible,
+        layout: Math.round(window.innerHeight),
+        shellBottom: Math.round(shell.bottom),
+        composerBottom: Math.round(composer.bottom),
+        gapBelowShell: Math.round(window.innerHeight - shell.bottom),
+        gapBelowComposer: Math.round(window.innerHeight - composer.bottom),
+      };
     });
     check(
-      "no phantom gap below the composer when the keyboard is open",
-      Math.abs(keyboardLayout.gapBelowComposer) <= 6,
+      "no phantom app gap when the keyboard is open in browser mode",
+      Math.abs(keyboardLayout.gapBelowShell) <= 2,
+      JSON.stringify(keyboardLayout),
+    );
+    check(
+      "composer stays near the browser viewport bottom when the keyboard is open",
+      Math.abs(keyboardLayout.gapBelowComposer) <= 8,
       JSON.stringify(keyboardLayout),
     );
     if (wantShots) await page.screenshot({ path: path.join(shotsDir, "keyboard-open.png") });

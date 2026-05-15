@@ -228,6 +228,13 @@ function applyStandaloneState() {
   return standalone;
 }
 
+function isEditableElementFocused() {
+  const element = document.activeElement;
+  if (!element) return false;
+  const tag = String(element.tagName || "").toLowerCase();
+  return tag === "textarea" || tag === "input" || element.isContentEditable === true;
+}
+
 function setupVisualViewportVars() {
   const vars = uiUtils.visualViewportVars
     ? uiUtils.visualViewportVars(window)
@@ -238,12 +245,22 @@ function setupVisualViewportVars() {
           ? Math.max(0, Math.round(window.innerHeight - window.visualViewport.height - window.visualViewport.offsetTop))
           : 0,
       };
+  const keyboardOpen = (vars.keyboardInset || 0) > 80 && (promptInputFocused || isEditableElementFocused());
+  const appViewportHeight = uiUtils.effectiveAppViewportHeight
+    ? uiUtils.effectiveAppViewportHeight(window, {
+        viewportVars: { ...vars, keyboardInset: keyboardOpen ? vars.keyboardInset : 0 },
+        standalone: isStandaloneDisplayMode(),
+      })
+    : Math.round((keyboardOpen && window.innerHeight) || vars.visualViewportHeight || window.innerHeight || 0);
   if (vars.visualViewportHeight) {
     document.documentElement.style.setProperty("--visual-viewport-height", `${vars.visualViewportHeight}px`);
   }
+  if (appViewportHeight) {
+    document.documentElement.style.setProperty("--app-viewport-height", `${appViewportHeight}px`);
+  }
   document.documentElement.style.setProperty("--visual-viewport-offset-top", `${vars.visualViewportOffsetTop || 0}px`);
   document.documentElement.style.setProperty("--keyboard-inset", `${vars.keyboardInset || 0}px`);
-  document.body.classList.toggle("keyboard-open", (vars.keyboardInset || 0) > 80);
+  document.body.classList.toggle("keyboard-open", keyboardOpen);
   if (document.activeElement === promptInput) keepComposerVisible();
   measureTerminalLayout();
 }
@@ -3481,6 +3498,7 @@ function keepComposerVisible() {
   if (!window.matchMedia("(max-width: 820px)").matches) return;
   setSidebarVisible(false);
   closeRightPanel();
+  if (!isStandaloneDisplayMode()) return;
   requestAnimationFrame(() => composer.scrollIntoView({ block: "nearest", inline: "nearest" }));
   window.setTimeout(() => composer.scrollIntoView({ block: "nearest", inline: "nearest" }), 250);
 }

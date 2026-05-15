@@ -51,6 +51,7 @@
   --state-approval: #8f4c00;
   --state-interrupted: #6d5c00;
   --keyboard-inset: 0px;
+  --app-viewport-height: 100dvh;
   --visual-viewport-height: 100dvh;
   --visual-viewport-offset-top: 0px;
 }
@@ -186,7 +187,7 @@ button {
   height: 100vh;
   height: 100svh;
   height: 100dvh;
-  height: var(--visual-viewport-height, 100dvh);
+  height: var(--app-viewport-height, var(--visual-viewport-height, 100dvh));
   overflow: hidden;
 }
 
@@ -695,7 +696,7 @@ button.project-heading.active {
   height: 100vh;
   height: 100svh;
   height: 100dvh;
-  height: var(--visual-viewport-height, 100dvh);
+  height: var(--app-viewport-height, var(--visual-viewport-height, 100dvh));
   min-height: 0;
   min-width: 0;
   overflow: hidden;
@@ -4336,7 +4337,15 @@ body[data-main-view="terminal"] .pwa-install-hint {
   }
 
   .workspace {
-    grid-template-rows: auto auto minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .workspace-strip {
+    display: none;
+  }
+
+  .content-grid {
+    grid-row: 2;
   }
 
   .sidebar-scrim {
@@ -4802,15 +4811,6 @@ body[data-main-view="terminal"] .pwa-install-hint {
     line-height: 1.42;
   }
 
-  .workspace-strip {
-    width: 100%;
-    max-width: 100%;
-    min-height: 30px;
-    margin-bottom: 0;
-    padding: 0 10px;
-    font-size: 11px;
-  }
-
   .workspace-branch {
     gap: 5px;
   }
@@ -4920,7 +4920,7 @@ body[data-main-view="terminal"] .pwa-install-hint {
 
 @media (max-width: 520px) {
   body[data-main-view="terminal"] .workspace {
-    grid-template-rows: auto auto minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
   }
 
   body[data-main-view="terminal"] .titlebar {
@@ -4954,12 +4954,6 @@ body[data-main-view="terminal"] .pwa-install-hint {
   body[data-main-view="terminal"] .thread-position-pill,
   body[data-main-view="terminal"] .bridge-pill {
     min-height: 26px;
-  }
-
-  body[data-main-view="terminal"] .workspace-strip {
-    min-height: 24px;
-    padding: 0 8px;
-    font-size: 10px;
   }
 
   body[data-main-view="terminal"] .workspace-tag {
