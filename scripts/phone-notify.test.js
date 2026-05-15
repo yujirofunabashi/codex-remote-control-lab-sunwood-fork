@@ -1,7 +1,17 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { bridgeUrls, notificationTargets, notifyBridgeUrls, notifyTaskEvent, taskNotificationMessage } = require("./phone-notify");
+const {
+  bridgeUrls,
+  eventNotificationMessage,
+  notificationTargets,
+  notifyBridgeUrls,
+  notifyEvent,
+  notifyTaskEvent,
+  redactNotificationText,
+  stripTokenFromUrl,
+  taskNotificationMessage,
+} = require("./phone-notify");
 
 test("bridgeUrls builds tokenized LAN URLs", () => {
   assert.deepEqual(bridgeUrls(["192.168.11.8", "10.0.0.12"], 45214, "secret"), [
@@ -123,7 +133,7 @@ test("notifyTaskEvent posts a Discord completion notification", async () => {
       url: "http://100.64.0.1:45214/?token=secret&thread=thread-123",
     },
     {
-      env: { PHONE_DISCORD_WEBHOOK_URL: "https://discord.com/api/webhooks/123/abc" },
+      env: { PHONE_NOTIFY_EVENTS: "1", PHONE_DISCORD_WEBHOOK_URL: "https://discord.com/api/webhooks/123/abc" },
       fetch: async (url, options) => {
         requests.push({ url, options });
         return { ok: true, status: 204 };
@@ -137,7 +147,85 @@ test("notifyTaskEvent posts a Discord completion notification", async () => {
   assert.match(body.content, /codex task completed/);
   assert.match(body.content, /Thread: thread-123/);
   assert.match(body.content, /http:\/\/100\.64\.0\.1:45214/);
+  assert.doesNotMatch(body.content, /secret/);
   assert.deepEqual(body.allowed_mentions, { parse: [] });
+});
+
+test("notifyTaskEvent is quiet unless event notifications are enabled", async () => {
+  const results = await notifyTaskEvent(
+    { status: "completed", provider: "codex", threadId: "thread-123" },
+    {
+      env: { PHONE_DISCORD_WEBHOOK_URL: "https://discord.com/api/webhooks/123/abc" },
+      fetch: async () => {
+        throw new Error("fetch should not be called");
+      },
+    },
+  );
+
+  assert.deepEqual(results, []);
+});
+
+test("notifyEvent dedupes and strips tokenized URLs", async () => {
+  const requests = [];
+  const env = {
+    PHONE_NOTIFY_EVENTS: "1",
+    PHONE_NOTIFY_EVENT_DEDUPE_MS: "10000",
+    PHONE_DISCORD_WEBHOOK_URL: "https://discord.com/api/webhooks/123/abc",
+  };
+  const event = {
+    type: "approval_required",
+    title: "Approval required",
+    message: "Approve npm test",
+    threadId: "thread-123",
+    url: "http://100.64.0.1:45214/?token=secret&thread=thread-123",
+  };
+
+  const first = await notifyEvent(event, {
+    env,
+    fetch: async (url, options) => {
+      requests.push({ url, options });
+      return { ok: true, status: 204 };
+    },
+  });
+  const second = await notifyEvent(event, {
+    env,
+    fetch: async () => {
+      throw new Error("fetch should not be called");
+    },
+  });
+
+  assert.deepEqual(first, [{ type: "discord", ok: true }]);
+  assert.deepEqual(second, []);
+  const body = JSON.parse(requests[0].options.body);
+  assert.match(body.content, /approval_required/);
+  assert.doesNotMatch(body.content, /secret|token=/);
+});
+
+test("notifyEvent redacts tokenized URLs from event message text", async () => {
+  const requests = [];
+  await notifyEvent(
+    {
+      type: "connection_lost",
+      title: "Connection lost",
+      message: "Reconnect at http://100.64.0.1:45214/?token=secret&thread=abc",
+      threadId: "thread-redacted-message",
+      url: "http://100.64.0.1:45214/?token=secret&thread=abc",
+    },
+    {
+      env: {
+        PHONE_NOTIFY_EVENTS: "1",
+        PHONE_NOTIFY_EVENT_DEDUPE_MS: "0",
+        PHONE_DISCORD_WEBHOOK_URL: "https://discord.com/api/webhooks/123/abc",
+      },
+      fetch: async (url, options) => {
+        requests.push({ url, options });
+        return { ok: true, status: 204 };
+      },
+    },
+  );
+  const body = JSON.parse(requests[0].options.body);
+  assert.match(body.content, /thread=abc/);
+  assert.doesNotMatch(body.content, /secret|token=/);
 });
 
 test("taskNotificationMessage includes failure details", () => {
@@ -164,6 +252,7 @@ test("taskNotificationMessage can include multiple task links", () => {
   assert.match(message, /http:\/\/192\.168\.11\.8:45214/);
   assert.match(message, /http:\/\/100\.64\.0\.1:45214/);
   assert.equal(message.match(/http:\/\//g).length, 2);
+  assert.doesNotMatch(message, /secret|token=/);
 });
 
 test("notifyBridgeUrls rejects non-Discord webhook URLs", async () => {
@@ -178,6 +267,12 @@ test("notifyBridgeUrls rejects non-Discord webhook URLs", async () => {
   assert.equal(results[0].type, "discord");
   assert.equal(results[0].ok, false);
   assert.match(results[0].error, /Discord https webhook URL/);
+});
+
+test("event URL helpers remove local access keys", () => {
+  assert.equal(stripTokenFromUrl("http://x.test/?token=secret&thread=abc"), "http://x.test/?thread=abc");
+  assert.doesNotMatch(eventNotificationMessage({ type: "turn_completed", url: "http://x.test/?token=secret" }), /secret|token=/);
+  assert.equal(redactNotificationText("open http://x.test/?token=secret&thread=abc"), "open http://x.test/?thread=abc");
 });
 
 test("notifyBridgeUrls reports provider HTTP failures without stopping startup", async () => {

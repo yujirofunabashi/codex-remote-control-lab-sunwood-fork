@@ -7,6 +7,7 @@ const {
   bridgeThreadKey,
   compactWorkspacePath,
   contrastColorFor,
+  deriveThreadStatus,
   fallbackThreadColor,
   keyIntentText,
   maskToken,
@@ -24,10 +25,12 @@ const {
   serviceWorkerRegistrationAllowed,
   shouldConfirmDangerousKey,
   shouldShowQuickBar,
+  sortThreadsForInbox,
   isStandaloneDisplayMode,
   terminalCompactState,
   effectiveAppViewportHeight,
   upsertBridgeRegistry,
+  urlWithoutTokenParam,
   visualViewportVars,
   visibleTerminalEntries,
   workspaceKeyForThreadRecord,
@@ -134,19 +137,49 @@ test("bridge URL helpers parse tokenized URLs and host port token lines", () => 
   assert.deepEqual(parseBridgeUrl("http://192.168.1.20:45224/?token=secret").token, "secret");
   assert.deepEqual(parseBridgeUrl("http://192.168.1.20:45224/?key=secret").token, "secret");
   assert.deepEqual(parseBridgeUrl("192.168.1.20 45234 tok123").baseUrl, "http://192.168.1.20:45234");
-  assert.equal(maskToken("secret123456"), "sec...456");
-  assert.equal(maskToken("http://x/?token=secret123456"), "http://x/?token=sec...456");
+  assert.equal(maskToken("secret123456"), "secr…3456");
+  assert.equal(maskToken("http://x/?token=secret123456"), "http://x/?token=secr…3456");
+  assert.doesNotMatch(maskToken("secret123456"), /secret123456/);
+});
+
+test("token query removal preserves non-token query params", () => {
+  assert.equal(urlWithoutTokenParam("http://x.test/?token=secret&thread=abc&provider=codex"), "http://x.test/?thread=abc&provider=codex");
+  assert.equal(urlWithoutTokenParam("http://x.test/?thread=abc&token=secret"), "http://x.test/?thread=abc");
+  assert.equal(urlWithoutTokenParam("http://x.test/?thread=abc"), "http://x.test/?thread=abc");
 });
 
 test("bridge registry helpers dedupe by base URL and keep thread keys bridge scoped", () => {
   const first = normalizeBridgeEntry({ baseUrl: "http://127.0.0.1:45214/?token=a", label: "A", token: "a" }, { now: 1 });
   const second = normalizeBridgeEntry({ baseUrl: "http://127.0.0.1:45214", label: "A2", token: "b" }, { now: 2 });
   assert.equal(first.id, bridgeIdFromBaseUrl("http://127.0.0.1:45214"));
+  assert.equal(first.baseUrl, "http://127.0.0.1:45214");
   let registry = upsertBridgeRegistry({ version: 1, bridges: [] }, first);
   registry = upsertBridgeRegistry(registry, second);
   assert.equal(registry.bridges.length, 1);
   assert.equal(registry.bridges[0].label, "A2");
-  assert.equal(registry.bridges[0].token, "b");
+  assert.equal(registry.bridges[0].baseUrl, "http://127.0.0.1:45214");
+  assert.equal(registry.bridges[0].token, "");
+  assert.doesNotMatch(JSON.stringify(registry), /[?&]token=|\"token\":\"b\"/);
   assert.equal(bridgeThreadKey(first.id, "thread-123"), `${first.id}::thread-123`);
   assert.equal(removeBridgeFromRegistry(registry, first.id).bridges.length, 0);
+});
+
+test("thread inbox status derivation prioritizes actionable work", () => {
+  const approval = { id: "a", updatedAt: 1 };
+  const running = { id: "b", updatedAt: 10 };
+  const done = { id: "c", updatedAt: 20 };
+  const runtime = {
+    selectedThread: "a",
+    currentRunState: "approval",
+    pendingApproval: { id: 1 },
+    bridgeRuns: [{ threadId: "b", run: { state: "running" } }],
+  };
+
+  assert.equal(deriveThreadStatus(approval, runtime).key, "approval_required");
+  assert.equal(deriveThreadStatus(running, runtime).key, "running");
+  assert.equal(deriveThreadStatus({ id: "d", preview: "npm test failed" }, {}).key, "test_failed");
+  assert.deepEqual(
+    sortThreadsForInbox([done, running, approval], runtime).map((thread) => thread.id),
+    ["a", "b", "c"],
+  );
 });
