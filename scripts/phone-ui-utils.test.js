@@ -10,17 +10,24 @@ const {
   fallbackThreadColor,
   keyIntentText,
   maskToken,
+  middleEllipsis,
   normalizeBridgeBaseUrl,
   normalizeBridgeEntry,
   normalizeTerminalEntry,
   parseBridgeUrl,
+  pwaManifestTokenIssues,
   redactSensitiveText,
   removeBridgeFromRegistry,
   safeJsonParse,
   sameWorkspaceThreadRecord,
   sanitizeHexColor,
+  serviceWorkerRegistrationAllowed,
   shouldConfirmDangerousKey,
+  shouldShowQuickBar,
+  isStandaloneDisplayMode,
+  terminalCompactState,
   upsertBridgeRegistry,
+  visualViewportVars,
   visibleTerminalEntries,
   workspaceKeyForThreadRecord,
 } = require("../public/phone-ui-utils");
@@ -44,6 +51,7 @@ test("compactWorkspacePath middle-truncates long mobile paths", () => {
     compactWorkspacePath("/Users/minijiro/Developer/ZG_PROJECT/codex-remote-control-lab", { keepStart: 1, keepEnd: 1 }),
     "~/Developer/.../codex-remote-control-lab",
   );
+  assert.equal(middleEllipsis("codex-remote-control-lab-sunwood-fork", { max: 18 }), "codex-rem...d-fork");
 });
 
 test("workspace helpers keep thread switching scoped to one worktree", () => {
@@ -78,6 +86,26 @@ test("dangerous key confirm and command-template key stay safe", () => {
   assert.equal(shouldConfirmDangerousKey("Ctrl+C"), true);
   assert.equal(shouldConfirmDangerousKey("Tab"), false);
   assert.match(keyIntentText("$"), /安全に実行/);
+});
+
+test("viewport, standalone, compact mode, and quickbar helpers are stable", () => {
+  assert.equal(isStandaloneDisplayMode({ matchMedia: () => ({ matches: true }), navigator: {} }), true);
+  assert.deepEqual(visualViewportVars({ innerHeight: 800, visualViewport: { height: 620, offsetTop: 0 } }), {
+    visualViewportHeight: 620,
+    visualViewportOffsetTop: 0,
+    keyboardInset: 180,
+  });
+  assert.deepEqual(terminalCompactState({ mainViewMode: "terminal", width: 390, maxMode: true }).max, true);
+  assert.equal(shouldShowQuickBar({ mainViewMode: "terminal", inputFocused: false, inputMode: "keys" }), true);
+  assert.equal(shouldShowQuickBar({ mainViewMode: "chat", inputFocused: true, inputMode: "keys" }), false);
+});
+
+test("PWA helpers keep manifest and service worker opt-in safe", () => {
+  assert.equal(serviceWorkerRegistrationAllowed({ enableSw: false, secureContext: true }), false);
+  assert.equal(serviceWorkerRegistrationAllowed({ enableSw: true, secureContext: false }), false);
+  assert.equal(serviceWorkerRegistrationAllowed({ enableSw: true, secureContext: true }), true);
+  assert.deepEqual(pwaManifestTokenIssues({ start_url: "/?token=secret", name: "Codex" }).hasTokenParam, true);
+  assert.deepEqual(pwaManifestTokenIssues({ start_url: "/", description: "token-protected bridge" }).hasTokenParam, false);
 });
 
 test("redactSensitiveText masks bridge tokens and auth-like secrets", () => {

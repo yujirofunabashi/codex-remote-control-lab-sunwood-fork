@@ -131,6 +131,24 @@ PHONE_NOTIFY_TIMEOUT_MS=5000 npm run phone
 
 安全境界は変えていません。Codex app-server は `127.0.0.1` のまま、browser 操作は token-protected bridge を通り、terminal 操作 UI も認証なしの任意 shell 実行口を追加しません。
 
+### モバイル terminal compact layout
+
+スマホ幅の terminal view では、Chat / Term 切替を header 内の小さな segmented control にまとめ、pathbar、toolbar、Text / Keys、status、quick actions、composer を compact 表示にします。通常の Safari tab でも terminal 表示領域を優先し、`Focus` / `Max` では pathbar、quick actions、artifact panel などを隠してさらに広く使えます。
+
+terminal toolbar は普段は `Filter / All / Search / Auto / ...` の 1 行だけを表示します。`...` から filter、search、wrap、auto-scroll、表示クリア、表示コピー、文字サイズ、Max、QuickBar pin を開けます。`Clear visible` はこの端末の表示だけを消し、server history は削除しません。`Copy visible` は既存の token masking を通した表示ログだけをコピーします。
+
+`Text` / `Keys` は入力欄左下の小さなボタンに統合されています。QuickBar は terminal view で入力欄 focus 中、Keys mode 中、または QuickBar pin 中だけ表示されます。`Ctrl+C` は確認付きで、`$` は raw shell 実行ではなく安全な実行依頼テンプレートを挿入します。
+
+`?debugViewport=1` を付けると、terminal body、visual viewport、composer、header、pathbar、toolbar、display mode、manifest/token 状態を小さく表示できます。
+
+### PWA / ホーム画面に追加
+
+`site.webmanifest`、touch icon、standalone detection に対応しています。PWA は表示領域を増やす補助であり、通常 Safari tab でも compact layout は有効です。環境により LAN HTTP では PWA 化が制限されることがあります。
+
+manifest の `start_url` には token を入れません。ホーム画面から起動して token が見つからない場合は、bridge が表示した token 付き URL で開き直してください。token 付き URL は公開 issue、共有チャット、スクリーンショット、配信に載せないでください。
+
+Service Worker は既定では登録しません。過去の stale Service Worker が同一 scope に残っている場合だけ best-effort で unregister / cache cleanup を試みます。将来 Service Worker を有効化する場合も、`/api/*`、raw file、uploads、artifacts、terminal history、approval payload を cache しない方針を守ってください。
+
 ## 🖼️ UI Evidence
 
 Desktop-like layout:
