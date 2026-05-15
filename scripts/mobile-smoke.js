@@ -225,9 +225,17 @@ async function run() {
     await page.waitForTimeout(200);
     const composerFit = await page.evaluate(() => {
       const rect = document.querySelector("#composer").getBoundingClientRect();
-      return { bottom: Math.round(rect.bottom), viewport: Math.round(window.innerHeight), gapAbove: Math.round(rect.top) };
+      const style = getComputedStyle(document.querySelector("#composer"));
+      return {
+        bottom: Math.round(rect.bottom),
+        viewport: Math.round(window.innerHeight),
+        gapAbove: Math.round(rect.top),
+        gapBelow: Math.round(window.innerHeight - rect.bottom),
+        position: style.position,
+      };
     });
     check("composer stays within the viewport when focused", composerFit.bottom <= composerFit.viewport + 2, JSON.stringify(composerFit));
+    check("focused composer is fixed to the viewport bottom", composerFit.position === "fixed" && composerFit.gapBelow <= 8, JSON.stringify(composerFit));
     if (wantShots) await page.screenshot({ path: path.join(shotsDir, "composer-focus.png") });
 
     // Issue 1: browser Safari reports a smaller visualViewport while keeping a

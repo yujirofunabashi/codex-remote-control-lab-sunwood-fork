@@ -3498,9 +3498,6 @@ function keepComposerVisible() {
   if (!window.matchMedia("(max-width: 820px)").matches) return;
   setSidebarVisible(false);
   closeRightPanel();
-  if (!isStandaloneDisplayMode()) return;
-  requestAnimationFrame(() => composer.scrollIntoView({ block: "nearest", inline: "nearest" }));
-  window.setTimeout(() => composer.scrollIntoView({ block: "nearest", inline: "nearest" }), 250);
 }
 
 function openPromptModal() {

@@ -4759,12 +4759,25 @@ body[data-main-view="terminal"] .pwa-install-hint {
     border-radius: 18px;
   }
 
-  /* .workspace already tracks --visual-viewport-height, so the conversation is
-     bounded to the area above the keyboard. Adding padding-bottom here (or extra
-     workspace-strip margin) double-counted the keyboard and opened a large empty
-     gap above the composer. The composer now sits directly above the keyboard. */
-  body.keyboard-open .composer {
-    margin-bottom: 4px;
+  body.composer-focused .app-shell,
+  body.composer-focused .workspace {
+    height: 100vh;
+    height: 100lvh;
+  }
+
+  body.composer-focused .log {
+    padding-bottom: 150px;
+  }
+
+  body.composer-focused .composer {
+    position: fixed;
+    z-index: 36;
+    right: 9px;
+    bottom: max(4px, env(safe-area-inset-bottom));
+    left: 9px;
+    width: auto;
+    max-width: none;
+    margin: 0;
   }
 
   .run-state {
