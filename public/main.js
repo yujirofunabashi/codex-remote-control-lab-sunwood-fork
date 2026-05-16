@@ -2480,7 +2480,29 @@ function normalizeThreadRecord(thread, provider) {
     provider: nextProvider,
     updatedAt,
     createdAt,
+    displayTitle: thread.displayTitle || "",
   };
+}
+
+function sameThreadRecord(a = {}, b = {}) {
+  return (
+    String(a.id || "") === String(b.id || "") &&
+    normalizeProviderName(a.provider) === normalizeProviderName(b.provider)
+  );
+}
+
+function upsertThreadRecord(thread, provider = currentThreadProvider()) {
+  if (!thread?.id) return null;
+  const normalized = normalizeThreadRecord(thread, provider);
+  const existingIndex = threadCache.findIndex((item) => sameThreadRecord(item, normalized));
+  if (existingIndex >= 0) {
+    threadCache = threadCache.map((item, index) => (index === existingIndex ? { ...item, ...normalized } : item));
+  } else {
+    threadCache = [normalized, ...threadCache];
+  }
+  const state = getBridgeState(activeBridgeId);
+  state.threadCache = threadCache;
+  return normalized;
 }
 
 function visibleThreadGroups() {
@@ -2489,13 +2511,24 @@ function visibleThreadGroups() {
   for (const thread of sortThreadsForInbox(threadCache)) {
     const project = projectForThread(thread);
     const title = titleForThread(thread);
+    const selected = thread.id === selectedThread;
     const matches = !query || project.toLowerCase().includes(query) || title.toLowerCase().includes(query);
     if (!matches) continue;
-    if (!threadMatchesInboxFilter(thread)) continue;
+    if (!selected && !threadMatchesInboxFilter(thread)) continue;
     if (!groups.has(project)) groups.set(project, []);
     groups.get(project).push(thread);
   }
   return groups;
+}
+
+function limitedVisibleThreads(threads, limit = 6) {
+  const visible = threads.slice(0, limit);
+  if (!selectedThread || visible.some((thread) => thread.id === selectedThread)) return visible;
+  const selected = threads.find((thread) => thread.id === selectedThread);
+  if (!selected) return visible;
+  if (visible.length >= limit) visible[visible.length - 1] = selected;
+  else visible.push(selected);
+  return visible;
 }
 
 function visibleThreadsInListOrder() {
@@ -2503,7 +2536,7 @@ function visibleThreadsInListOrder() {
   const baseKey = currentThreadWorkspaceKey();
   for (const groupThreads of visibleThreadGroups().values()) {
     const scopedThreads = groupThreads.filter((thread) => isSameCurrentWorkspaceThread(thread, baseKey));
-    threads.push(...scopedThreads.slice(0, 6));
+    threads.push(...limitedVisibleThreads(scopedThreads, 6));
   }
   return threads;
 }
@@ -2534,7 +2567,7 @@ function renderThreadList() {
     heading.append(folder, name);
     group.appendChild(heading);
 
-    const visibleThreads = threads.slice(0, 6);
+    const visibleThreads = limitedVisibleThreads(threads, 6);
     for (const thread of visibleThreads) {
       const item = document.createElement("div");
       item.className = thread.id === selectedThread ? "thread-item active" : "thread-item";
@@ -5165,6 +5198,18 @@ function connect({ preserveHistory = false, freshThread = false } = {}) {
         gitBranch: msg.gitBranch || msg.run?.gitBranch,
       });
       const state = getBridgeState(bridgeId);
+      upsertThreadRecord(
+        msg.thread || {
+          id: msg.threadId,
+          name: msg.threadTitle || "",
+          displayTitle: msg.threadTitle || "",
+          preview: msg.threadTitle || "",
+          provider: msg.provider || activeProvider,
+          cwd: msg.workdir,
+          updatedAt: msg.run?.updatedAt || Date.now(),
+        },
+        msg.provider || activeProvider,
+      );
       state.selectedThread = msg.threadId || selectedThread;
       state.currentWorkspace = { ...currentWorkspace };
       state.activeProvider = msg.provider || activeProvider;

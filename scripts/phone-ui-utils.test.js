@@ -69,6 +69,7 @@ test("thread timestamp helpers parse ISO, seconds, and millisecond fields", () =
 
 test("threadDisplayTitle provides one title source for inbox and selected thread header", () => {
   const opaqueId = "123e4567-e89b-12d3-a456-426614174000";
+  assert.equal(threadDisplayTitle({ id: "t0", displayTitle: "Live ready title", name: "Stale list title" }), "Live ready title");
   assert.equal(threadDisplayTitle({ id: "t1", name: "Readable title", preview: "Prompt text" }), "Readable title");
   assert.equal(threadDisplayTitle({ id: "t2", preview: "First line\nsecond line" }), "First line");
   assert.equal(threadDisplayTitle({ id: opaqueId, name: opaqueId }), "名前未設定のチャット");

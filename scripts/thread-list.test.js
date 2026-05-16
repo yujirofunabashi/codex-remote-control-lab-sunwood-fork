@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { mergeThreadListData, threadListTimestamp } = require("./start-phone");
+const { mergeThreadListData, threadListTimestamp, threadRecordForBridge } = require("./start-phone");
 
 test("mergeThreadListData includes live local Codex threads missing from remote list", () => {
   const remote = [{ id: "remote-1", name: "Remote thread", updatedAt: 1000, provider: "codex" }];
@@ -34,6 +34,29 @@ test("mergeThreadListData keeps remote updatedAt when a local bridge was only re
 
   assert.equal(merged.length, 1);
   assert.equal(merged[0].updatedAt, 1000);
+});
+
+test("threadRecordForBridge gives ready payload and local list the same display title", () => {
+  const bridge = {
+    threadId: "thread-1",
+    provider: "codex",
+    createdAt: 1_700_000_000_000,
+    listUpdatedAt: 1_700_000_001_000,
+    runState: { state: "done", updatedAt: 1_700_000_000_500 },
+    history: [
+      { type: "user", text: "First prompt" },
+      { type: "assistant", text: "Done" },
+      { type: "user", text: "Current visible title\nwith detail" },
+    ],
+  };
+
+  const record = threadRecordForBridge(bridge);
+
+  assert.equal(record.id, "thread-1");
+  assert.equal(record.name, "Current visible title");
+  assert.equal(record.displayTitle, "Current visible title");
+  assert.equal(record.preview, "Current visible title\nwith detail");
+  assert.equal(record.updatedAt, 1_700_000_001_000);
 });
 
 test("threadListTimestamp accepts numeric and ISO timestamp fields", () => {

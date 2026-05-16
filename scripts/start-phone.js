@@ -2153,9 +2153,12 @@ class SharedBridge {
   }
 
   readyPayload() {
+    const thread = threadRecordForBridge(this);
     return {
       provider: this.provider,
       threadId: this.threadId,
+      threadTitle: thread?.displayTitle || thread?.name || "",
+      thread,
       model: this.model,
       workdir,
       ...currentWorkspaceMeta(),
@@ -2817,9 +2820,12 @@ class ClaudeBridge {
   }
 
   readyPayload() {
+    const thread = threadRecordForBridge(this);
     return {
       provider: this.provider,
       threadId: this.threadId,
+      threadTitle: thread?.displayTitle || thread?.name || "",
+      thread,
       model: this.model,
       workdir,
       ...currentWorkspaceMeta(),
@@ -3385,25 +3391,7 @@ function localThreadList(provider = "") {
   return Array.from(bridges.values())
     .filter((bridge) => !requestedProvider || bridge.provider === requestedProvider)
     .filter((bridge) => bridge.threadId)
-    .map((bridge) => {
-      const userEntry = [...bridge.history].reverse().find((entry) => entry.type === "user");
-      const preview = userEntry?.text || bridge.threadId;
-      const localActivityAt = threadListTimestamp({ updatedAt: bridge.listUpdatedAt || 0 });
-      const updatedAt = localActivityAt || threadListTimestamp({ updatedAt: bridge.runState?.updatedAt || bridge.createdAt || 0 });
-      return {
-        id: bridge.threadId,
-        name: preview.split("\n").find(Boolean) || bridge.threadId,
-        preview,
-        cwd: workdir,
-        provider: bridge.provider || agentProvider,
-        updatedAt,
-        updated_at: updatedAt,
-        createdAt: bridge.createdAt || updatedAt,
-        created_at: bridge.createdAt || updatedAt,
-        localActivityAt,
-        runState: bridge.runState?.state || "",
-      };
-    });
+    .map((bridge) => threadRecordForBridge(bridge));
 }
 
 function timestampValueMs(value, unit = "auto") {
@@ -3443,6 +3431,29 @@ function copyThreadTimeFields(target, source, fields) {
     if (source && source[field] !== undefined && source[field] !== null && source[field] !== "") target[field] = source[field];
     else delete target[field];
   }
+}
+
+function threadRecordForBridge(bridge = {}) {
+  if (!bridge.threadId) return null;
+  const userEntry = [...(bridge.history || [])].reverse().find((entry) => entry.type === "user");
+  const preview = userEntry?.text || bridge.threadId;
+  const title = preview.split("\n").find(Boolean) || bridge.threadId;
+  const localActivityAt = threadListTimestamp({ updatedAt: bridge.listUpdatedAt || 0 });
+  const updatedAt = localActivityAt || threadListTimestamp({ updatedAt: bridge.runState?.updatedAt || bridge.createdAt || 0 });
+  return {
+    id: bridge.threadId,
+    name: title,
+    displayTitle: title,
+    preview,
+    cwd: workdir,
+    provider: bridge.provider || agentProvider,
+    updatedAt,
+    updated_at: updatedAt,
+    createdAt: bridge.createdAt || updatedAt,
+    created_at: bridge.createdAt || updatedAt,
+    localActivityAt,
+    runState: bridge.runState?.state || "",
+  };
 }
 
 function mergeThreadListData(remoteThreads = [], localThreads = []) {
@@ -4024,6 +4035,7 @@ module.exports = {
   mergeThreadListData,
   requestTokenFromHeaders,
   safeProxyBasePath,
+  threadRecordForBridge,
   threadListTimestamp,
   tokenMetadata,
 };
