@@ -485,6 +485,7 @@ function bridgeInfoPayload() {
     version: readPackageVersion(),
     startedAt: bridgeStartedAt,
     uiPort,
+    hostName: os.hostname(),
     workdir,
     cwd: workdir,
     repoRoot,

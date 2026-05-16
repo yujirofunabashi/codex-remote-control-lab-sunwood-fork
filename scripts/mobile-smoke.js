@@ -79,6 +79,7 @@ async function mockApi(page, origin) {
       return route.fulfill({
         json: {
           label: "Home bridge",
+          hostName: "mini-smoke",
           provider: "codex",
           repoRoot: root,
           cwd: root,
@@ -118,6 +119,7 @@ async function mockApi(page, origin) {
           uiPort: 45214,
           codexUrl: "ws://127.0.0.1:45213",
           historySyncEnabled: true,
+          health: { hostName: "mini-smoke" },
           workdir: root,
           repoName: "codex-remote-control-lab",
           gitBranch: "feature/mobile-terminal-compact",
@@ -528,9 +530,41 @@ async function run() {
     check("terminal view hides the chat composer", terminalCompactState.composerDisplay === "none", JSON.stringify(terminalCompactState));
     check(
       "terminal view does not show chat status logs before manual commands",
-      !terminalCompactState.transcriptText.includes("前回完了") && terminalCompactState.transcriptText.includes("Terminalで実行したコマンド"),
+      !terminalCompactState.transcriptText.includes("前回完了") && /@\S+\s+\S+\s+%/.test(terminalCompactState.transcriptText),
       JSON.stringify(terminalCompactState),
     );
+    const terminalKeyboardLayout = await page.evaluate(() => {
+      const keyboard = 336;
+      const visible = window.innerHeight - keyboard;
+      document.querySelector("#terminalCommandInput")?.focus();
+      document.documentElement.style.setProperty("--visual-viewport-height", `${visible}px`);
+      document.documentElement.style.setProperty("--app-viewport-height", `${visible}px`);
+      document.documentElement.style.setProperty("--keyboard-inset", `${keyboard}px`);
+      document.body.classList.add("keyboard-open", "terminal-command-focused");
+      window.scrollTo(0, 0);
+      const shell = document.querySelector(".app-shell").getBoundingClientRect();
+      const terminal = document.querySelector("#mainTerminalView").getBoundingClientRect();
+      const form = document.querySelector("#terminalCommandForm").getBoundingClientRect();
+      return {
+        visible,
+        shellBottom: Math.round(shell.bottom),
+        terminalBottom: Math.round(terminal.bottom),
+        formBottom: Math.round(form.bottom),
+        gapBelowTerminal: Math.round(visible - terminal.bottom),
+        gapBelowForm: Math.round(visible - form.bottom),
+      };
+    });
+    check(
+      "terminal command input stays attached above the keyboard",
+      terminalKeyboardLayout.formBottom <= terminalKeyboardLayout.visible + 2 && Math.abs(terminalKeyboardLayout.gapBelowTerminal) <= 8,
+      JSON.stringify(terminalKeyboardLayout),
+    );
+    await page.evaluate(() => {
+      document.body.classList.remove("keyboard-open", "terminal-command-focused");
+      document.documentElement.style.setProperty("--app-viewport-height", `${window.innerHeight}px`);
+      document.documentElement.style.setProperty("--visual-viewport-height", `${window.innerHeight}px`);
+      document.documentElement.style.setProperty("--keyboard-inset", "0px");
+    });
     await page.locator("#terminalCommandInput").fill("pwd");
     await page.locator("#terminalCommandRun").click();
     await page.waitForTimeout(220);

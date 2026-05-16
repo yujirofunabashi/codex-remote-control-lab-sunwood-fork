@@ -281,13 +281,17 @@ function setupVisualViewportVars() {
           ? Math.max(0, Math.round(window.innerHeight - window.visualViewport.height - window.visualViewport.offsetTop))
           : 0,
       };
-  const keyboardOpen = (vars.keyboardInset || 0) > 80 && (promptInputFocused || isEditableElementFocused());
-  const appViewportHeight = uiUtils.effectiveAppViewportHeight
-    ? uiUtils.effectiveAppViewportHeight(window, {
-        viewportVars: { ...vars, keyboardInset: keyboardOpen ? vars.keyboardInset : 0 },
-        standalone: isStandaloneDisplayMode(),
-      })
-    : Math.round((keyboardOpen && window.innerHeight) || vars.visualViewportHeight || window.innerHeight || 0);
+  const terminalInputFocused = document.activeElement === terminalCommandInput && mainViewMode === "terminal";
+  const keyboardOpen = (vars.keyboardInset || 0) > 80 && (promptInputFocused || terminalInputFocused || isEditableElementFocused());
+  const useVisualViewportForTerminal = keyboardOpen && terminalInputFocused && vars.visualViewportHeight;
+  const appViewportHeight = useVisualViewportForTerminal
+    ? Math.round(vars.visualViewportHeight)
+    : uiUtils.effectiveAppViewportHeight
+      ? uiUtils.effectiveAppViewportHeight(window, {
+          viewportVars: { ...vars, keyboardInset: keyboardOpen ? vars.keyboardInset : 0 },
+          standalone: isStandaloneDisplayMode(),
+        })
+      : Math.round((keyboardOpen && window.innerHeight) || vars.visualViewportHeight || window.innerHeight || 0);
   if (vars.visualViewportHeight) {
     document.documentElement.style.setProperty("--visual-viewport-height", `${vars.visualViewportHeight}px`);
   }
@@ -297,7 +301,9 @@ function setupVisualViewportVars() {
   document.documentElement.style.setProperty("--visual-viewport-offset-top", `${vars.visualViewportOffsetTop || 0}px`);
   document.documentElement.style.setProperty("--keyboard-inset", `${vars.keyboardInset || 0}px`);
   document.body.classList.toggle("keyboard-open", keyboardOpen);
+  document.body.classList.toggle("terminal-command-focused", terminalInputFocused);
   if (document.activeElement === promptInput) keepComposerVisible();
+  if (terminalInputFocused) window.requestAnimationFrame(() => window.scrollTo(0, 0));
   measureTerminalLayout();
 }
 
@@ -752,6 +758,7 @@ const currentWorkspace = {
   workspaceLocation: "",
   gitBranch: "",
 };
+let currentHostName = "";
 let currentRunState = "connecting";
 let interruptRequestPending = false;
 let accessMode = {
@@ -2021,6 +2028,8 @@ function setWorkspaceMeta(meta = {}) {
     currentWorkspace.workspaceLocation = String(meta.workspaceLocation || "").trim();
   }
   if (Object.prototype.hasOwnProperty.call(meta, "gitBranch")) currentWorkspace.gitBranch = String(meta.gitBranch || "").trim();
+  if (Object.prototype.hasOwnProperty.call(meta, "hostName")) currentHostName = String(meta.hostName || "").trim();
+  if (!currentHostName && meta.health?.hostName) currentHostName = String(meta.health.hostName || "").trim();
 
   const repo = currentWorkspace.repoName;
   const location = currentWorkspace.workspaceLocation;
@@ -2040,6 +2049,7 @@ function setWorkspaceMeta(meta = {}) {
     applyCurrentThreadAccent();
     activeDraftKey = currentThreadColorKey();
   }
+  if (mainViewMode === "terminal") renderTerminalTranscript();
 }
 
 function setReady(ready) {
@@ -2209,6 +2219,41 @@ function terminalFilterLabel(filter = terminalFilterMode) {
   return labels[filter] || "状態";
 }
 
+function terminalUserName() {
+  const cwd = currentWorkspaceWorkdir() || currentWorkspace.workspaceLocation || "";
+  const match = String(cwd).replace(/\\/g, "/").match(/^\/Users\/([^/]+)/);
+  return match?.[1] || "user";
+}
+
+function terminalHostLabel() {
+  return (currentHostName || location.hostname || "host").replace(/\.local$/i, "");
+}
+
+function terminalCwdLabel() {
+  const cwd = currentWorkspaceWorkdir() || currentWorkspace.workspaceLocation || "";
+  const repo = currentWorkspace.repoName || basenameFromPath(cwd) || "~";
+  if (!cwd || cwd === ".") return repo;
+  const normalized = String(cwd).replace(/\\/g, "/");
+  const user = terminalUserName();
+  if (normalized === `/Users/${user}`) return "~";
+  if (normalized.startsWith(`/Users/${user}/`)) return `~/${compactWorkspaceLocation(normalized.slice(`/Users/${user}/`.length))}`;
+  if (!normalized.startsWith("/")) return repo && normalized === "." ? repo : normalized;
+  return compactWorkspaceLocation(normalized);
+}
+
+function renderTerminalPromptLine() {
+  const row = document.createElement("div");
+  row.className = "terminal-prompt-line";
+  const label = document.createElement("span");
+  label.className = "terminal-prompt-label";
+  label.textContent = `${terminalUserName()}@${terminalHostLabel()} ${terminalCwdLabel()} %`;
+  const cursor = document.createElement("span");
+  cursor.className = "terminal-prompt-cursor";
+  cursor.setAttribute("aria-hidden", "true");
+  row.append(label, cursor);
+  return row;
+}
+
 function toggleTerminalToolsSheet(open) {
   if (!terminalToolsSheet) return;
   const willOpen = open ?? terminalToolsSheet.classList.contains("hidden");
@@ -2292,10 +2337,14 @@ function renderTerminalTranscript() {
     terminalCompactSearchCount.textContent = query ? `${entries.length}/${surfaceEntries.length}` : String(surfaceEntries.length);
   }
   if (!entries.length) {
-    const empty = document.createElement("div");
-    empty.className = "terminal-empty";
-    empty.textContent = query ? "検索条件に一致する出力はありません。" : "Terminalで実行したコマンドはまだありません。";
-    terminalTranscript.appendChild(empty);
+    if (query) {
+      const empty = document.createElement("div");
+      empty.className = "terminal-empty";
+      empty.textContent = "検索条件に一致する出力はありません。";
+      terminalTranscript.appendChild(empty);
+    } else {
+      terminalTranscript.appendChild(renderTerminalPromptLine());
+    }
     return;
   }
   terminalSearchIndex = Math.min(Math.max(0, terminalSearchIndex), Math.max(0, entries.length - 1));
@@ -2329,6 +2378,7 @@ function renderTerminalTranscript() {
     }
     terminalTranscript.appendChild(row);
   }
+  if (!query) terminalTranscript.appendChild(renderTerminalPromptLine());
   if (terminalAutoScroll) terminalTranscript.scrollTop = terminalTranscript.scrollHeight;
   updateTerminalLatestButton();
 }
@@ -5902,6 +5952,16 @@ promptInput.addEventListener("click", keepComposerVisible);
 promptInput.addEventListener("input", () => {
   autoGrowPrompt();
   saveDraftForActiveThread();
+});
+terminalCommandInput?.addEventListener("focus", () => {
+  setupVisualViewportVars();
+  window.setTimeout(() => {
+    window.scrollTo(0, 0);
+    setupVisualViewportVars();
+  }, 80);
+});
+terminalCommandInput?.addEventListener("blur", () => {
+  window.setTimeout(setupVisualViewportVars, 80);
 });
 promptInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {

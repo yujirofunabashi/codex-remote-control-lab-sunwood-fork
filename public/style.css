@@ -2235,6 +2235,27 @@ body.terminal-focus-mode .composer-footer {
   background: rgba(255, 255, 255, 0.07);
 }
 
+.terminal-prompt-line {
+  display: block;
+  min-width: 0;
+  padding: 3px 0 8px;
+  color: color-mix(in srgb, var(--terminal-fg) 88%, transparent);
+}
+
+.terminal-prompt-label {
+  overflow-wrap: anywhere;
+}
+
+.terminal-prompt-cursor {
+  display: inline-block;
+  width: 9px;
+  height: 1.25em;
+  margin-left: 8px;
+  border: 1px solid color-mix(in srgb, var(--terminal-fg) 72%, transparent);
+  background: color-mix(in srgb, var(--terminal-fg) 10%, transparent);
+  vertical-align: text-bottom;
+}
+
 .terminal-message,
 .terminal-detail {
   min-width: 0;
