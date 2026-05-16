@@ -2127,6 +2127,59 @@ body.terminal-focus-mode .composer-footer {
   -webkit-overflow-scrolling: touch;
 }
 
+.terminal-command-form {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  border-top: 1px solid var(--terminal-border);
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.terminal-command-prompt {
+  color: color-mix(in srgb, var(--thread-accent) 82%, #ffffff);
+  font-weight: 850;
+}
+
+.terminal-command-form input {
+  min-width: 0;
+  height: 36px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 10px;
+  padding: 0 10px;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--terminal-fg);
+  outline: 0;
+  font: inherit;
+}
+
+.terminal-command-form input:focus {
+  border-color: color-mix(in srgb, var(--thread-accent) 62%, rgba(255, 255, 255, 0.16));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--thread-accent) 20%, transparent);
+}
+
+.terminal-command-form input::placeholder {
+  color: var(--terminal-muted);
+}
+
+.terminal-command-form button {
+  min-height: 36px;
+  border: 1px solid color-mix(in srgb, var(--thread-accent) 52%, rgba(255, 255, 255, 0.16));
+  border-radius: 10px;
+  padding: 0 13px;
+  background: color-mix(in srgb, var(--thread-accent) 28%, rgba(255, 255, 255, 0.07));
+  color: #ffffff;
+  font-weight: 820;
+}
+
+.terminal-command-form button:disabled,
+.terminal-command-form input:disabled {
+  cursor: default;
+  opacity: 0.58;
+}
+
 .terminal-empty {
   color: var(--terminal-muted);
 }
@@ -5881,7 +5934,23 @@ body[data-main-view="terminal"] .pwa-install-hint {
   }
 
   body[data-main-view="terminal"] .terminal-transcript {
-    padding: 8px 9px 12px;
+    padding: 8px 9px 10px;
+  }
+
+  body[data-main-view="terminal"] .terminal-command-form {
+    gap: 6px;
+    padding: 7px 8px;
+  }
+
+  body[data-main-view="terminal"] .terminal-command-form input {
+    height: 34px;
+    font-size: 12px;
+  }
+
+  body[data-main-view="terminal"] .terminal-command-form button {
+    min-height: 34px;
+    padding-inline: 11px;
+    font-size: 12px;
   }
 
   body[data-main-view="terminal"] .composer {

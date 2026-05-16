@@ -108,7 +108,7 @@
                 <span aria-hidden="true">□</span><span>チャット</span><span id="chatUnreadBadge" class="view-unread-badge hidden"></span>
               </button>
               <button type="button" id="terminalViewButton" class="main-view-button" data-main-view="terminal" aria-pressed="false" aria-selected="false">
-                <span aria-hidden="true">&gt;_</span><span>ログ</span><span id="terminalUnreadBadge" class="view-unread-badge hidden"></span>
+                <span aria-hidden="true">&gt;_</span><span>Terminal</span><span id="terminalUnreadBadge" class="view-unread-badge hidden"></span>
               </button>
             </div>
             <div id="swipeFeedback" class="swipe-feedback hidden" aria-live="polite"></div>
@@ -189,18 +189,18 @@
           <section class="conversation" aria-label="会話">
             <section id="globalApprovalBanner" class="global-approval-banner hidden" aria-live="polite"></section>
             <div id="log" class="log" aria-live="polite"></div>
-            <section id="mainTerminalView" class="terminal-view hidden" aria-label="実行ログ">
+            <section id="mainTerminalView" class="terminal-view hidden" aria-label="Terminal">
               <header class="terminal-card-header">
                 <div class="terminal-identity">
                   <span class="terminal-status-dot" aria-hidden="true"></span>
                   <div>
-                    <strong id="terminalStatusTitle">実行ログ</strong>
+                    <strong id="terminalStatusTitle">Terminal</strong>
                     <small id="terminalSessionMeta">接続準備中</small>
                   </div>
                 </div>
                 <div class="terminal-card-actions">
-                  <button type="button" id="terminalFocusButton" class="terminal-icon-tool" aria-label="ログを拡大表示">拡大</button>
-                  <div class="terminal-font-controls" aria-label="ログ文字サイズ">
+                  <button type="button" id="terminalFocusButton" class="terminal-icon-tool" aria-label="Terminalを拡大表示">拡大</button>
+                  <div class="terminal-font-controls" aria-label="Terminal文字サイズ">
                     <span>文字</span>
                     <button type="button" id="terminalFontDown" aria-label="文字サイズを小さく">A-</button>
                     <button type="button" id="terminalFontReset" aria-label="文字サイズを標準に">A</button>
@@ -208,7 +208,7 @@
                   </div>
                 </div>
               </header>
-              <div class="terminal-toolbar" aria-label="実行ログ操作">
+              <div class="terminal-toolbar" aria-label="Terminal操作">
                 <div class="terminal-toolbar-compact">
                   <button type="button" id="terminalFilterSheetButton" class="terminal-compact-tool" aria-haspopup="dialog" aria-expanded="false">絞り込み</button>
                   <button type="button" id="terminalCurrentFilterPill" class="terminal-current-filter" aria-haspopup="dialog">すべて</button>
@@ -217,14 +217,14 @@
                     <span id="terminalCompactSearchCount">0</span>
                   </button>
                   <button type="button" id="terminalAutoScrollMini" class="terminal-compact-tool active" aria-pressed="true">自動</button>
-                  <button type="button" id="terminalToolsButton" class="terminal-compact-tool terminal-tools-more" aria-label="ログ表示設定を開く" aria-haspopup="dialog" aria-expanded="false">⋯</button>
+                  <button type="button" id="terminalToolsButton" class="terminal-compact-tool terminal-tools-more" aria-label="Terminal表示設定を開く" aria-haspopup="dialog" aria-expanded="false">⋯</button>
                 </div>
-                <div id="terminalToolsSheet" class="terminal-tools-sheet hidden" role="dialog" aria-modal="false" aria-label="ログ表示設定">
+                <div id="terminalToolsSheet" class="terminal-tools-sheet hidden" role="dialog" aria-modal="false" aria-label="Terminal表示設定">
                   <header class="terminal-tools-sheet-header">
-                    <strong>ログ表示設定</strong>
-                    <button type="button" id="terminalToolsClose" aria-label="ログ表示設定を閉じる">×</button>
+                    <strong>Terminal表示設定</strong>
+                    <button type="button" id="terminalToolsClose" aria-label="Terminal表示設定を閉じる">×</button>
                   </header>
-                  <select id="terminalFilter" class="terminal-filter hidden" aria-label="実行ログの絞り込み">
+                  <select id="terminalFilter" class="terminal-filter hidden" aria-label="Terminalの絞り込み">
                     <option value="all">すべて</option>
                     <option value="command">コマンド</option>
                     <option value="file">ファイル</option>
@@ -232,7 +232,7 @@
                     <option value="error">エラー</option>
                     <option value="approval">承認</option>
                   </select>
-                  <div class="terminal-filter-chips" role="toolbar" aria-label="実行ログの絞り込み">
+                  <div class="terminal-filter-chips" role="toolbar" aria-label="Terminalの絞り込み">
                     <button type="button" class="terminal-filter-chip active" data-terminal-filter="all" aria-pressed="true">すべて</button>
                     <button type="button" class="terminal-filter-chip" data-terminal-filter="command" aria-pressed="false">コマンド</button>
                     <button type="button" class="terminal-filter-chip" data-terminal-filter="file" aria-pressed="false">ファイル</button>
@@ -241,32 +241,37 @@
                     <button type="button" class="terminal-filter-chip" data-terminal-filter="approval" aria-pressed="false">承認</button>
                   </div>
                   <div class="terminal-search">
-                    <input id="terminalSearchInput" type="search" placeholder="検索" aria-label="実行ログを検索" />
+                    <input id="terminalSearchInput" type="search" placeholder="検索" aria-label="Terminalを検索" />
                     <span id="terminalSearchCount">0</span>
                     <button type="button" id="terminalSearchPrev" aria-label="前の一致">↑</button>
                     <button type="button" id="terminalSearchNext" aria-label="次の一致">↓</button>
                   </div>
-                  <div class="terminal-sheet-actions" role="toolbar" aria-label="ログ表示設定">
+                  <div class="terminal-sheet-actions" role="toolbar" aria-label="Terminal表示設定">
                     <button type="button" id="terminalWrapToggle" class="terminal-tool active" aria-pressed="true">折り返し</button>
                     <button type="button" id="terminalAutoScroll" class="terminal-tool active" aria-pressed="true">自動スクロール</button>
                     <button type="button" id="terminalClear" class="terminal-tool" title="この端末の表示だけを消す">表示を消す</button>
                     <button type="button" id="terminalCopy" class="terminal-tool">表示をコピー</button>
                   </div>
-                  <div class="terminal-sheet-actions" role="toolbar" aria-label="ログ詳細設定">
+                  <div class="terminal-sheet-actions" role="toolbar" aria-label="Terminal詳細設定">
                     <button type="button" class="terminal-tool" data-terminal-font="down">A-</button>
                     <button type="button" class="terminal-tool" data-terminal-font="reset">A</button>
                     <button type="button" class="terminal-tool" data-terminal-font="up">A+</button>
                     <button type="button" id="terminalMaxSheetButton" class="terminal-tool">最大化</button>
                     <button type="button" id="terminalQuickbarPin" class="terminal-tool" aria-pressed="false">クイック操作</button>
                   </div>
-                  <p class="terminal-tools-note">表示を消す操作はこの端末だけに反映されます。コピーは伏せ字処理後の表示ログだけをコピーします。</p>
+                  <p class="terminal-tools-note">表示を消す操作はこの端末だけに反映されます。コピーは伏せ字処理後のTerminal表示だけをコピーします。</p>
                 </div>
               </div>
               <div id="terminalTranscript" class="terminal-transcript" role="log" aria-live="off" aria-relevant="additions text"></div>
+              <form id="terminalCommandForm" class="terminal-command-form" aria-label="Terminal command">
+                <span class="terminal-command-prompt" aria-hidden="true">$</span>
+                <input id="terminalCommandInput" type="text" inputmode="text" autocomplete="off" spellcheck="false" placeholder="コマンドを入力" aria-label="実行するコマンド" />
+                <button type="submit" id="terminalCommandRun">実行</button>
+              </form>
               <button type="button" id="terminalLatestButton" class="terminal-latest-button hidden">最新へ</button>
             </section>
-            <div id="terminalOps" class="terminal-ops hidden" aria-label="ログ操作">
-              <div class="terminal-mode-toggle" role="group" aria-label="ログ入力モード">
+            <div id="terminalOps" class="terminal-ops hidden" aria-label="Terminal補助操作">
+              <div class="terminal-mode-toggle" role="group" aria-label="Terminal入力モード">
                 <button type="button" id="terminalTextMode" class="active" aria-pressed="true">文章</button>
                 <button type="button" id="terminalKeysMode" aria-pressed="false">キー操作</button>
               </div>
