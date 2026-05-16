@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { bridgeKeyForRequest, shouldDisposeIdleBridge, shouldPromoteBridgeKey } = require("./bridge-state");
+const { bridgeKeyForRequest, bridgeMatchesWorkdir, shouldDisposeIdleBridge, shouldPromoteBridgeKey, shouldReplaceBridgeForWorkdir } = require("./bridge-state");
 
 test("new thread bridge requests share the startup URL bridge", () => {
   assert.equal(bridgeKeyForRequest("", "a"), "new:shared");
@@ -30,4 +30,11 @@ test("new bridge keys promote to the real thread id once ready", () => {
   assert.equal(shouldPromoteBridgeKey({ bridgeKey: "new:a", threadId: "thread-123" }), true);
   assert.equal(shouldPromoteBridgeKey({ bridgeKey: "thread-123", threadId: "thread-123" }), false);
   assert.equal(shouldPromoteBridgeKey({ bridgeKey: "new:a", threadId: "" }), false);
+});
+
+test("workdir-aware bridge reuse rejects stale idle bridges", () => {
+  assert.equal(bridgeMatchesWorkdir({ bridgeWorkdir: "/tmp/app/", targetWorkdir: "/tmp/app" }), true);
+  assert.equal(bridgeMatchesWorkdir({ bridgeWorkdir: "/tmp/app", targetWorkdir: "/tmp/other" }), false);
+  assert.equal(shouldReplaceBridgeForWorkdir({ bridgeWorkdir: "/tmp/app", targetWorkdir: "/tmp/other", active: false }), true);
+  assert.equal(shouldReplaceBridgeForWorkdir({ bridgeWorkdir: "/tmp/app", targetWorkdir: "/tmp/other", active: true }), false);
 });

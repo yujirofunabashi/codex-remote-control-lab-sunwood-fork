@@ -101,6 +101,7 @@ test("compactWorkspacePath middle-truncates long mobile paths", () => {
 test("workspace helpers keep thread switching scoped to one worktree", () => {
   const base = workspaceKeyForThreadRecord({ cwd: "/Users/minijiro/work/app/" });
   assert.equal(base, "/Users/minijiro/work/app");
+  assert.equal(workspaceKeyForThreadRecord(null, "/Users/minijiro/work/app/"), "/Users/minijiro/work/app");
   assert.equal(sameWorkspaceThreadRecord({ cwd: "/Users/minijiro/work/app" }, base), true);
   assert.equal(sameWorkspaceThreadRecord({ cwd: "/Users/minijiro/work/other" }, base), false);
   assert.equal(sameWorkspaceThreadRecord({ id: "legacy-without-cwd" }, base), true);

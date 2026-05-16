@@ -40,6 +40,7 @@ test("threadRecordForBridge gives ready payload and local list the same display 
   const bridge = {
     threadId: "thread-1",
     provider: "codex",
+    workdir: "/tmp/other-repo",
     createdAt: 1_700_000_000_000,
     listUpdatedAt: 1_700_000_001_000,
     runState: { state: "done", updatedAt: 1_700_000_000_500 },
@@ -56,6 +57,7 @@ test("threadRecordForBridge gives ready payload and local list the same display 
   assert.equal(record.name, "Current visible title");
   assert.equal(record.displayTitle, "Current visible title");
   assert.equal(record.preview, "Current visible title\nwith detail");
+  assert.equal(record.cwd, "/tmp/other-repo");
   assert.equal(record.updatedAt, 1_700_000_001_000);
 });
 

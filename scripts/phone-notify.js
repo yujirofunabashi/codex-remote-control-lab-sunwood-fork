@@ -335,7 +335,7 @@ async function notifyEvent(event = {}, options = {}) {
   const dedupeKey = `${normalized.type}:${normalized.threadId || normalized.projectName || normalized.url || "global"}`;
   const now = Date.now();
   const lastSentAt = recentEventNotifications.get(dedupeKey) || 0;
-  if (dedupeMs && now - lastSentAt < dedupeMs) return [];
+  if (!options.force && dedupeMs && now - lastSentAt < dedupeMs) return [];
   recentEventNotifications.set(dedupeKey, now);
 
   const notification = {
