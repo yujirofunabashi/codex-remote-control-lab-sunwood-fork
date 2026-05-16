@@ -27,7 +27,9 @@ const {
   shouldShowQuickBar,
   sortThreadsForInbox,
   isStandaloneDisplayMode,
+  threadTimestamp,
   terminalCompactState,
+  timestampValueMs,
   effectiveAppViewportHeight,
   upsertBridgeRegistry,
   urlWithoutTokenParam,
@@ -48,6 +50,20 @@ test("safeJsonParse returns fallback for broken storage values", () => {
   assert.deepEqual(safeJsonParse("{broken", { ok: false }, { objectOnly: true }), { ok: false });
   assert.deepEqual(safeJsonParse("[1,2]", { ok: false }, { objectOnly: true }), { ok: false });
   assert.deepEqual(safeJsonParse('{"ok":true}', { ok: false }, { objectOnly: true }), { ok: true });
+});
+
+test("thread timestamp helpers parse ISO, seconds, and millisecond fields", () => {
+  const iso = "2026-05-16T00:00:00.000Z";
+  assert.equal(timestampValueMs(1_700_000_000), 1_700_000_000_000);
+  assert.equal(threadTimestamp({ updated_at_ms: 1234 }), 1234);
+  assert.equal(threadTimestamp({ updated_at: iso }), Date.parse(iso));
+  assert.deepEqual(
+    sortThreadsForInbox([
+      { id: "old", updated_at: "2026-05-15T00:00:00.000Z" },
+      { id: "new", updated_at: iso },
+    ]).map((thread) => thread.id),
+    ["new", "old"],
+  );
 });
 
 test("compactWorkspacePath middle-truncates long mobile paths", () => {

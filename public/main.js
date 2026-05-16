@@ -1370,7 +1370,8 @@ function isSameCurrentWorkspaceThread(thread, baseKey = currentThreadWorkspaceKe
 
 function formatRelativeTime(timestamp) {
   if (!timestamp) return "";
-  const ms = timestamp < 10_000_000_000 ? timestamp * 1000 : timestamp;
+  const ms = uiUtils.timestampValueMs ? uiUtils.timestampValueMs(timestamp) : timestamp < 10_000_000_000 ? timestamp * 1000 : timestamp;
+  if (!ms) return "";
   const diffSeconds = Math.max(0, Math.floor((Date.now() - ms) / 1000));
   const hours = Math.floor(diffSeconds / 3600);
   const days = Math.floor(diffSeconds / 86400);
@@ -2444,11 +2445,25 @@ function renderHistoryIfChanged(history = []) {
 
 function normalizeThreadRecord(thread, provider) {
   const nextProvider = normalizeProviderName(thread.provider) || normalizeProviderName(provider) || currentThreadProvider();
+  const updatedAt = uiUtils.threadTimestamp
+    ? uiUtils.threadTimestamp({
+        updatedAt: thread.updatedAt,
+        updated_at_ms: thread.updated_at_ms,
+        updated_at: thread.updated_at,
+      })
+    : thread.updatedAt || thread.updated_at || thread.updated_at_ms;
+  const createdAt = uiUtils.threadTimestamp
+    ? uiUtils.threadTimestamp({
+        createdAt: thread.createdAt,
+        created_at_ms: thread.created_at_ms,
+        created_at: thread.created_at,
+      })
+    : thread.createdAt || thread.created_at || thread.created_at_ms;
   return {
     ...thread,
     provider: nextProvider,
-    updatedAt: thread.updatedAt || thread.updated_at || thread.updated_at_ms,
-    createdAt: thread.createdAt || thread.created_at || thread.created_at_ms,
+    updatedAt,
+    createdAt,
   };
 }
 

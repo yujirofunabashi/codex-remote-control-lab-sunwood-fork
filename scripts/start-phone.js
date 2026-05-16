@@ -2102,19 +2102,10 @@ async function claudeThreadListPayload() {
   for (const session of sessions) {
     if (session) byId.set(session.summary.id, session.summary);
   }
-  for (const thread of localThreadList("claude")) {
-    const existing = byId.get(thread.id);
-    byId.set(thread.id, {
-      ...existing,
-      ...thread,
-      name: thread.name === thread.id && existing?.name ? existing.name : thread.name,
-      preview: thread.preview === thread.id && existing?.preview ? existing.preview : thread.preview,
-    });
-  }
   return {
     provider: "claude",
     activeProvider: "claude",
-    data: Array.from(byId.values()).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)),
+    data: mergeThreadListData(Array.from(byId.values()), localThreadList("claude")),
   };
 }
 
@@ -2130,6 +2121,8 @@ class SharedBridge {
     this.pending = new Map();
     this.threadId = null;
     this.activeTurnId = null;
+    this.createdAt = Date.now();
+    this.listUpdatedAt = 0;
     this.ready = false;
     this.startupFailed = false;
     this.history = [];
@@ -2751,6 +2744,7 @@ class SharedBridge {
   appendHistory(entry) {
     this.history.push(entry);
     this.history = capHistory(this.history);
+    if (entry?.text) this.listUpdatedAt = Date.now();
   }
 
   approval(requestMsg, decision) {
@@ -2795,6 +2789,8 @@ class ClaudeBridge {
     this.threadId = requestedThreadId || `claude:${crypto.randomUUID()}`;
     this.claudeSessionId = requestedThreadId && !requestedThreadId.startsWith("claude:") ? requestedThreadId : null;
     this.activeTurnId = null;
+    this.createdAt = Date.now();
+    this.listUpdatedAt = 0;
     this.ready = true;
     this.history = this.claudeSessionId ? claudeHistoryForSession(this.claudeSessionId) : [];
     this.terminalHistory = terminalHistoryFromChatHistory(this.history);
@@ -3161,6 +3157,7 @@ class ClaudeBridge {
   appendHistory(entry) {
     this.history.push(entry);
     this.history = capHistory(this.history);
+    if (entry?.text) this.listUpdatedAt = Date.now();
   }
 
   approval(_requestMsg, _decision) {
@@ -3387,10 +3384,12 @@ function localThreadList(provider = "") {
   const requestedProvider = provider ? normalizeProvider(provider) : "";
   return Array.from(bridges.values())
     .filter((bridge) => !requestedProvider || bridge.provider === requestedProvider)
+    .filter((bridge) => bridge.threadId)
     .map((bridge) => {
       const userEntry = [...bridge.history].reverse().find((entry) => entry.type === "user");
       const preview = userEntry?.text || bridge.threadId;
-      const updatedAt = Date.now();
+      const localActivityAt = threadListTimestamp({ updatedAt: bridge.listUpdatedAt || 0 });
+      const updatedAt = localActivityAt || threadListTimestamp({ updatedAt: bridge.runState?.updatedAt || bridge.createdAt || 0 });
       return {
         id: bridge.threadId,
         name: preview.split("\n").find(Boolean) || bridge.threadId,
@@ -3399,8 +3398,78 @@ function localThreadList(provider = "") {
         provider: bridge.provider || agentProvider,
         updatedAt,
         updated_at: updatedAt,
+        createdAt: bridge.createdAt || updatedAt,
+        created_at: bridge.createdAt || updatedAt,
+        localActivityAt,
+        runState: bridge.runState?.state || "",
       };
     });
+}
+
+function timestampValueMs(value, unit = "auto") {
+  if (value === undefined || value === null || value === "") return 0;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) return 0;
+    if (unit === "ms") return value;
+    if (unit === "seconds") return value * 1000;
+    return value > 0 && value < 10_000_000_000 ? value * 1000 : value;
+  }
+  const text = String(value).trim();
+  if (!text) return 0;
+  const numeric = Number(text);
+  if (Number.isFinite(numeric)) return timestampValueMs(numeric, unit);
+  const parsed = Date.parse(text);
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+function threadListTimestamp(thread = {}) {
+  const fields = [
+    ["updatedAt", "auto"],
+    ["updated_at_ms", "ms"],
+    ["updated_at", "auto"],
+    ["createdAt", "auto"],
+    ["created_at_ms", "ms"],
+    ["created_at", "auto"],
+  ];
+  for (const [field, unit] of fields) {
+    const timestamp = timestampValueMs(thread[field], unit);
+    if (timestamp) return timestamp;
+  }
+  return 0;
+}
+
+function copyThreadTimeFields(target, source, fields) {
+  for (const field of fields) {
+    if (source && source[field] !== undefined && source[field] !== null && source[field] !== "") target[field] = source[field];
+    else delete target[field];
+  }
+}
+
+function mergeThreadListData(remoteThreads = [], localThreads = []) {
+  const byId = new Map();
+  for (const thread of Array.isArray(remoteThreads) ? remoteThreads : []) {
+    if (thread?.id) byId.set(thread.id, thread);
+  }
+  for (const thread of Array.isArray(localThreads) ? localThreads : []) {
+    if (!thread?.id) continue;
+    const existing = byId.get(thread.id);
+    const merged = {
+      ...existing,
+      ...thread,
+      name: thread.name === thread.id && existing?.name ? existing.name : thread.name,
+      preview: thread.preview === thread.id && existing?.preview ? existing.preview : thread.preview,
+    };
+    if (existing) {
+      const existingTimestamp = threadListTimestamp(existing);
+      const localActivityAt = threadListTimestamp({ updatedAt: thread.localActivityAt || 0 });
+      if (!localActivityAt || (existingTimestamp && localActivityAt <= existingTimestamp)) {
+        copyThreadTimeFields(merged, existing, ["updatedAt", "updated_at", "updated_at_ms"]);
+      }
+      copyThreadTimeFields(merged, existing, ["createdAt", "created_at", "created_at_ms"]);
+    }
+    byId.set(thread.id, merged);
+  }
+  return Array.from(byId.values()).sort((a, b) => threadListTimestamp(b) - threadListTimestamp(a));
 }
 
 async function codexThreadListPayload(requestedProvider) {
@@ -3411,9 +3480,8 @@ async function codexThreadListPayload(requestedProvider) {
     archived: false,
     useStateDbOnly: false,
   });
-  const data = Array.isArray(result.data)
-    ? result.data.map((thread) => ({ ...thread, provider: requestedProvider }))
-    : result.data;
+  const remoteData = Array.isArray(result.data) ? result.data.map((thread) => ({ ...thread, provider: requestedProvider })) : result.data;
+  const data = Array.isArray(remoteData) ? mergeThreadListData(remoteData, localThreadList(requestedProvider)) : remoteData;
   return { ...result, provider: requestedProvider, activeProvider: requestedProvider, data };
 }
 
@@ -3953,7 +4021,9 @@ module.exports = {
   manifestHrefForRequest,
   manifestPayloadForRequest,
   maskTokenValue,
+  mergeThreadListData,
   requestTokenFromHeaders,
   safeProxyBasePath,
+  threadListTimestamp,
   tokenMetadata,
 };

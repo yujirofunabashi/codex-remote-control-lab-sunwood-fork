@@ -194,6 +194,38 @@
     return candidate === normalizedBase;
   }
 
+  function timestampValueMs(value, unit = "auto") {
+    if (value === undefined || value === null || value === "") return 0;
+    if (typeof value === "number") {
+      if (!Number.isFinite(value)) return 0;
+      if (unit === "ms") return value;
+      if (unit === "seconds") return value * 1000;
+      return value > 0 && value < 10_000_000_000 ? value * 1000 : value;
+    }
+    const text = String(value).trim();
+    if (!text) return 0;
+    const numeric = Number(text);
+    if (Number.isFinite(numeric)) return timestampValueMs(numeric, unit);
+    const parsed = Date.parse(text);
+    return Number.isNaN(parsed) ? 0 : parsed;
+  }
+
+  function threadTimestamp(thread = {}) {
+    const fields = [
+      ["updatedAt", "auto"],
+      ["updated_at_ms", "ms"],
+      ["updated_at", "auto"],
+      ["createdAt", "auto"],
+      ["created_at_ms", "ms"],
+      ["created_at", "auto"],
+    ];
+    for (const [field, unit] of fields) {
+      const timestamp = timestampValueMs(thread[field], unit);
+      if (timestamp) return timestamp;
+    }
+    return 0;
+  }
+
   function redactSensitiveText(value) {
     return String(value || "")
       .replace(/([?&](?:token|key)=)[^&\s]+/gi, "$1[redacted]")
@@ -484,7 +516,7 @@
       const aStatus = deriveThreadStatus(a, runtimeState);
       const bStatus = deriveThreadStatus(b, runtimeState);
       if (bStatus.priority !== aStatus.priority) return bStatus.priority - aStatus.priority;
-      return Number(b.updatedAt || b.updated_at || b.createdAt || 0) - Number(a.updatedAt || a.updated_at || a.createdAt || 0);
+      return threadTimestamp(b) - threadTimestamp(a);
     });
   }
 
@@ -510,6 +542,8 @@
     pwaManifestTokenIssues,
     workspaceKeyForThreadRecord,
     sameWorkspaceThreadRecord,
+    timestampValueMs,
+    threadTimestamp,
     redactSensitiveText,
     maskToken,
     urlWithoutTokenParam,
