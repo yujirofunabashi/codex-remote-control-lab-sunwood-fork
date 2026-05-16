@@ -5096,8 +5096,24 @@ body[data-main-view="terminal"] .pwa-install-hint {
 
   .settings {
     width: max-content;
+    grid-template-columns: 22px auto;
+    gap: 10px;
+    min-height: 36px;
     border-color: transparent;
+    padding: 0 8px;
     background: transparent;
+    font-size: 14.5px;
+    font-weight: 560;
+  }
+
+  .settings .command-icon {
+    width: 21px;
+    height: 21px;
+  }
+
+  .settings-icon {
+    width: 20px;
+    height: 20px;
   }
 
   .command-icon {

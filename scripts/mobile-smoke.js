@@ -16,6 +16,8 @@ const publicDir = path.join(root, "public");
 const token = "smoke-token";
 const wantShots = process.argv.includes("--shots");
 const shotsDir = path.join(root, ".uploads", "mobile-smoke");
+const artifactRepo = path.join(root, "..", "artifact-workspace");
+const drawerRepo = path.join(root, "..", "drawer-workspace");
 
 const mime = new Map([
   [".css", "text/css"],
@@ -30,10 +32,15 @@ const mime = new Map([
 const activeThread = { id: "thread-mobile-compact", name: "Mobile terminal compact polish", cwd: root, updatedAt: Date.now() };
 const threads = [
   activeThread,
-  { id: "thread-artifacts", name: "Artifact preview polish", cwd: root, updatedAt: Date.now() - 3600_000 },
-  { id: "thread-drawer", name: "Drawer and composer tuning", cwd: root, updatedAt: Date.now() - 86_400_000 },
+  { id: "thread-artifacts", name: "Artifact preview polish", cwd: artifactRepo, updatedAt: Date.now() - 3600_000 },
+  { id: "thread-drawer", name: "Drawer and composer tuning", cwd: drawerRepo, updatedAt: Date.now() - 86_400_000 },
 ];
 const staleThreadList = threads.filter((thread) => thread.id !== activeThread.id);
+const repoColorOverrides = {
+  "repo:codex-remote-control-lab": "#2563eb",
+  "repo:artifact-workspace": "#db2777",
+  "repo:drawer-workspace": "#16a34a",
+};
 
 const history = [
   { type: "user", text: "モバイルの terminal compact レイアウトを確認したい。" },
@@ -178,6 +185,10 @@ async function run() {
     page.on("pageerror", (error) => consoleErrors.push(String(error)));
     await mockWebSocket(page);
     await mockApi(page, origin);
+    await page.addInitScript((colors) => {
+      localStorage.setItem("codexPhoneRepoColors:v1", JSON.stringify(colors));
+      localStorage.setItem("codexPhoneThreadInboxFilter:v1", "recent");
+    }, repoColorOverrides);
     await page.goto(`${origin}/?token=${token}`, { waitUntil: "networkidle" });
     await page.waitForSelector('[data-state="ready"], [data-state="done"]');
     await page.waitForTimeout(300);
@@ -205,7 +216,15 @@ async function run() {
     check("run-state is inside the status band", (await page.locator(".composer-status-bar #runState").count()) === 1);
     check("quick actions are inside the status band", (await page.locator(".composer-status-bar #quickActions").count()) === 1);
     const chipCount = await page.locator("#quickActions .quick-action-chip").count();
-    check("quick action chips render", chipCount >= 4, `chips=${chipCount}`);
+    check("quick action chips render", chipCount >= 8, `chips=${chipCount}`);
+    const quickActionLabels = await page.locator("#quickActions .quick-action-chip").evaluateAll((chips) =>
+      chips.map((chip) => chip.textContent?.trim()).filter(Boolean),
+    );
+    check(
+      "git quick actions are available",
+      ["プッシュ", "マージ", "コミット", "追加"].every((label) => quickActionLabels.includes(label)),
+      quickActionLabels.join(", "),
+    );
     const bandRows = await page.evaluate(() => {
       const runState = document.querySelector(".composer-status-bar #runState");
       const quick = document.querySelector(".composer-status-bar #quickActions");
@@ -306,6 +325,24 @@ async function run() {
       "active thread marker uses the repo color",
       repoColorState.accent && repoColorState.dot === repoColorState.accent && repoColorState.title.includes("リポ色"),
       JSON.stringify(repoColorState),
+    );
+    const repoMarkerState = await page.evaluate(() =>
+      Array.from(document.querySelectorAll(".project-group"))
+        .map((group) => {
+          const project = group.querySelector(".project-name")?.textContent?.trim() || "";
+          const dot = group.querySelector(".thread-color-button");
+          return {
+            project,
+            color: dot ? getComputedStyle(dot).backgroundColor : "",
+          };
+        })
+        .filter((item) => item.project && item.color),
+    );
+    const repoMarkerColors = new Set(repoMarkerState.map((item) => item.color));
+    check(
+      "repo markers are scoped by repo",
+      repoMarkerState.length >= 3 && repoMarkerColors.size >= 3,
+      JSON.stringify(repoMarkerState),
     );
     if (wantShots) {
       fs.mkdirSync(shotsDir, { recursive: true });
