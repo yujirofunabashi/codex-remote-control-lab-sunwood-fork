@@ -194,6 +194,19 @@
     return candidate === normalizedBase;
   }
 
+  function isOpaqueThreadId(value) {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(value || "").trim());
+  }
+
+  function threadDisplayTitle(thread = {}, options = {}) {
+    const fallback = String(options.fallback || "名前未設定のチャット");
+    const max = Math.max(12, Number(options.max || 54));
+    const raw = String(thread.displayTitle || thread.name || thread.preview || thread.cwd || "").trim();
+    const firstLine = raw.split("\n").find(Boolean) || "";
+    if (!firstLine || firstLine === thread.id || isOpaqueThreadId(firstLine)) return fallback;
+    return firstLine.length > max ? `${firstLine.slice(0, max)}...` : firstLine;
+  }
+
   function timestampValueMs(value, unit = "auto") {
     if (value === undefined || value === null || value === "") return 0;
     if (typeof value === "number") {
@@ -542,6 +555,8 @@
     pwaManifestTokenIssues,
     workspaceKeyForThreadRecord,
     sameWorkspaceThreadRecord,
+    isOpaqueThreadId,
+    threadDisplayTitle,
     timestampValueMs,
     threadTimestamp,
     redactSensitiveText,

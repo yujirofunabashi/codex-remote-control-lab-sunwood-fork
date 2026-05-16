@@ -1329,6 +1329,7 @@ function selectModel(model) {
 }
 
 function titleForThread(thread) {
+  if (uiUtils.threadDisplayTitle) return uiUtils.threadDisplayTitle(thread, { fallback: "名前未設定のチャット", max: 54 });
   const raw = thread.name || thread.preview || thread.cwd || "";
   const firstLine = raw.split("\n").find(Boolean) || "";
   if (!firstLine || firstLine === thread.id || isOpaqueThreadId(firstLine)) return "名前未設定のチャット";
@@ -1340,7 +1341,22 @@ function setThreadHeading(title) {
 }
 
 function isOpaqueThreadId(value) {
+  if (uiUtils.isOpaqueThreadId) return uiUtils.isOpaqueThreadId(value);
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(value || "").trim());
+}
+
+function selectedThreadRecord() {
+  return threadCache.find((thread) => thread.id === selectedThread) || null;
+}
+
+function selectedThreadHeadingText(fallback = "新しいチャット") {
+  const selected = selectedThreadRecord();
+  if (selected) return titleForThread(selected);
+  return selectedThread ? "名前未設定のチャット" : fallback;
+}
+
+function updateSelectedThreadHeading(fallback = "新しいチャット") {
+  setThreadHeading(selectedThreadHeadingText(fallback));
 }
 
 function projectForThread(thread) {
@@ -3559,6 +3575,7 @@ async function loadThreads({ background = false, provider = "" } = {}) {
     state.activeProvider = activeProvider;
     state.threadProvider = threadProvider;
     state.threadProviderExplicit = threadProviderExplicit;
+    updateSelectedThreadHeading();
     renderThreadList();
     applyCurrentThreadAccent();
     showInitialSwipeHint();
@@ -3587,6 +3604,7 @@ async function refreshSelectedThread() {
       return;
     }
     renderHistoryIfChanged(result.history || []);
+    updateSelectedThreadHeading();
     if (!terminalHistories.has(currentThreadColorKey())) {
       replaceTerminalHistory(terminalHistoryFromChatHistory(result.history || []));
     }
@@ -3649,12 +3667,19 @@ function updateUrlThread() {
 function syncReadyThread(threadId) {
   if (!threadProviderExplicit) threadProvider = activeProvider;
   if (threadId) selectedThreadByProvider.set(currentThreadProvider(), threadId);
-  if (!threadId || selectedThread === threadId) return;
+  if (!threadId) {
+    updateSelectedThreadHeading();
+    return;
+  }
+  if (selectedThread === threadId) {
+    updateSelectedThreadHeading();
+    renderThreadList();
+    return;
+  }
   const previousKey = currentThreadColorKey();
   selectedThread = threadId;
   updateUrlThread();
-  const selected = threadCache.find((thread) => thread.id === selectedThread);
-  setThreadHeading(selected ? titleForThread(selected) : "新しいチャット");
+  updateSelectedThreadHeading();
   const nextKey = currentThreadColorKey();
   migrateThreadScopedState(previousKey, nextKey);
   activeDraftKey = nextKey;
@@ -3672,6 +3697,7 @@ function selectThread(threadId, options = {}) {
   selectedThread = threadId;
   selectedThreadByProvider.set(currentThreadProvider(), selectedThread);
   updateUrlThread();
+  updateSelectedThreadHeading();
   restoreDraftForCurrentThread();
   applyCurrentThreadAccent();
   renderTerminalTranscript();
@@ -3807,8 +3833,7 @@ function setActiveReviewTab(tabName) {
 }
 
 function currentThreadTitle() {
-  const selected = threadCache.find((thread) => thread.id === selectedThread);
-  return selected ? titleForThread(selected) : selectedThread ? shortId(selectedThread) : "新しいチャット";
+  return selectedThreadHeadingText();
 }
 
 function nextSuggestedAction() {
@@ -5110,8 +5135,7 @@ function connect({ preserveHistory = false, freshThread = false } = {}) {
     lastHistorySignature = "";
     renderHistory([]);
   }
-  const selected = threadCache.find((thread) => thread.id === selectedThread);
-  setThreadHeading(selected ? titleForThread(selected) : "新しいチャット");
+  updateSelectedThreadHeading();
 
   ws = new WebSocket(wsUrlForBridge(bridge, provider, selectedThread, { fresh: freshThread && !selectedThread }), wsProtocolsForBridge(bridge));
   const socket = ws;

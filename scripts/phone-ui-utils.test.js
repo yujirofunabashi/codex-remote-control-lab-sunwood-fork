@@ -27,6 +27,7 @@ const {
   shouldShowQuickBar,
   sortThreadsForInbox,
   isStandaloneDisplayMode,
+  threadDisplayTitle,
   threadTimestamp,
   terminalCompactState,
   timestampValueMs,
@@ -64,6 +65,15 @@ test("thread timestamp helpers parse ISO, seconds, and millisecond fields", () =
     ]).map((thread) => thread.id),
     ["new", "old"],
   );
+});
+
+test("threadDisplayTitle provides one title source for inbox and selected thread header", () => {
+  const opaqueId = "123e4567-e89b-12d3-a456-426614174000";
+  assert.equal(threadDisplayTitle({ id: "t1", name: "Readable title", preview: "Prompt text" }), "Readable title");
+  assert.equal(threadDisplayTitle({ id: "t2", preview: "First line\nsecond line" }), "First line");
+  assert.equal(threadDisplayTitle({ id: opaqueId, name: opaqueId }), "名前未設定のチャット");
+  assert.equal(threadDisplayTitle({ id: "t3", name: "" }), "名前未設定のチャット");
+  assert.equal(threadDisplayTitle({ id: "t4", name: "abcdefghijklmnopqrstuvwxyz", preview: "ignored" }, { max: 14 }), "abcdefghijklmn...");
 });
 
 test("compactWorkspacePath middle-truncates long mobile paths", () => {
