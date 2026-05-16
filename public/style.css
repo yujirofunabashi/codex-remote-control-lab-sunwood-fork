@@ -5851,6 +5851,9 @@ body[data-main-view="terminal"] .pwa-install-hint {
   }
 
   body[data-main-view="terminal"] .titlebar {
+    grid-template-areas:
+      "drawer title view actions"
+      "bridge bridge bridge pill";
     padding: 5px 8px;
     row-gap: 3px;
   }
@@ -5863,13 +5866,21 @@ body[data-main-view="terminal"] .pwa-install-hint {
   body[data-main-view="terminal"] .mobile-toggle,
   body[data-main-view="terminal"] .icon-button,
   body[data-main-view="terminal"] .header-color-button {
-    width: 28px;
-    min-width: 28px;
-    height: 28px;
+    width: 30px;
+    min-width: 30px;
+    height: 30px;
   }
 
   body[data-main-view="terminal"] .mobile-toggle-icon {
-    inset: 7px 8px;
+    inset: 6px 7px;
+  }
+
+  body[data-main-view="terminal"] .mobile-toggle-icon::before {
+    width: 5px;
+  }
+
+  body[data-main-view="terminal"] .thread-nav {
+    display: none;
   }
 
   body[data-main-view="terminal"] .thread-nav-button {
@@ -5943,8 +5954,9 @@ body[data-main-view="terminal"] .pwa-install-hint {
   }
 
   body[data-main-view="terminal"] .terminal-command-form input {
-    height: 34px;
-    font-size: 12px;
+    height: 36px;
+    font-size: 16px;
+    line-height: 1.2;
   }
 
   body[data-main-view="terminal"] .terminal-command-form button {

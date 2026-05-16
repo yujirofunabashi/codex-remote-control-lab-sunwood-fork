@@ -502,6 +502,26 @@ async function run() {
     await page.waitForTimeout(250);
     check("terminal view activates", (await page.locator("#mainTerminalView:not(.hidden)").count()) === 1);
     check("terminal command input is available", (await page.locator("#terminalCommandInput").count()) === 1);
+    const terminalCompactState = await page.evaluate(() => {
+      const nav = document.querySelector(".thread-nav");
+      const input = document.querySelector("#terminalCommandInput");
+      const titlebar = document.querySelector(".titlebar");
+      return {
+        navDisplay: nav ? getComputedStyle(nav).display : "",
+        inputFontSize: input ? parseFloat(getComputedStyle(input).fontSize) : 0,
+        titlebarAreas: titlebar ? getComputedStyle(titlebar).gridTemplateAreas : "",
+      };
+    });
+    check(
+      "terminal phone header does not stack thread arrows under the drawer button",
+      terminalCompactState.navDisplay === "none" && !terminalCompactState.titlebarAreas.includes("nav"),
+      JSON.stringify(terminalCompactState),
+    );
+    check(
+      "terminal command input uses an iOS-safe font size",
+      terminalCompactState.inputFontSize >= 16,
+      JSON.stringify(terminalCompactState),
+    );
     await page.locator("#terminalCommandInput").fill("pwd");
     await page.locator("#terminalCommandRun").click();
     await page.waitForTimeout(220);
