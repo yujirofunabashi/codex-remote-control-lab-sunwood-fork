@@ -5231,10 +5231,12 @@ function connect({ preserveHistory = false, freshThread = false } = {}) {
 
   ws = new WebSocket(wsUrlForBridge(bridge, provider, selectedThread, { fresh: freshThread && !selectedThread }), wsProtocolsForBridge(bridge));
   const socket = ws;
+  const isCurrentSocket = () => bridgeId === activeBridgeId && ws === socket;
   connectButton.disabled = true;
   meta.textContent = "接続中";
 
   socket.addEventListener("open", () => {
+    if (!isCurrentSocket()) return;
     const state = getBridgeState(bridgeId);
     state.connected = true;
     state.lastError = "";
@@ -5244,7 +5246,7 @@ function connect({ preserveHistory = false, freshThread = false } = {}) {
   });
 
   socket.addEventListener("message", (event) => {
-    if (bridgeId !== activeBridgeId) return;
+    if (!isCurrentSocket()) return;
     lastWsMessageAt = Date.now();
     const msg = JSON.parse(event.data);
     if (msg.type === "ready") {
@@ -5368,6 +5370,10 @@ function connect({ preserveHistory = false, freshThread = false } = {}) {
   });
 
   socket.addEventListener("close", () => {
+    if (!isCurrentSocket()) {
+      suppressedSocketReconnects.delete(socket);
+      return;
+    }
     const state = getBridgeState(bridgeId);
     state.connected = false;
     state.runState = "disconnected";
@@ -5388,6 +5394,10 @@ function connect({ preserveHistory = false, freshThread = false } = {}) {
   });
 
   socket.addEventListener("error", () => {
+    if (!isCurrentSocket()) {
+      suppressedSocketReconnects.delete(socket);
+      return;
+    }
     const state = getBridgeState(bridgeId);
     state.connected = false;
     state.runState = "error";
