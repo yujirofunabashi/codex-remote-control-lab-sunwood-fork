@@ -833,15 +833,15 @@ function currentThreadColorKey() {
 }
 
 function repoColorKeyForContext(context = {}) {
-  const provider = normalizeProviderName(context?.provider) || currentThreadProvider();
-  const bridgePrefix = activeBridgeId || homeBridgeId || "home";
   const workspace =
     workspaceKeyForThread(context) ||
     String(context?.cwd || context?.workdir || context?.workspaceLocation || currentWorkspace.workspaceLocation || currentWorkspace.repoName || "").trim();
-  const repo = String(context?.repoName || currentWorkspace.repoName || projectForThread(context) || "").trim();
+  const repo = String(context?.repoName || "").trim();
   const workspaceName = workspace.split(/[\\/]/).filter(Boolean).pop() || "";
-  const keyBase = repo || workspaceName || workspace || `${location.host}${appBasePath || "/"}`;
-  return `${bridgePrefix}:${provider}:repo:${keyBase}`;
+  const project = projectForThread(context);
+  const projectName = project && project !== "No project" ? project : "";
+  const keyBase = repo || workspaceName || projectName || currentWorkspace.repoName || `${location.host}${appBasePath || "/"}`;
+  return `repo:${keyBase}`;
 }
 
 function repoLabelForContext(context = {}, fallback = "このリポ") {
@@ -5031,6 +5031,10 @@ const defaultQuickActions = [
   { id: "summary", label: "要約", text: "ここまでの状況を短く要約してください。" },
   { id: "test", label: "テスト", text: "関連するテストを実行し、失敗時は原因と修正案を示してください。" },
   { id: "diff", label: "差分", text: "現在の差分を要点だけ見せてください。" },
+  { id: "push", label: "プッシュ", text: "現在のブランチを push してください。push 前に必要な確認を行い、未コミット変更や未通過チェックがあれば先に報告してください。" },
+  { id: "merge", label: "マージ", text: "現在の作業ブランチを適切な統合先へマージしてください。マージ前後に必要な確認を行い、競合や未通過チェックがあれば報告してください。" },
+  { id: "commit", label: "コミット", text: "現在の差分を確認し、関連する変更だけを小さくまとめてコミットしてください。コミット前に必要なチェックも実行してください。" },
+  { id: "add", label: "追加", text: "現在の差分を確認し、コミット対象に含めるべきファイルを git add してください。含めない方がよい変更があれば先に報告してください。" },
 ];
 
 const taskTemplatePrompts = [
@@ -5071,7 +5075,7 @@ function renderQuickActions() {
   const usage = quickActionState.usage && typeof quickActionState.usage === "object" ? quickActionState.usage : {};
   const sorted = [...defaultQuickActions].sort((a, b) => (usage[b.id] || 0) - (usage[a.id] || 0));
   quickActions.replaceChildren();
-  for (const action of sorted.slice(0, 4)) {
+  for (const action of sorted) {
     const chip = document.createElement("button");
     chip.type = "button";
     chip.className = "quick-action-chip";
