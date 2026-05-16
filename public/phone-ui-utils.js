@@ -194,6 +194,38 @@
     return candidate === normalizedBase;
   }
 
+  function timestampValueMs(value, unit = "auto") {
+    if (value === undefined || value === null || value === "") return 0;
+    if (typeof value === "number") {
+      if (!Number.isFinite(value)) return 0;
+      if (unit === "ms") return value;
+      if (unit === "seconds") return value * 1000;
+      return value > 0 && value < 10_000_000_000 ? value * 1000 : value;
+    }
+    const text = String(value).trim();
+    if (!text) return 0;
+    const numeric = Number(text);
+    if (Number.isFinite(numeric)) return timestampValueMs(numeric, unit);
+    const parsed = Date.parse(text);
+    return Number.isNaN(parsed) ? 0 : parsed;
+  }
+
+  function threadTimestamp(thread = {}) {
+    const fields = [
+      ["updatedAt", "auto"],
+      ["updated_at_ms", "ms"],
+      ["updated_at", "auto"],
+      ["createdAt", "auto"],
+      ["created_at_ms", "ms"],
+      ["created_at", "auto"],
+    ];
+    for (const [field, unit] of fields) {
+      const timestamp = timestampValueMs(thread[field], unit);
+      if (timestamp) return timestamp;
+    }
+    return 0;
+  }
+
   function redactSensitiveText(value) {
     return String(value || "")
       .replace(/([?&](?:token|key)=)[^&\s]+/gi, "$1[redacted]")
@@ -413,29 +445,35 @@
   }
 
   const threadStatusMeta = {
-    approval_required: { key: "approval_required", label: "承認待ち", tone: "approval", group: "attention", priority: 100 },
-    question_required: { key: "question_required", label: "質問あり", tone: "question", group: "attention", priority: 90 },
-    test_failed: { key: "test_failed", label: "テスト失敗", tone: "error", group: "attention", priority: 80 },
-    error: { key: "error", label: "エラー", tone: "error", group: "attention", priority: 70 },
-    running: { key: "running", label: "実行中", tone: "running", group: "running", priority: 60 },
+    approval_required: { key: "approval_required", label: "許可待ち", tone: "approval", group: "attention", priority: 100 },
+    question_required: { key: "question_required", label: "返信待ち", tone: "question", group: "attention", priority: 90 },
+    test_failed: { key: "test_failed", label: "確認必要", tone: "error", group: "attention", priority: 80 },
+    error: { key: "error", label: "確認必要", tone: "error", group: "attention", priority: 70 },
+    running: { key: "running", label: "処理中", tone: "running", group: "running", priority: 60 },
     syncing: { key: "syncing", label: "同期中", tone: "syncing", group: "running", priority: 50 },
-    diff_available: { key: "diff_available", label: "差分あり", tone: "diff", group: "recent", priority: 40 },
-    disconnected: { key: "disconnected", label: "接続切れ", tone: "error", group: "attention", priority: 35 },
-    done: { key: "done", label: "完了", tone: "done", group: "recent", priority: 10 },
-    recent: { key: "recent", label: "最近", tone: "recent", group: "recent", priority: 20 },
+    diff_available: { key: "diff_available", label: "変更あり", tone: "diff", group: "recent", priority: 40 },
+    disconnected: { key: "disconnected", label: "再接続必要", tone: "error", group: "attention", priority: 35 },
+    done: { key: "done", label: "", tone: "done", group: "recent", priority: 10 },
+    recent: { key: "recent", label: "", tone: "recent", group: "recent", priority: 20 },
   };
 
   function threadStatusFromKey(key) {
     return threadStatusMeta[key] || threadStatusMeta.recent;
   }
 
-  function textHasQuestion(text) {
-    return /(\?|？|質問|確認したい|教えてください|どちら|選んで|判断してください)/i.test(String(text || ""));
-  }
-
   function textLooksLikeTestFailure(text) {
-    return /(npm (?:run )?test|pnpm test|yarn test|pytest|vitest|jest|test failed|tests? failed|テスト失敗|失敗しました)/i.test(
-      String(text || ""),
+    const value = String(text || "");
+    if (
+      /\b(?:tests?|test suites?)\s+failed\b|\bfailed\s+(?:tests?|test suites?)\b|\btest failed\b|\btest failure\b|テスト(?:が|は)?失敗|テスト失敗/i.test(
+        value,
+      )
+    ) {
+      return true;
+    }
+    const hasTestCommand = /\b(?:npm (?:run )?(?:test|check)|pnpm test|yarn test|pytest|vitest|jest|docs:build)\b/i.test(value);
+    if (!hasTestCommand) return false;
+    return /(?:^|\n)[^\n]*(?:\bfail\s+[1-9]\d*\b|\b[1-9]\d*\s+failed\b|\bnot ok\b|\bexit(?:ed)?(?: code| with)?\s+[1-9]\d*)/i.test(
+      value,
     );
   }
 
@@ -448,20 +486,22 @@
       (selected ? { run: { state: runtimeState.currentRunState }, pendingApproval: runtimeState.pendingApproval } : null);
     const runState = String(runForThread?.run?.state || (selected ? runtimeState.currentRunState : thread.runState || "") || "");
     const pendingApproval = Boolean(runForThread?.pendingApproval || (selected && runtimeState.pendingApproval));
-    const terminalText = [
-      thread.preview,
-      thread.name,
+    const operationalText = [
       thread.status,
       thread.error,
-      ...(Array.isArray(runForThread?.terminalTail) ? runForThread.terminalTail.map((entry) => `${entry.message || ""}\n${entry.detail || ""}`) : []),
+      ...(Array.isArray(runForThread?.terminalTail)
+        ? runForThread.terminalTail.map((entry) => `${entry.message || ""}\n${entry.detail || ""}`)
+        : []),
       ...(Array.isArray(runtimeState.terminalEntries) && selected
         ? runtimeState.terminalEntries.map((entry) => `${entry.message || ""}\n${entry.detail || ""}`)
         : []),
     ].join("\n");
 
+    const hasTestFailure = textLooksLikeTestFailure(operationalText);
+
     if (pendingApproval || runState === "approval") return threadStatusFromKey("approval_required");
-    if (textHasQuestion(terminalText) && (selected || runState === "ready" || runState === "done")) return threadStatusFromKey("question_required");
-    if (textLooksLikeTestFailure(terminalText)) return threadStatusFromKey("test_failed");
+    if (runState === "question") return threadStatusFromKey("question_required");
+    if (hasTestFailure) return threadStatusFromKey("test_failed");
     if (runState === "error") return threadStatusFromKey("error");
     if (["running", "streaming", "interrupting"].includes(runState)) return threadStatusFromKey("running");
     if (runState === "syncing") return threadStatusFromKey("syncing");
@@ -476,7 +516,7 @@
       const aStatus = deriveThreadStatus(a, runtimeState);
       const bStatus = deriveThreadStatus(b, runtimeState);
       if (bStatus.priority !== aStatus.priority) return bStatus.priority - aStatus.priority;
-      return Number(b.updatedAt || b.updated_at || b.createdAt || 0) - Number(a.updatedAt || a.updated_at || a.createdAt || 0);
+      return threadTimestamp(b) - threadTimestamp(a);
     });
   }
 
@@ -502,6 +542,8 @@
     pwaManifestTokenIssues,
     workspaceKeyForThreadRecord,
     sameWorkspaceThreadRecord,
+    timestampValueMs,
+    threadTimestamp,
     redactSensitiveText,
     maskToken,
     urlWithoutTokenParam,

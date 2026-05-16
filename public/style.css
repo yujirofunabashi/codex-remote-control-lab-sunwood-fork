@@ -773,13 +773,21 @@ button {
 }
 
 .section-title {
+  flex: 0 0 auto;
   padding: 10px 12px 8px;
   color: var(--muted);
   font-size: 13px;
   font-weight: 680;
 }
 
+.thread-inbox-tabs {
+  flex: 0 0 auto;
+  min-height: 44px;
+  align-items: flex-start;
+}
+
 .thread-search {
+  flex: 0 0 auto;
   width: calc(100% - 8px);
   min-height: 34px;
   margin: 0 4px 8px;

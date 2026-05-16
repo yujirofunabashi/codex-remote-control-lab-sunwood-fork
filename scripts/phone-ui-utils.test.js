@@ -27,7 +27,9 @@ const {
   shouldShowQuickBar,
   sortThreadsForInbox,
   isStandaloneDisplayMode,
+  threadTimestamp,
   terminalCompactState,
+  timestampValueMs,
   effectiveAppViewportHeight,
   upsertBridgeRegistry,
   urlWithoutTokenParam,
@@ -48,6 +50,20 @@ test("safeJsonParse returns fallback for broken storage values", () => {
   assert.deepEqual(safeJsonParse("{broken", { ok: false }, { objectOnly: true }), { ok: false });
   assert.deepEqual(safeJsonParse("[1,2]", { ok: false }, { objectOnly: true }), { ok: false });
   assert.deepEqual(safeJsonParse('{"ok":true}', { ok: false }, { objectOnly: true }), { ok: true });
+});
+
+test("thread timestamp helpers parse ISO, seconds, and millisecond fields", () => {
+  const iso = "2026-05-16T00:00:00.000Z";
+  assert.equal(timestampValueMs(1_700_000_000), 1_700_000_000_000);
+  assert.equal(threadTimestamp({ updated_at_ms: 1234 }), 1234);
+  assert.equal(threadTimestamp({ updated_at: iso }), Date.parse(iso));
+  assert.deepEqual(
+    sortThreadsForInbox([
+      { id: "old", updated_at: "2026-05-15T00:00:00.000Z" },
+      { id: "new", updated_at: iso },
+    ]).map((thread) => thread.id),
+    ["new", "old"],
+  );
 });
 
 test("compactWorkspacePath middle-truncates long mobile paths", () => {
@@ -176,8 +192,70 @@ test("thread inbox status derivation prioritizes actionable work", () => {
   };
 
   assert.equal(deriveThreadStatus(approval, runtime).key, "approval_required");
+  assert.equal(deriveThreadStatus(approval, runtime).label, "許可待ち");
   assert.equal(deriveThreadStatus(running, runtime).key, "running");
-  assert.equal(deriveThreadStatus({ id: "d", preview: "npm test failed" }, {}).key, "test_failed");
+  assert.equal(deriveThreadStatus(running, runtime).label, "処理中");
+  const testFailed = deriveThreadStatus(
+    { id: "d", preview: "user asked about the テスト失敗 badge" },
+    { bridgeRuns: [{ threadId: "d", terminalTail: [{ message: "$ npm test\nℹ fail 1" }] }] },
+  );
+  assert.equal(testFailed.key, "test_failed");
+  assert.equal(testFailed.label, "確認必要");
+  assert.equal(deriveThreadStatus({ id: "d", preview: "npm test failed" }, {}).key, "recent");
+  assert.equal(
+    deriveThreadStatus(
+      { id: "d", preview: "npm test failed" },
+      {
+        selectedThread: "d",
+        currentRunState: "done",
+        terminalEntries: [{ kind: "command", message: "$ npm test\n1 failed" }],
+      },
+    ).key,
+    "test_failed",
+  );
+  assert.equal(
+    deriveThreadStatus(
+      { id: "e", preview: "実装方針を確認したいです" },
+      { selectedThread: "e", currentRunState: "question" },
+    ).key,
+    "question_required",
+  );
+  assert.equal(
+    deriveThreadStatus(
+      { id: "e", preview: "実装方針を確認したいです" },
+      { selectedThread: "e", currentRunState: "question" },
+    ).label,
+    "返信待ち",
+  );
+  assert.equal(
+    deriveThreadStatus(
+      { id: "f", preview: "$ npm test\nℹ tests 64\nℹ pass 64\nℹ fail 0" },
+      { selectedThread: "f", currentRunState: "done" },
+    ).key,
+    "done",
+  );
+  assert.equal(
+    deriveThreadStatus(
+      { id: "f", preview: "$ npm test\nℹ tests 64\nℹ pass 64\nℹ fail 0" },
+      { selectedThread: "f", currentRunState: "done" },
+    ).label,
+    "",
+  );
+  assert.equal(
+    deriveThreadStatus(
+      { id: "g", preview: "送信に失敗しました。" },
+      { selectedThread: "g", currentRunState: "done" },
+    ).key,
+    "done",
+  );
+  assert.equal(
+    deriveThreadStatus({ id: "h" }, { bridgeRuns: [{ threadId: "h", terminalTail: [{ message: "$ npm test\nℹ fail 1" }] }] }).key,
+    "test_failed",
+  );
+  assert.equal(
+    deriveThreadStatus({ id: "i" }, { bridgeRuns: [{ threadId: "i", terminalTail: [{ message: "$ npm run check\nexited with 2" }] }] }).key,
+    "test_failed",
+  );
   assert.deepEqual(
     sortThreadsForInbox([done, running, approval], runtime).map((thread) => thread.id),
     ["a", "b", "c"],

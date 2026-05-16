@@ -882,6 +882,7 @@ const runStateText = {
   running: "処理中",
   streaming: "回答生成中",
   approval: "承認待ち",
+  question: "返信待ち",
   interrupting: "中断中",
   interrupted: "中断しました",
   syncing: "履歴同期中",
@@ -890,10 +891,11 @@ const runStateText = {
   error: "エラー",
 };
 const interruptibleRunStates = new Set(["running", "streaming", "approval", "interrupting"]);
-const terminalRunStates = new Set(["ready", "done", "interrupted", "disconnected", "error"]);
+const terminalRunStates = new Set(["ready", "question", "done", "interrupted", "disconnected", "error"]);
 
 function runStateShortLabel(state = currentRunState) {
   if (state === "approval") return "承認待ち";
+  if (state === "question") return "返信待ち";
   if (state === "running" || state === "streaming" || state === "syncing" || state === "interrupting") return "稼働中";
   if (state === "connecting") return "接続中";
   if (state === "disconnected") return "切断";
@@ -1368,7 +1370,8 @@ function isSameCurrentWorkspaceThread(thread, baseKey = currentThreadWorkspaceKe
 
 function formatRelativeTime(timestamp) {
   if (!timestamp) return "";
-  const ms = timestamp < 10_000_000_000 ? timestamp * 1000 : timestamp;
+  const ms = uiUtils.timestampValueMs ? uiUtils.timestampValueMs(timestamp) : timestamp < 10_000_000_000 ? timestamp * 1000 : timestamp;
+  if (!ms) return "";
   const diffSeconds = Math.max(0, Math.floor((Date.now() - ms) / 1000));
   const hours = Math.floor(diffSeconds / 3600);
   const days = Math.floor(diffSeconds / 86400);
@@ -2442,11 +2445,25 @@ function renderHistoryIfChanged(history = []) {
 
 function normalizeThreadRecord(thread, provider) {
   const nextProvider = normalizeProviderName(thread.provider) || normalizeProviderName(provider) || currentThreadProvider();
+  const updatedAt = uiUtils.threadTimestamp
+    ? uiUtils.threadTimestamp({
+        updatedAt: thread.updatedAt,
+        updated_at_ms: thread.updated_at_ms,
+        updated_at: thread.updated_at,
+      })
+    : thread.updatedAt || thread.updated_at || thread.updated_at_ms;
+  const createdAt = uiUtils.threadTimestamp
+    ? uiUtils.threadTimestamp({
+        createdAt: thread.createdAt,
+        created_at_ms: thread.created_at_ms,
+        created_at: thread.created_at,
+      })
+    : thread.createdAt || thread.created_at || thread.created_at_ms;
   return {
     ...thread,
     provider: nextProvider,
-    updatedAt: thread.updatedAt || thread.updated_at || thread.updated_at_ms,
-    createdAt: thread.createdAt || thread.created_at || thread.created_at_ms,
+    updatedAt,
+    createdAt,
   };
 }
 
@@ -2527,10 +2544,13 @@ function renderThreadList() {
       time.className = "thread-time";
       time.textContent = formatRelativeTime(thread.updatedAt || thread.createdAt);
       const status = deriveThreadStatus(thread);
-      const badge = document.createElement("span");
-      badge.className = `thread-status-badge ${status.tone || status.key}`;
-      badge.textContent = status.label;
-      selectButton.append(title, time, badge);
+      selectButton.append(title, time);
+      if (status.label) {
+        const badge = document.createElement("span");
+        badge.className = `thread-status-badge ${status.tone || status.key}`;
+        badge.textContent = status.label;
+        selectButton.append(badge);
+      }
       selectButton.addEventListener("click", () => selectThread(thread.id));
       item.append(colorButton, selectButton);
       group.appendChild(item);
