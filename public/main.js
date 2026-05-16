@@ -2603,10 +2603,21 @@ function visibleThreadsInListOrder() {
   return threads;
 }
 
+function selectedThreadVisibleInGroups(groups) {
+  if (!selectedThread) return false;
+  const baseKey = currentThreadWorkspaceKey();
+  for (const groupThreads of groups.values()) {
+    const scopedThreads = groupThreads.filter((thread) => isSameCurrentWorkspaceThread(thread, baseKey));
+    if (limitedVisibleThreads(scopedThreads, 6).some((thread) => thread.id === selectedThread)) return true;
+  }
+  return false;
+}
+
 function renderThreadList() {
   threadList.replaceChildren();
   renderThreadInboxTabs();
   const provider = currentThreadProvider();
+  const groups = visibleThreadGroups();
   const newProject = document.createElement("button");
   newProject.type = "button";
   newProject.className = selectedThread ? "project-heading new-project" : "project-heading new-project active";
@@ -2614,7 +2625,7 @@ function renderThreadList() {
   newProject.addEventListener("click", startNewThread);
   threadList.appendChild(newProject);
 
-  const currentThread = currentThreadListRecord();
+  const currentThread = selectedThreadVisibleInGroups(groups) ? null : currentThreadListRecord();
   if (currentThread) {
     const currentGroup = document.createElement("section");
     currentGroup.className = "project-group current-thread-group";
@@ -2634,8 +2645,6 @@ function renderThreadList() {
     );
     threadList.appendChild(currentGroup);
   }
-
-  const groups = visibleThreadGroups({ includeSelected: false });
 
   for (const [project, threads] of groups) {
     const group = document.createElement("section");
