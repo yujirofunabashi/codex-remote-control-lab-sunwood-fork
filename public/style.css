@@ -2926,6 +2926,10 @@ body[data-terminal-input-mode="keys"] .terminal-input-mode-button {
   margin-bottom: 6px;
 }
 
+body[data-main-view="terminal"] .composer {
+  display: none;
+}
+
 .attachments {
   display: none;
   gap: 8px;

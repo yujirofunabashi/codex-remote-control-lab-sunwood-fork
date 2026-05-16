@@ -659,6 +659,7 @@ const bridgeViewStateStorageKey = "codexPhoneBridgeViewState:v1";
 const threadInboxFilterStorageKey = "codexPhoneThreadInboxFilter:v1";
 const taskTemplateStorageKey = "codexPhoneLastTaskTemplate:v1";
 const terminalHistoryLimit = 300;
+const terminalSurfaceKinds = new Set(["command", "error", "approval", "file"]);
 const threadColorPalette = [
   "#ff5d22",
   "#7c3aed",
@@ -720,6 +721,7 @@ let activeDraftKey = "";
 const threadDraftFiles = new Map();
 let mainViewMode = localStorage.getItem(mainViewStorageKey) === "terminal" ? "terminal" : "chat";
 let terminalFilterMode = localStorage.getItem(terminalFilterStorageKey) || "all";
+if (terminalFilterMode !== "all" && !terminalSurfaceKinds.has(terminalFilterMode)) terminalFilterMode = "all";
 let terminalSearchQuery = "";
 let terminalSearchIndex = 0;
 let terminalAutoScroll = true;
@@ -2143,6 +2145,14 @@ function currentTerminalHistory() {
   return terminalHistories.get(key);
 }
 
+function isTerminalSurfaceEntry(entry = {}) {
+  return entry.source === "manual" && terminalSurfaceKinds.has(normalizeTerminalKind(entry.kind));
+}
+
+function currentTerminalSurfaceHistory() {
+  return currentTerminalHistory().filter(isTerminalSurfaceEntry);
+}
+
 function capTerminalHistory(entries) {
   if (uiUtils.capTerminalHistory) return uiUtils.capTerminalHistory(entries, terminalHistoryLimit);
   return entries.slice(-terminalHistoryLimit);
@@ -2263,8 +2273,9 @@ function updateTerminalFilterControls() {
     chip.classList.toggle("active", active);
     chip.setAttribute("aria-pressed", String(active));
   }
-  const visibleCount = currentTerminalHistory().filter(terminalFilterMatches).length;
-  const totalCount = currentTerminalHistory().length;
+  const surfaceEntries = currentTerminalSurfaceHistory();
+  const visibleCount = surfaceEntries.filter(terminalFilterMatches).length;
+  const totalCount = surfaceEntries.length;
   if (terminalCurrentFilterPill) terminalCurrentFilterPill.textContent = terminalFilterLabel(terminalFilterMode);
   if (terminalCompactSearchCount) terminalCompactSearchCount.textContent = terminalSearchQuery ? `${visibleCount}/${totalCount}` : String(totalCount);
   setTerminalAutoScroll(terminalAutoScroll, { toast: false, render: false });
@@ -2272,17 +2283,18 @@ function updateTerminalFilterControls() {
 
 function renderTerminalTranscript() {
   if (!terminalTranscript) return;
-  const entries = currentTerminalHistory().filter(terminalFilterMatches);
+  const surfaceEntries = currentTerminalSurfaceHistory();
+  const entries = surfaceEntries.filter(terminalFilterMatches);
   const query = terminalSearchQuery.trim().toLowerCase();
   terminalTranscript.replaceChildren();
-  if (terminalSearchCount) terminalSearchCount.textContent = query ? String(entries.length) : String(currentTerminalHistory().length);
+  if (terminalSearchCount) terminalSearchCount.textContent = query ? String(entries.length) : String(surfaceEntries.length);
   if (terminalCompactSearchCount) {
-    terminalCompactSearchCount.textContent = query ? `${entries.length}/${currentTerminalHistory().length}` : String(currentTerminalHistory().length);
+    terminalCompactSearchCount.textContent = query ? `${entries.length}/${surfaceEntries.length}` : String(surfaceEntries.length);
   }
   if (!entries.length) {
     const empty = document.createElement("div");
     empty.className = "terminal-empty";
-    empty.textContent = query ? "検索条件に一致するログはありません。" : "このチャットの実行ログはまだありません。";
+    empty.textContent = query ? "検索条件に一致する出力はありません。" : "Terminalで実行したコマンドはまだありません。";
     terminalTranscript.appendChild(empty);
     return;
   }
@@ -2331,10 +2343,11 @@ function appendTerminalEntry(entry, { key = currentThreadColorKey() } = {}) {
         kind: normalizeTerminalKind(entry.kind),
         message: String(entry.message || "").slice(0, 1200),
         detail: entry.detail ? String(entry.detail).slice(0, 4000) : "",
+        source: entry.source || null,
       };
   const history = capTerminalHistory([...(terminalHistories.get(key) || []), normalized]);
   terminalHistories.set(key, history);
-  if (key === currentThreadColorKey() && mainViewMode !== "terminal") {
+  if (key === currentThreadColorKey() && mainViewMode !== "terminal" && isTerminalSurfaceEntry(normalized)) {
     unreadTerminalCount += 1;
     updateUnreadBadges();
   }
@@ -2353,8 +2366,9 @@ function replaceTerminalHistory(entries = [], { key = currentThreadColorKey() } 
             kind: normalizeTerminalKind(entry.kind),
             message: String(entry.message || "").slice(0, 1200),
             detail: entry.detail ? String(entry.detail).slice(0, 4000) : "",
+            source: entry.source || null,
           },
-    ),
+      ),
   );
   terminalHistories.set(key, normalized);
   if (key === currentThreadColorKey()) renderTerminalTranscript();
@@ -2369,8 +2383,8 @@ function terminalHistoryFromChatHistory(history = []) {
         if (!text) return null;
         if (entry.type === "error") return { id: `history-error-${index}`, ts: Date.now(), kind: "error", message: text };
         if (entry.type !== "status") return null;
-        const kind = /^\$\s/.test(text) ? "command" : /file changes|ファイル/i.test(text) ? "file" : "status";
-        return { id: `history-status-${index}`, ts: Date.now(), kind, message: text };
+        if (!/^\$\s/.test(text)) return null;
+        return { id: `history-status-${index}`, ts: Date.now(), kind: "command", message: text };
       })
       .filter(Boolean),
   );
@@ -3658,6 +3672,8 @@ function setMainView(view) {
   terminalViewButton.setAttribute("aria-selected", String(mainViewMode === "terminal"));
   document.body.dataset.mainView = mainViewMode;
   if (mainViewMode === "terminal") {
+    promptInput?.blur();
+    promptInputFocused = false;
     unreadTerminalCount = 0;
     renderTerminalTranscript();
   } else {
@@ -3861,7 +3877,7 @@ async function runTerminalCommand(command) {
   if (!text || terminalCommandRunning) return;
   if (shouldConfirmTerminalCommand(text) && !window.confirm("破壊的な可能性があるコマンドです。このTerminalで実行しますか？")) return;
   setMainView("terminal");
-  appendTerminalEntry({ ts: Date.now(), kind: "command", message: `$ ${text}` });
+  appendTerminalEntry({ ts: Date.now(), kind: "command", message: `$ ${text}`, source: "manual" });
   setTerminalCommandBusy(true);
   try {
     const result = await apiPost(
@@ -3878,10 +3894,11 @@ async function runTerminalCommand(command) {
       kind: result.code === 0 ? "command" : "error",
       message: result.code === 0 ? `exit 0${result.durationMs ? ` / ${result.durationMs}ms` : ""}` : `exit ${result.code ?? "?"}`,
       detail: detail || "(no output)",
+      source: "manual",
     });
     if (terminalCommandInput) terminalCommandInput.value = "";
   } catch (error) {
-    appendTerminalEntry({ ts: Date.now(), kind: "error", message: "Terminal command failed", detail: error.message || String(error) });
+    appendTerminalEntry({ ts: Date.now(), kind: "error", message: "Terminal command failed", detail: error.message || String(error), source: "manual" });
   } finally {
     setTerminalCommandBusy(false);
     terminalCommandInput?.focus({ preventScroll: true });
@@ -5941,20 +5958,20 @@ terminalAutoScrollButton.addEventListener("click", () => {
 });
 terminalAutoScrollMini?.addEventListener("click", () => setTerminalAutoScroll(!terminalAutoScroll));
 terminalClearButton.addEventListener("click", () => {
-  terminalHistories.set(currentThreadColorKey(), []);
+  terminalHistories.set(currentThreadColorKey(), currentTerminalHistory().filter((entry) => !isTerminalSurfaceEntry(entry)));
   renderTerminalTranscript();
-  showToast("表示中の実行ログだけをクリアしました。");
+  showToast("表示中のTerminal出力だけをクリアしました。");
 });
 terminalCopyButton.addEventListener("click", async () => {
-  const text = currentTerminalHistory()
+  const text = currentTerminalSurfaceHistory()
     .filter(terminalFilterMatches)
     .map((entry) => `[${terminalTimestampLabel(entry.ts)}] ${normalizeTerminalKind(entry.kind)} ${entry.message}${entry.detail ? `\n${entry.detail}` : ""}`)
     .join("\n");
   try {
     await copyTextToClipboard(text);
-    showToast("表示中の実行ログをコピーしました。");
+    showToast("表示中のTerminal出力をコピーしました。");
   } catch (error) {
-    addStatus(`実行ログをコピーできませんでした: ${error.message}`);
+    addStatus(`Terminal出力をコピーできませんでした: ${error.message}`);
   }
 });
 terminalLatestButton?.addEventListener("click", () => {

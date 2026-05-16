@@ -506,10 +506,13 @@ async function run() {
       const nav = document.querySelector(".thread-nav");
       const input = document.querySelector("#terminalCommandInput");
       const titlebar = document.querySelector(".titlebar");
+      const composer = document.querySelector("#composer");
       return {
         navDisplay: nav ? getComputedStyle(nav).display : "",
         inputFontSize: input ? parseFloat(getComputedStyle(input).fontSize) : 0,
         titlebarAreas: titlebar ? getComputedStyle(titlebar).gridTemplateAreas : "",
+        composerDisplay: composer ? getComputedStyle(composer).display : "",
+        transcriptText: document.querySelector("#terminalTranscript")?.innerText || "",
       };
     });
     check(
@@ -520,6 +523,12 @@ async function run() {
     check(
       "terminal command input uses an iOS-safe font size",
       terminalCompactState.inputFontSize >= 16,
+      JSON.stringify(terminalCompactState),
+    );
+    check("terminal view hides the chat composer", terminalCompactState.composerDisplay === "none", JSON.stringify(terminalCompactState));
+    check(
+      "terminal view does not show chat status logs before manual commands",
+      !terminalCompactState.transcriptText.includes("前回完了") && terminalCompactState.transcriptText.includes("Terminalで実行したコマンド"),
       JSON.stringify(terminalCompactState),
     );
     await page.locator("#terminalCommandInput").fill("pwd");
