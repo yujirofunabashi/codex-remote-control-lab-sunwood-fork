@@ -2505,20 +2505,22 @@ function upsertThreadRecord(thread, provider = currentThreadProvider()) {
   return normalized;
 }
 
-function visibleThreadGroups() {
+function visibleThreadGroups(options = {}) {
+  const includeSelected = options.includeSelected !== false;
   const query = threadSearch.value.trim().toLowerCase();
   const groups = new Map();
   for (const thread of sortThreadsForInbox(threadCache)) {
     const project = projectForThread(thread);
     const title = titleForThread(thread);
     const selected = thread.id === selectedThread;
+    if (!includeSelected && selected) continue;
     const matches = !query || project.toLowerCase().includes(query) || title.toLowerCase().includes(query);
     if (!matches) continue;
     if (!selected && !threadMatchesInboxFilter(thread)) continue;
     if (!groups.has(project)) groups.set(project, []);
     groups.get(project).push(thread);
   }
-  if (selectedThread) {
+  if (includeSelected && selectedThread) {
     for (const [project, threads] of groups) {
       if (!threads.some((thread) => thread.id === selectedThread)) continue;
       const selectedFirst = new Map([[project, threads]]);
@@ -2529,6 +2531,61 @@ function visibleThreadGroups() {
     }
   }
   return groups;
+}
+
+function currentThreadListRecord() {
+  if (!selectedThread) return null;
+  const existing = selectedThreadRecord();
+  if (existing) return existing;
+  return normalizeThreadRecord(
+    {
+      id: selectedThread,
+      provider: currentThreadProvider(),
+      displayTitle: "現在のチャット",
+      cwd: currentWorkspace.workspaceLocation || currentWorkspace.repoName || "",
+      updatedAt: Date.now(),
+      runState: currentRunState,
+    },
+    currentThreadProvider(),
+  );
+}
+
+function createThreadListItem(thread, options = {}) {
+  const displayTitle = options.displayTitle || titleForThread(thread);
+  const item = document.createElement("div");
+  item.className = thread.id === selectedThread ? "thread-item active" : "thread-item";
+  item.title = displayTitle;
+  item.style.setProperty("--item-thread-accent", threadColorForThread(thread));
+  const colorButton = document.createElement("button");
+  colorButton.type = "button";
+  colorButton.className = "thread-color-button";
+  colorButton.title = `${displayTitle} の色を変更`;
+  colorButton.setAttribute("aria-label", `${displayTitle} の色を変更`);
+  colorButton.style.backgroundColor = threadColorForThread(thread);
+  colorButton.addEventListener("click", (event) => {
+    event.stopPropagation();
+    openThreadColorPanel(thread);
+  });
+  const selectButton = document.createElement("button");
+  selectButton.type = "button";
+  selectButton.className = "thread-select";
+  const title = document.createElement("span");
+  title.className = "thread-title";
+  title.textContent = displayTitle;
+  const time = document.createElement("span");
+  time.className = "thread-time";
+  time.textContent = formatRelativeTime(thread.updatedAt || thread.createdAt);
+  const status = deriveThreadStatus(thread);
+  selectButton.append(title, time);
+  if (status.label) {
+    const badge = document.createElement("span");
+    badge.className = `thread-status-badge ${status.tone || status.key}`;
+    badge.textContent = status.label;
+    selectButton.append(badge);
+  }
+  selectButton.addEventListener("click", () => selectThread(thread.id));
+  item.append(colorButton, selectButton);
+  return item;
 }
 
 function limitedVisibleThreads(threads, limit = 6) {
@@ -2557,7 +2614,28 @@ function renderThreadList() {
   newProject.addEventListener("click", startNewThread);
   threadList.appendChild(newProject);
 
-  const groups = visibleThreadGroups();
+  const currentThread = currentThreadListRecord();
+  if (currentThread) {
+    const currentGroup = document.createElement("section");
+    currentGroup.className = "project-group current-thread-group";
+    const heading = document.createElement("div");
+    heading.className = "project-heading current-thread-heading";
+    const folder = document.createElement("span");
+    folder.className = "project-folder";
+    const name = document.createElement("span");
+    name.textContent = "現在のチャット";
+    heading.append(folder, name);
+    const currentTitle = titleForThread(currentThread);
+    currentGroup.append(
+      heading,
+      createThreadListItem(currentThread, {
+        displayTitle: currentTitle === "名前未設定のチャット" ? "現在のチャット" : currentTitle,
+      }),
+    );
+    threadList.appendChild(currentGroup);
+  }
+
+  const groups = visibleThreadGroups({ includeSelected: false });
 
   for (const [project, threads] of groups) {
     const group = document.createElement("section");
@@ -2574,40 +2652,7 @@ function renderThreadList() {
 
     const visibleThreads = limitedVisibleThreads(threads, 6);
     for (const thread of visibleThreads) {
-      const item = document.createElement("div");
-      item.className = thread.id === selectedThread ? "thread-item active" : "thread-item";
-      item.title = titleForThread(thread);
-      item.style.setProperty("--item-thread-accent", threadColorForThread(thread));
-      const colorButton = document.createElement("button");
-      colorButton.type = "button";
-      colorButton.className = "thread-color-button";
-      colorButton.title = `${titleForThread(thread)} の色を変更`;
-      colorButton.setAttribute("aria-label", `${titleForThread(thread)} の色を変更`);
-      colorButton.style.backgroundColor = threadColorForThread(thread);
-      colorButton.addEventListener("click", (event) => {
-        event.stopPropagation();
-        openThreadColorPanel(thread);
-      });
-      const selectButton = document.createElement("button");
-      selectButton.type = "button";
-      selectButton.className = "thread-select";
-      const title = document.createElement("span");
-      title.className = "thread-title";
-      title.textContent = titleForThread(thread);
-      const time = document.createElement("span");
-      time.className = "thread-time";
-      time.textContent = formatRelativeTime(thread.updatedAt || thread.createdAt);
-      const status = deriveThreadStatus(thread);
-      selectButton.append(title, time);
-      if (status.label) {
-        const badge = document.createElement("span");
-        badge.className = `thread-status-badge ${status.tone || status.key}`;
-        badge.textContent = status.label;
-        selectButton.append(badge);
-      }
-      selectButton.addEventListener("click", () => selectThread(thread.id));
-      item.append(colorButton, selectButton);
-      group.appendChild(item);
+      group.appendChild(createThreadListItem(thread));
     }
 
     if (threads.length > visibleThreads.length) {
