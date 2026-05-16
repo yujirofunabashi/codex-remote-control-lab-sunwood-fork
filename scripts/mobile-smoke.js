@@ -90,6 +90,19 @@ async function mockApi(page, origin) {
     if (url.pathname === "/api/threads") return route.fulfill({ json: { data: staleThreadList } });
     if (url.pathname === "/api/thread") return route.fulfill({ json: { threadId: "thread-mobile-compact", history } });
     if (url.pathname === "/api/artifacts") return route.fulfill({ json: { data: [] } });
+    if (url.pathname === "/api/terminal/run") {
+      return route.fulfill({
+        json: {
+          command: "pwd",
+          cwd: root,
+          code: 0,
+          stdout: root,
+          stderr: "",
+          truncated: false,
+          durationMs: 12,
+        },
+      });
+    }
     if (url.pathname === "/api/file") {
       return route.fulfill({ json: { path: url.searchParams.get("path") || "README.md", kind: "markdown", text: "# Smoke" } });
     }
@@ -260,7 +273,7 @@ async function run() {
       userFacingLabels.fleet === "現在の接続先" && userFacingLabels.bridge === "codex-remote-control-lab",
       JSON.stringify(userFacingLabels),
     );
-    check("main tabs use Japanese user-facing labels", userFacingLabels.chatTab?.includes("チャット") && userFacingLabels.logTab?.includes("ログ"), JSON.stringify(userFacingLabels));
+    check("main tabs identify chat and Terminal views", userFacingLabels.chatTab?.includes("チャット") && userFacingLabels.logTab?.includes("Terminal"), JSON.stringify(userFacingLabels));
     check("status panel is named for connection state", userFacingLabels.statusTitle === "接続状態", JSON.stringify(userFacingLabels));
     await page.locator("#bridgePill").click();
     await page.waitForTimeout(120);
@@ -363,6 +376,12 @@ async function run() {
     await page.locator("#terminalViewButton").click();
     await page.waitForTimeout(250);
     check("terminal view activates", (await page.locator("#mainTerminalView:not(.hidden)").count()) === 1);
+    check("terminal command input is available", (await page.locator("#terminalCommandInput").count()) === 1);
+    await page.locator("#terminalCommandInput").fill("pwd");
+    await page.locator("#terminalCommandRun").click();
+    await page.waitForTimeout(220);
+    const terminalText = await page.locator("#terminalTranscript").innerText();
+    check("terminal command runs from the Terminal view", terminalText.includes("$ pwd") && terminalText.includes(root), terminalText.slice(-400));
     if (wantShots) await page.screenshot({ path: path.join(shotsDir, "terminal.png") });
 
     // Focus the composer: it must stay fully inside the visible viewport (issue 1).

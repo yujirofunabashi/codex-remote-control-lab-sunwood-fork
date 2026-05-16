@@ -29,6 +29,9 @@ const artifactPreview = document.querySelector("#artifactPreview");
 const terminalList = document.querySelector("#terminalList");
 const mainTerminalView = document.querySelector("#mainTerminalView");
 const terminalTranscript = document.querySelector("#terminalTranscript");
+const terminalCommandForm = document.querySelector("#terminalCommandForm");
+const terminalCommandInput = document.querySelector("#terminalCommandInput");
+const terminalCommandRunButton = document.querySelector("#terminalCommandRun");
 const terminalFilter = document.querySelector("#terminalFilter");
 const terminalFilterChips = document.querySelectorAll("[data-terminal-filter]");
 const terminalSearchInput = document.querySelector("#terminalSearchInput");
@@ -723,6 +726,7 @@ let terminalWrapMode = localStorage.getItem(terminalWrapStorageKey) !== "scroll"
 let terminalFontSize = Math.max(10, Math.min(18, Number(localStorage.getItem(terminalFontSizeStorageKey)) || 12));
 let terminalInputMode = localStorage.getItem(terminalInputModeStorageKey) === "keys" ? "keys" : "text";
 let terminalQuickbarPinned = localStorage.getItem(terminalQuickbarPinStorageKey) === "1";
+let terminalCommandRunning = false;
 let promptInputFocused = false;
 let unreadChatCount = 0;
 let unreadTerminalCount = 0;
@@ -1024,7 +1028,7 @@ function shortId(value) {
 
 function updateTerminalHeader() {
   if (!terminalStatusTitle || !terminalSessionMeta) return;
-  terminalStatusTitle.textContent = `${providerLabel(currentThreadProvider())} 実行ログ`;
+  terminalStatusTitle.textContent = `${providerLabel(currentThreadProvider())} Terminal`;
   const connected = connectionReady && ws?.readyState === WebSocket.OPEN;
   const pieces = [
     connected ? "接続済み" : currentRunState === "connecting" ? "接続中" : "切断",
@@ -1061,13 +1065,13 @@ function setTerminalFocusMode(enabled) {
   if (enabled) {
     closeRightPanel();
     setSidebarVisible(false);
-    terminalFocusButton?.setAttribute("aria-label", "ログ拡大表示を閉じる");
+    terminalFocusButton?.setAttribute("aria-label", "Terminal拡大表示を閉じる");
     terminalFocusButton.textContent = "戻す";
     if (terminalMaxSheetButton) terminalMaxSheetButton.textContent = "元に戻す";
     mainTerminalView?.focus?.({ preventScroll: true });
-    showToast("ログを拡大表示しました。");
+    showToast("Terminalを拡大表示しました。");
   } else if (terminalFocusButton) {
-    terminalFocusButton.setAttribute("aria-label", "ログを拡大表示");
+    terminalFocusButton.setAttribute("aria-label", "Terminalを拡大表示");
     terminalFocusButton.textContent = "拡大";
     if (terminalMaxSheetButton) terminalMaxSheetButton.textContent = "最大化";
   }
@@ -3719,10 +3723,63 @@ async function apiPost(path, body = {}, options = {}) {
     method: "POST",
     headers: authHeadersForBridge(bridge, { "content-type": "application/json" }),
     body: JSON.stringify(body),
-  });
+  }, options.timeoutMs || apiTimeoutMs);
   const result = await response.json();
   if (!response.ok) throw new Error(result.error || `${response.status} ${response.statusText}`);
   return result;
+}
+
+function setTerminalCommandBusy(busy) {
+  terminalCommandRunning = Boolean(busy);
+  if (terminalCommandInput) terminalCommandInput.disabled = terminalCommandRunning;
+  if (terminalCommandRunButton) {
+    terminalCommandRunButton.disabled = terminalCommandRunning;
+    terminalCommandRunButton.textContent = terminalCommandRunning ? "実行中" : "実行";
+  }
+}
+
+function shouldConfirmTerminalCommand(command) {
+  return /\b(rm\s+-|sudo\s+|mkfs|diskutil\s+erase|chmod\s+-R|chown\s+-R|git\s+reset\s+--hard|git\s+clean\s+-fd)\b/i.test(command);
+}
+
+function terminalCommandDetail(result = {}) {
+  const parts = [];
+  if (result.stdout) parts.push(result.stdout);
+  if (result.stderr) parts.push(result.stderr);
+  if (result.truncated) parts.push("[output truncated]");
+  return parts.join(parts.length > 1 ? "\n" : "").trim();
+}
+
+async function runTerminalCommand(command) {
+  const text = String(command || "").trim();
+  if (!text || terminalCommandRunning) return;
+  if (shouldConfirmTerminalCommand(text) && !window.confirm("破壊的な可能性があるコマンドです。このTerminalで実行しますか？")) return;
+  setMainView("terminal");
+  appendTerminalEntry({ ts: Date.now(), kind: "command", message: `$ ${text}` });
+  setTerminalCommandBusy(true);
+  try {
+    const result = await apiPost(
+      "/api/terminal/run",
+      {
+        command: text,
+        cwd: currentWorkspace.workspaceLocation || "",
+      },
+      { timeoutMs: 65_000 },
+    );
+    const detail = terminalCommandDetail(result);
+    appendTerminalEntry({
+      ts: Date.now(),
+      kind: result.code === 0 ? "command" : "error",
+      message: result.code === 0 ? `exit 0${result.durationMs ? ` / ${result.durationMs}ms` : ""}` : `exit ${result.code ?? "?"}`,
+      detail: detail || "(no output)",
+    });
+    if (terminalCommandInput) terminalCommandInput.value = "";
+  } catch (error) {
+    appendTerminalEntry({ ts: Date.now(), kind: "error", message: "Terminal command failed", detail: error.message || String(error) });
+  } finally {
+    setTerminalCommandBusy(false);
+    terminalCommandInput?.focus({ preventScroll: true });
+  }
 }
 
 function switchThreadProvider(provider, { reload = true } = {}) {
@@ -5779,6 +5836,10 @@ terminalFontDownButton?.addEventListener("click", () => setTerminalFontSize(term
 terminalFontResetButton?.addEventListener("click", () => setTerminalFontSize(12));
 terminalFontUpButton?.addEventListener("click", () => setTerminalFontSize(terminalFontSize + 1));
 terminalFocusButton?.addEventListener("click", () => setTerminalFocusMode(!document.body.classList.contains("terminal-focus-mode")));
+terminalCommandForm?.addEventListener("submit", (event) => {
+  event.preventDefault();
+  runTerminalCommand(terminalCommandInput?.value || "");
+});
 terminalTextModeButton?.addEventListener("click", () => setTerminalInputMode("text"));
 terminalKeysModeButton?.addEventListener("click", () => setTerminalInputMode("keys"));
 terminalInputModeButton?.addEventListener("click", () => setTerminalInputMode(terminalInputMode === "keys" ? "text" : "keys"));

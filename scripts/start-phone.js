@@ -3294,6 +3294,82 @@ function gitOutputLimited(cwd, args, maxBytes = 24_000) {
   }
 }
 
+function appendCappedOutput(current, chunk, maxBytes) {
+  if (Buffer.byteLength(current, "utf8") >= maxBytes) return { text: current, truncated: true };
+  const next = `${current}${chunk}`;
+  if (Buffer.byteLength(next, "utf8") <= maxBytes) return { text: next, truncated: false };
+  return { text: Buffer.from(next).subarray(0, maxBytes).toString("utf8"), truncated: true };
+}
+
+function executeTerminalCommand(command, options = {}) {
+  const text = String(command || "").trim();
+  if (!text) throw new Error("Command is required");
+  if (text.length > 2000) throw new Error("Command is too long");
+  const cwd = options.cwd ? validateWorkdir(options.cwd) : workdir;
+  const timeoutMs = Math.min(Math.max(Number(options.timeoutMs || 30_000), 1000), 60_000);
+  const maxBytes = Math.min(Math.max(Number(options.maxBytes || 60_000), 4_000), 120_000);
+  const startedAt = Date.now();
+  return new Promise((resolve) => {
+    let stdout = "";
+    let stderr = "";
+    let truncated = false;
+    let timedOut = false;
+    let exited = false;
+    const child = spawn(text, {
+      cwd,
+      env: { ...process.env, TERM: process.env.TERM || "xterm-256color" },
+      shell: process.env.SHELL || true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGTERM");
+      setTimeout(() => {
+        if (!exited) child.kill("SIGKILL");
+      }, 1000).unref?.();
+    }, timeoutMs);
+    child.stdout.on("data", (chunk) => {
+      const next = appendCappedOutput(stdout, chunk.toString("utf8"), maxBytes);
+      stdout = next.text;
+      truncated = truncated || next.truncated;
+    });
+    child.stderr.on("data", (chunk) => {
+      const next = appendCappedOutput(stderr, chunk.toString("utf8"), maxBytes);
+      stderr = next.text;
+      truncated = truncated || next.truncated;
+    });
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      resolve({
+        command: text,
+        cwd,
+        code: 1,
+        signal: "",
+        stdout: redactSensitiveText(stdout),
+        stderr: redactSensitiveText(stderr || error.message),
+        truncated,
+        timedOut,
+        durationMs: Date.now() - startedAt,
+      });
+    });
+    child.on("close", (code, signal) => {
+      exited = true;
+      clearTimeout(timer);
+      resolve({
+        command: text,
+        cwd,
+        code: timedOut ? 124 : Number(code || 0),
+        signal: signal || "",
+        stdout: redactSensitiveText(stdout.trimEnd()),
+        stderr: redactSensitiveText((timedOut ? `${stderr}\nCommand timed out after ${timeoutMs}ms` : stderr).trimEnd()),
+        truncated,
+        timedOut,
+        durationMs: Date.now() - startedAt,
+      });
+    });
+  });
+}
+
 function reviewDiffPayload() {
   const repoRoot = gitOutput(["rev-parse", "--show-toplevel"]);
   if (!repoRoot) {
@@ -3753,6 +3829,25 @@ async function main() {
       }, 200);
       return;
     }
+    if (url.pathname === "/api/terminal/run") {
+      if (!requireToken(url, phoneToken, res)) return;
+      if (req.method !== "POST") {
+        sendJson(res, 405, { error: "method not allowed" });
+        return;
+      }
+      try {
+        const body = await readJsonBody(req);
+        const result = await executeTerminalCommand(body.command, {
+          cwd: body.cwd || workdir,
+          timeoutMs: body.timeoutMs,
+          maxBytes: body.maxBytes,
+        });
+        sendJson(res, 200, result);
+      } catch (error) {
+        sendJson(res, 400, { error: error.message });
+      }
+      return;
+    }
     if (url.pathname === "/api/status") {
       if (!requireToken(url, phoneToken, res)) return;
       const refreshRateLimits = url.searchParams.get("refreshRateLimits") === "1";
@@ -4033,6 +4128,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  executeTerminalCommand,
   manifestHrefForRequest,
   manifestPayloadForRequest,
   maskTokenValue,
