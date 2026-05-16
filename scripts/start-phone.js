@@ -441,10 +441,10 @@ function gitOutput(args) {
   return gitOutputFromCwd(workdir, args);
 }
 
-function currentGitBranch() {
-  const branch = gitOutput(["rev-parse", "--abbrev-ref", "HEAD"]);
+function currentGitBranch(cwd = workdir) {
+  const branch = gitOutputFromCwd(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]);
   if (branch && branch !== "HEAD") return branch;
-  const commit = gitOutput(["rev-parse", "--short", "HEAD"]);
+  const commit = gitOutputFromCwd(cwd, ["rev-parse", "--short", "HEAD"]);
   return commit ? `detached:${commit}` : "";
 }
 
@@ -518,21 +518,22 @@ const workspaceMetaCacheTtlMs = 5000;
 let workspaceMetaCache = null;
 let workspaceMetaCacheAt = 0;
 
-function readWorkspaceMeta() {
-  const gitRoot = gitOutput(["rev-parse", "--show-toplevel"]);
-  const repoName = path.basename(gitRoot || workdir);
-  const relative = gitRoot ? displayPath(path.relative(gitRoot, workdir)) : "";
+function readWorkspaceMeta(cwd = workdir) {
+  const gitRoot = gitOutputFromCwd(cwd, ["rev-parse", "--show-toplevel"]);
+  const repoName = path.basename(gitRoot || cwd);
+  const relative = gitRoot ? displayPath(path.relative(gitRoot, cwd)) : "";
   return {
-    gitBranch: currentGitBranch(),
+    gitBranch: currentGitBranch(cwd),
     repoName,
-    workspaceLocation: gitRoot ? relative || "." : displayPath(workdir),
+    workspaceLocation: gitRoot ? relative || "." : displayPath(cwd),
   };
 }
 
-function currentWorkspaceMeta() {
+function currentWorkspaceMeta(cwd = workdir) {
+  if (path.resolve(cwd) !== path.resolve(workdir)) return readWorkspaceMeta(cwd);
   const now = Date.now();
   if (workspaceMetaCache && now - workspaceMetaCacheAt < workspaceMetaCacheTtlMs) return workspaceMetaCache;
-  workspaceMetaCache = readWorkspaceMeta();
+  workspaceMetaCache = readWorkspaceMeta(workdir);
   workspaceMetaCacheAt = now;
   return workspaceMetaCache;
 }
@@ -2110,10 +2111,11 @@ async function claudeThreadListPayload() {
 }
 
 class SharedBridge {
-  constructor(requestedThreadId, baseBridgeKey) {
+  constructor(requestedThreadId, baseBridgeKey, options = {}) {
     this.provider = "codex";
     this.model = modelForProvider(this.provider);
     this.requestedThreadId = requestedThreadId;
+    this.workdir = options.workdir ? validateWorkdir(options.workdir) : workdir;
     this.baseBridgeKey = baseBridgeKey;
     this.bridgeKey = bridgeMapKey(this.provider, baseBridgeKey);
     this.clients = new Set();
@@ -2160,8 +2162,8 @@ class SharedBridge {
       threadTitle: thread?.displayTitle || thread?.name || "",
       thread,
       model: this.model,
-      workdir,
-      ...currentWorkspaceMeta(),
+      workdir: this.workdir,
+      ...currentWorkspaceMeta(this.workdir),
       shared: true,
       clients: this.clients.size,
       history: this.history,
@@ -2172,23 +2174,23 @@ class SharedBridge {
 
   runPayload() {
     if (this.activeTurnId) {
-      if (this.runState?.state === "interrupting") return { ...this.runState, ...currentWorkspaceMeta() };
+      if (this.runState?.state === "interrupting") return { ...this.runState, ...currentWorkspaceMeta(this.workdir) };
       return {
         state: this.streamingStarted ? "streaming" : "running",
         label: this.streamingStarted ? "回答生成中" : "Agent 処理中",
         turnId: this.activeTurnId,
         updatedAt: Date.now(),
-        ...currentWorkspaceMeta(),
+        ...currentWorkspaceMeta(this.workdir),
       };
     }
     return {
       ...(this.runState || { state: "ready", label: "未実行・送信できます", turnId: null, updatedAt: Date.now() }),
-      ...currentWorkspaceMeta(),
+      ...currentWorkspaceMeta(this.workdir),
     };
   }
 
   setBridgeRunState(state, label, turnId = this.activeTurnId || null) {
-    const next = { state, label, turnId, updatedAt: Date.now(), ...currentWorkspaceMeta() };
+    const next = { state, label, turnId, updatedAt: Date.now(), ...currentWorkspaceMeta(this.workdir) };
     const previous = this.runState || {};
     if (state !== "approval") this.pendingApproval = null;
     this.runState = next;
@@ -2305,7 +2307,7 @@ class SharedBridge {
   requestNewThread(statusText = "新しいthreadを開始中...") {
     const id = this.request("thread/start", {
       model: this.model,
-      cwd: workdir,
+      cwd: this.workdir,
       approvalPolicy: "on-request",
       sandbox: "workspace-write",
     });
@@ -2337,7 +2339,7 @@ class SharedBridge {
       const id = this.request("thread/resume", {
         threadId: this.requestedThreadId,
         model: this.model,
-        cwd: workdir,
+        cwd: this.workdir,
         approvalPolicy: "on-request",
         sandbox: "workspace-write",
       });
@@ -2681,7 +2683,7 @@ class SharedBridge {
     lastHistorySync.enabled = enabled;
     runHistorySync({
       threadId: this.threadId,
-      workdir,
+      workdir: this.workdir,
       request: appServerRequest,
       enabled,
     })
@@ -3189,7 +3191,9 @@ function getBridge(threadId, provider = agentProvider, connectionId = crypto.ran
     existing.dispose();
     bridges.delete(key);
   }
-  if (!bridges.has(key)) bridges.set(key, requestedProvider === "claude" ? new ClaudeBridge(threadId, baseKey) : new SharedBridge(threadId, baseKey));
+  if (!bridges.has(key)) {
+    bridges.set(key, requestedProvider === "claude" ? new ClaudeBridge(threadId, baseKey) : new SharedBridge(threadId, baseKey, options));
+  }
   return bridges.get(key);
 }
 
@@ -3972,7 +3976,7 @@ async function main() {
       return;
     }
     wss.handleUpgrade(req, socket, head, (ws) => {
-      bindBrowser(ws, phoneToken, threadId, requestedProvider, { fresh }).catch((error) => {
+      bindBrowser(ws, phoneToken, threadId, requestedProvider, { fresh, workdir: url.searchParams.get("workdir") || "" }).catch((error) => {
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: "error", text: error.message }));
           ws.close();

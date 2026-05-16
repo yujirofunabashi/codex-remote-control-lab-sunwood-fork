@@ -2,7 +2,6 @@ const uiUtils = window.CodexPhoneUiUtils || {};
 const log = document.querySelector("#log");
 const meta = document.querySelector("#meta");
 const connectButton = document.querySelector("#connect");
-const newThreadButton = document.querySelector("#newThread");
 const searchButton = document.querySelector("#searchButton");
 const pluginsButton = document.querySelector("#pluginsButton");
 const automationsButton = document.querySelector("#automationsButton");
@@ -95,6 +94,7 @@ const workspaceRepo = document.querySelector("#workspaceRepo");
 const workspaceLocation = document.querySelector("#workspaceLocation");
 const branchName = document.querySelector("#branchName");
 const workspaceConnectionDot = document.querySelector("#workspaceConnectionDot");
+const sidebarProjectName = document.querySelector("#sidebarProjectName");
 const sendButton = document.querySelector("#send");
 const sendLabel = document.querySelector("#sendLabel");
 const interruptButton = document.querySelector("#interruptRun");
@@ -598,6 +598,7 @@ function wsUrlForBridge(entry = activeBridge(), provider = currentThreadProvider
   target.searchParams.set("provider", provider || "codex");
   if (threadId) target.searchParams.set("thread", threadId);
   if (options.fresh) target.searchParams.set("fresh", "1");
+  if (options.workdir) target.searchParams.set("workdir", options.workdir);
   return target.href;
 }
 
@@ -1365,6 +1366,11 @@ function projectForThread(thread) {
   return cwd.split("/").filter(Boolean).pop() || cwd;
 }
 
+function projectWorkdirForThreads(threads = []) {
+  const record = threads.find((thread) => workspaceKeyForThread(thread));
+  return workspaceKeyForThread(record);
+}
+
 function workspaceKeyForThread(thread, fallback = "") {
   if (uiUtils.workspaceKeyForThreadRecord) return uiUtils.workspaceKeyForThreadRecord(thread, fallback);
   return String(thread?.cwd || thread?.workspaceLocation || thread?.workdir || fallback || "")
@@ -1950,6 +1956,7 @@ function setWorkspaceMeta(meta = {}) {
   const displayLocation = compactWorkspaceLocation(location);
   const branch = currentWorkspace.gitBranch;
   workspaceRepo.textContent = repo || "--";
+  if (sidebarProjectName) sidebarProjectName.textContent = repo || location.split(/[\\/]/).filter(Boolean).pop() || "作業場所";
   workspaceLocation.textContent = displayLocation || "--";
   branchName.textContent = branch || "--";
   const empty = !repo && !location && !branch;
@@ -2635,12 +2642,6 @@ function renderThreadList() {
   renderThreadInboxTabs();
   const provider = currentThreadProvider();
   const groups = visibleThreadGroups();
-  const newProject = document.createElement("button");
-  newProject.type = "button";
-  newProject.className = selectedThread ? "project-heading new-project" : "project-heading new-project active";
-  newProject.innerHTML = `<span class="project-folder"></span><span>New ${providerLabel(provider)} thread</span>`;
-  newProject.addEventListener("click", startNewThread);
-  threadList.appendChild(newProject);
 
   const currentThread = selectedThreadVisibleInGroups(groups) ? null : currentThreadListRecord();
   if (currentThread) {
@@ -2651,6 +2652,7 @@ function renderThreadList() {
     const folder = document.createElement("span");
     folder.className = "project-folder";
     const name = document.createElement("span");
+    name.className = "project-name";
     name.textContent = "現在のチャット";
     heading.append(folder, name);
     const currentTitle = titleForThread(currentThread);
@@ -2672,8 +2674,29 @@ function renderThreadList() {
     const folder = document.createElement("span");
     folder.className = "project-folder";
     const name = document.createElement("span");
+    name.className = "project-name";
     name.textContent = project;
-    heading.append(folder, name);
+    const titleRow = document.createElement("span");
+    titleRow.className = "project-title-row";
+    titleRow.appendChild(name);
+    heading.append(folder, titleRow);
+    const projectWorkdir = projectWorkdirForThreads(threads);
+    if (projectWorkdir) {
+      const createButton = document.createElement("button");
+      createButton.type = "button";
+      createButton.className = "project-new-thread";
+      createButton.title = `${project} で新しいチャット`;
+      createButton.setAttribute("aria-label", `${project} で新しいチャット`);
+      const icon = document.createElement("span");
+      icon.className = "compose-icon";
+      icon.setAttribute("aria-hidden", "true");
+      createButton.appendChild(icon);
+      createButton.addEventListener("click", (event) => {
+        event.stopPropagation();
+        startNewThread({ workdir: projectWorkdir, project });
+      });
+      heading.appendChild(createButton);
+    }
     group.appendChild(heading);
 
     const visibleThreads = limitedVisibleThreads(threads, 6);
@@ -2821,6 +2844,20 @@ function bridgeDisplayLabel(entry = {}, fallback = "接続先") {
   return label;
 }
 
+function basenameFromPath(value = "") {
+  return String(value || "").split(/[\\/]/).filter(Boolean).pop() || "";
+}
+
+function bridgeWorkspaceLabel(entry = {}, state = getBridgeState(entry.id), fallback = "接続先") {
+  const explicit = bridgeDisplayLabel(entry, "");
+  if (explicit && explicit !== "現在の接続先") return explicit;
+  const info = state.info || {};
+  const status = state.status || {};
+  const repo = info.repoName || status.repoName || currentWorkspace.repoName || "";
+  const cwd = info.cwd || info.workdir || status.workdir || entry.workdir || currentWorkspace.workspaceLocation || "";
+  return repo || basenameFromPath(cwd) || fallback;
+}
+
 function bridgeMetaText(entry, state = getBridgeState(entry.id)) {
   const info = state.info || {};
   const status = state.status || {};
@@ -2830,6 +2867,24 @@ function bridgeMetaText(entry, state = getBridgeState(entry.id)) {
   const cwd = info.cwd || info.workdir || entry.workdir || status.workdir || "";
   const name = cwd ? cwd.split(/[\\/]/).filter(Boolean).pop() : "";
   return [port ? `:${port}` : "", branch, dirty, name].filter(Boolean).join(" / ") || "未確認";
+}
+
+function bridgeConnectionMetaText(entry, state = getBridgeState(entry.id)) {
+  const info = state.info || {};
+  const status = state.status || {};
+  const port = entry.port || info.uiPort || status.uiPort || "";
+  const branch = info.branch || status.gitBranch || "";
+  const dirty = info.dirty === true ? "変更あり" : info.dirty === false ? "変更なし" : "";
+  return [port ? `:${port}` : "", branch, dirty].filter(Boolean).join(" / ") || bridgeMetaText(entry, state);
+}
+
+function bridgeHeaderMetaText(entry, state = getBridgeState(entry.id)) {
+  const info = state.info || {};
+  const status = state.status || {};
+  const port = entry.port || info.uiPort || status.uiPort || "";
+  const branch = info.branch || status.gitBranch || "";
+  const dirty = info.dirty === true || status.dirty === true ? "変更あり" : "";
+  return [branch || (port ? `:${port}` : ""), dirty].filter(Boolean).join(" / ") || bridgeMetaText(entry, state);
 }
 
 function fleetBadge(text, tone = "") {
@@ -2886,10 +2941,10 @@ function renderFleet() {
     bridgePill.dataset.state = bridgeStateLabel(active || { id: activeBridgeId }, activeState);
     bridgePill.style.setProperty("--bridge-color", activeColor);
   }
-  if (bridgePillLabel) bridgePillLabel.textContent = bridgeDisplayLabel(active, "接続先");
-  if (bridgePillMeta) bridgePillMeta.textContent = bridgeMetaText(active || { id: activeBridgeId }, activeState);
+  if (bridgePillLabel) bridgePillLabel.textContent = bridgeWorkspaceLabel(active, activeState, "接続先");
+  if (bridgePillMeta) bridgePillMeta.textContent = bridgeHeaderMetaText(active || { id: activeBridgeId }, activeState);
   if (fleetCurrentLabel) fleetCurrentLabel.textContent = bridgeDisplayLabel(active, "現在の接続先");
-  if (fleetCurrentMeta) fleetCurrentMeta.textContent = bridgeMetaText(active || { id: activeBridgeId }, activeState);
+  if (fleetCurrentMeta) fleetCurrentMeta.textContent = bridgeConnectionMetaText(active || { id: activeBridgeId }, activeState);
   if (fleetCurrentBadges) {
     fleetCurrentBadges.replaceChildren();
     const approvals = collectPendingApprovals().length;
@@ -3823,7 +3878,7 @@ function selectThread(threadId, options = {}) {
   setSidebarVisible(false);
   closeThreadSwitcher();
   restoreScrollPositions();
-  connect({ freshThread: options.fresh === true });
+  connect({ freshThread: options.fresh === true, freshWorkdir: options.workdir || "" });
   if (selectedThread) refreshSelectedThread();
   window.setTimeout(() => {
     threadSwitchBusy = false;
@@ -3832,8 +3887,26 @@ function selectThread(threadId, options = {}) {
   }, 420);
 }
 
-function startNewThread() {
-  selectThread("", { fresh: true });
+async function switchToBridgeForWorkdir(workdir) {
+  const target = workspaceKeyForThread({ cwd: workdir });
+  if (!target) return;
+  const match = (bridgeRegistry.bridges || []).find((entry) => {
+    const state = getBridgeState(entry.id);
+    return (
+      workspaceKeyForThread({ cwd: entry.workdir }) === target ||
+      workspaceKeyForThread({ cwd: state.info?.cwd || state.info?.workdir || state.status?.workdir }) === target
+    );
+  });
+  if (match && match.id !== activeBridgeId) await setActiveBridge(match.id, { silent: true });
+}
+
+async function startNewThread(options = {}) {
+  const workdir = String(options.workdir || "").trim();
+  if (workdir) {
+    await switchToBridgeForWorkdir(workdir);
+    setWorkspaceMeta({ repoName: options.project || projectForThread({ cwd: workdir }), workspaceLocation: workdir, gitBranch: "" });
+  }
+  selectThread("", { fresh: true, workdir });
 }
 
 function showRightPanel() {
@@ -4920,13 +4993,9 @@ function renderAttachments() {
 
 const defaultQuickActions = [
   { id: "continue", label: "続けて", text: "続けてください。" },
-  { id: "summary", label: "要約して", text: "ここまでの状況を短く要約してください。" },
-  { id: "test", label: "テストして", text: "関連するテストを実行し、失敗時は原因と修正案を示してください。" },
-  { id: "diff", label: "差分を見せて", text: "現在の差分を要点だけ見せてください。" },
-  { id: "failure", label: "失敗原因を調べて", text: "直近の失敗原因を調べ、再発防止を含めて説明してください。" },
-  { id: "readme", label: "READMEにも反映", text: "今回の変更を README / README.ja.md / docs にも必要最小限で反映してください。" },
-  { id: "split", label: "小さく分けて進めて", text: "作業を小さな検証可能単位に分けて、次の一手から進めてください。" },
-  { id: "pause", label: "一旦停止して状況説明", text: "一旦停止して、現在の状況・未解決点・次に取れる選択肢を説明してください。" },
+  { id: "summary", label: "要約", text: "ここまでの状況を短く要約してください。" },
+  { id: "test", label: "テスト", text: "関連するテストを実行し、失敗時は原因と修正案を示してください。" },
+  { id: "diff", label: "差分", text: "現在の差分を要点だけ見せてください。" },
 ];
 
 const taskTemplatePrompts = [
@@ -4967,7 +5036,7 @@ function renderQuickActions() {
   const usage = quickActionState.usage && typeof quickActionState.usage === "object" ? quickActionState.usage : {};
   const sorted = [...defaultQuickActions].sort((a, b) => (usage[b.id] || 0) - (usage[a.id] || 0));
   quickActions.replaceChildren();
-  for (const action of sorted.slice(0, 6)) {
+  for (const action of sorted.slice(0, 4)) {
     const chip = document.createElement("button");
     chip.type = "button";
     chip.className = "quick-action-chip";
@@ -5235,7 +5304,7 @@ async function uploadFile(file) {
   };
 }
 
-function connect({ preserveHistory = false, freshThread = false } = {}) {
+function connect({ preserveHistory = false, freshThread = false, freshWorkdir = "" } = {}) {
   const bridge = activeBridge();
   const bridgeToken = effectiveBridgeToken(bridge);
   const bridgeId = activeBridgeId;
@@ -5255,7 +5324,10 @@ function connect({ preserveHistory = false, freshThread = false } = {}) {
   }
   updateSelectedThreadHeading();
 
-  ws = new WebSocket(wsUrlForBridge(bridge, provider, selectedThread, { fresh: freshThread && !selectedThread }), wsProtocolsForBridge(bridge));
+  ws = new WebSocket(
+    wsUrlForBridge(bridge, provider, selectedThread, { fresh: freshThread && !selectedThread, workdir: freshWorkdir }),
+    wsProtocolsForBridge(bridge),
+  );
   const socket = ws;
   const isCurrentSocket = () => bridgeId === activeBridgeId && ws === socket;
   connectButton.disabled = true;
@@ -5536,7 +5608,6 @@ declineButton.addEventListener("click", () => {
   setRunState("running", "拒否済み・処理中");
 });
 
-newThreadButton.addEventListener("click", startNewThread);
 prevThreadButton.addEventListener("click", () => selectAdjacentThread(-1));
 nextThreadButton.addEventListener("click", () => selectAdjacentThread(1));
 searchButton.addEventListener("click", () => {
@@ -5565,7 +5636,7 @@ mobileThreadsButton.addEventListener("click", () => {
 sidebarScrim.addEventListener("click", () => {
   setSidebarVisible(false);
 });
-connectButton.addEventListener("click", connect);
+connectButton.addEventListener("click", () => connect());
 promptInput.addEventListener("focus", () => {
   promptInputFocused = true;
   updateQuickBarVisibility();
