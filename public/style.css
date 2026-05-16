@@ -5096,24 +5096,24 @@ body[data-main-view="terminal"] .pwa-install-hint {
 
   .settings {
     width: max-content;
-    grid-template-columns: 22px auto;
-    gap: 10px;
-    min-height: 36px;
+    grid-template-columns: 25px auto;
+    gap: 11px;
+    min-height: 42px;
     border-color: transparent;
-    padding: 0 8px;
+    padding: 0 10px;
     background: transparent;
-    font-size: 14.5px;
-    font-weight: 560;
+    font-size: 16px;
+    font-weight: 590;
   }
 
   .settings .command-icon {
-    width: 21px;
-    height: 21px;
+    width: 24px;
+    height: 24px;
   }
 
   .settings-icon {
-    width: 20px;
-    height: 20px;
+    width: 23px;
+    height: 23px;
   }
 
   .command-icon {
