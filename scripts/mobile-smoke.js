@@ -283,6 +283,39 @@ async function run() {
       return { width: el.getBoundingClientRect().width, border: cs.borderTopWidth };
     });
     check("header color button is compact", colorBtn && colorBtn.width <= 31, JSON.stringify(colorBtn));
+    await page.locator("#mobileThreads").click();
+    await page.waitForTimeout(120);
+    const repoColorState = await page.evaluate(() => {
+      const canonicalColor = (value) => {
+        const probe = document.createElement("span");
+        probe.style.color = value;
+        document.body.appendChild(probe);
+        const color = getComputedStyle(probe).color;
+        probe.remove();
+        return color;
+      };
+      const accent = canonicalColor(getComputedStyle(document.documentElement).getPropertyValue("--thread-accent").trim());
+      const dot = document.querySelector(".thread-item.active .thread-color-button");
+      return {
+        accent,
+        dot: dot ? getComputedStyle(dot).backgroundColor : "",
+        title: dot?.getAttribute("title") || "",
+      };
+    });
+    check(
+      "active thread marker uses the repo color",
+      repoColorState.accent && repoColorState.dot === repoColorState.accent && repoColorState.title.includes("リポ色"),
+      JSON.stringify(repoColorState),
+    );
+    if (wantShots) {
+      fs.mkdirSync(shotsDir, { recursive: true });
+      await page.screenshot({ path: path.join(shotsDir, "sidebar.png") });
+    }
+    await page.evaluate(() => {
+      document.body.classList.remove("show-sidebar");
+      document.querySelector("#mobileThreads")?.setAttribute("aria-expanded", "false");
+    });
+    await page.waitForTimeout(120);
 
     if (wantShots) {
       fs.mkdirSync(shotsDir, { recursive: true });
