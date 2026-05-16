@@ -8,6 +8,7 @@ This project is intentionally local-first.
 - The phone bridge is the only LAN-facing server.
 - Page, API, and WebSocket bridge requests require the same token.
 - `.phone-token`, `.uploads/`, `.codex-home*/`, logs, and session databases stay out of Git.
+- `.phone-fleet.local.json`, `.phone-bridges.local.json`, and browser bridge registry state are local-only.
 - Startup notification credentials and tokenized URL messages should stay in private/protected notification accounts, topics, or channels.
 
 ## Do Not Do This
@@ -37,3 +38,4 @@ The bridge creates `.phone-token` with mode `0600` when `PHONE_TOKEN` is not pro
 - Closing the terminal or restarting the PC stops the bridge. Run `npm run phone` again when you want to use it.
 - Run the bridge from a normal user account, not a root/admin shell.
 - Do not expose the bridge with an unauthenticated public tunnel or raw port forward. Put trusted access, such as SSH forwarding, a VPN, or a device-authenticated mesh network, in front of it.
+- Do not turn the fleet UI into an open proxy. Cross-bridge reads and approval actions must stay token protected and scoped to registered/private bridge URLs.

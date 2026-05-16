@@ -239,10 +239,10 @@ async function run() {
     await snap(page, "mobile-responsive-chat.png");
     await page.locator("#prompt").fill("");
     await page.waitForTimeout(150);
-    await page.getByRole("button", { name: "チャット", exact: true }).click();
+    await page.getByRole("button", { name: "チャット一覧を開く", exact: true }).click();
     await page.waitForTimeout(200);
     await snap(page, "mobile-responsive-drawer.png");
-    await page.evaluate(() => document.body.classList.remove("show-sidebar"));
+    await page.locator("#sidebarScrim").click();
     await page.waitForTimeout(250);
     await page.evaluate(() => document.querySelector("#settingsButton").click());
     await snap(page, "theme-simple-mobile-settings.png");

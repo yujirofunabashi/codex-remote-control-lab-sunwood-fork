@@ -253,9 +253,42 @@ function projectForThread(thread) {
   return cwd.split("/").filter(Boolean).pop() || cwd;
 }
 
+function timestampValueMs(value, unit = "auto") {
+  if (value === undefined || value === null || value === "") return 0;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) return 0;
+    if (unit === "ms") return value;
+    if (unit === "seconds") return value * 1000;
+    return value > 0 && value < 10_000_000_000 ? value * 1000 : value;
+  }
+  const text = String(value).trim();
+  if (!text) return 0;
+  const numeric = Number(text);
+  if (Number.isFinite(numeric)) return timestampValueMs(numeric, unit);
+  const parsed = Date.parse(text);
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+function threadTimestamp(thread = {}) {
+  const fields = [
+    ["updatedAt", "auto"],
+    ["updated_at_ms", "ms"],
+    ["updated_at", "auto"],
+    ["createdAt", "auto"],
+    ["created_at_ms", "ms"],
+    ["created_at", "auto"],
+  ];
+  for (const [field, unit] of fields) {
+    const timestamp = timestampValueMs(thread[field], unit);
+    if (timestamp) return timestamp;
+  }
+  return 0;
+}
+
 function formatRelativeTime(timestamp) {
   if (!timestamp) return "";
-  const ms = timestamp < 10_000_000_000 ? timestamp * 1000 : timestamp;
+  const ms = timestampValueMs(timestamp);
+  if (!ms) return "";
   const diffSeconds = Math.max(0, Math.floor((Date.now() - ms) / 1000));
   const hours = Math.floor(diffSeconds / 3600);
   const days = Math.floor(diffSeconds / 86400);
@@ -906,7 +939,21 @@ async function loadThreads({ background = false } = {}) {
   if (tokenRequired && !token) return;
   try {
     const result = await apiGet("/api/threads");
-    threadCache = result.data || [];
+    threadCache = (result.data || [])
+      .map((thread) => ({
+        ...thread,
+        updatedAt: threadTimestamp({
+          updatedAt: thread.updatedAt,
+          updated_at_ms: thread.updated_at_ms,
+          updated_at: thread.updated_at,
+        }),
+        createdAt: threadTimestamp({
+          createdAt: thread.createdAt,
+          created_at_ms: thread.created_at_ms,
+          created_at: thread.created_at,
+        }),
+      }))
+      .sort((a, b) => threadTimestamp(b) - threadTimestamp(a));
     renderThreadList();
     lastThreadListError = "";
   } catch (error) {

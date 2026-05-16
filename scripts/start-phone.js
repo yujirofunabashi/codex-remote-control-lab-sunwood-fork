@@ -93,6 +93,64 @@ function lanAddresses() {
     .map((entry) => entry.address);
 }
 
+function maskTokenValue(value) {
+  const token = String(value || "");
+  if (!token) return "";
+  if (token.length <= 8) return "****";
+  return `${token.slice(0, 4)}…${token.slice(-4)}`;
+}
+
+function tokenMetadata(phoneToken) {
+  return {
+    present: Boolean(phoneToken),
+    required: tokenRequired,
+    mode: authMode,
+    masked: phoneToken ? maskTokenValue(phoneToken) : "",
+  };
+}
+
+function requestTokenFromHeaders(headers = {}) {
+  const auth = String(headers.authorization || "");
+  const bearer = auth.match(/^Bearer\s+(.+)$/i);
+  return bearer ? bearer[1] : "";
+}
+
+function safeProxyBasePath(basePath) {
+  const value = String(basePath || "");
+  return /^\/(?:abs)?proxy\/\d+$/.test(value) ? value : "";
+}
+
+function manifestHrefForRequest(req, _phoneToken) {
+  const url = new URL(req.url, `http://${req.headers.host}`);
+  const safeBasePath = safeProxyBasePath(url.searchParams.get("base"));
+  const params = new URLSearchParams();
+  if (safeBasePath) params.set("base", safeBasePath);
+  const query = params.toString();
+  return `site.webmanifest${query ? `?${query}` : ""}`;
+}
+
+function manifestPayloadForRequest(url) {
+  const manifestPath = path.join(root, "public", "site.webmanifest");
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  const safeBasePath = safeProxyBasePath(url.searchParams.get("base"));
+  manifest.id = `${safeBasePath}/codex-remote`;
+  manifest.scope = `${safeBasePath}/`;
+  manifest.start_url = `${safeBasePath}/`;
+  if (Array.isArray(manifest.icons)) {
+    manifest.icons = manifest.icons.map((icon) => ({
+      ...icon,
+      src: `${safeBasePath}/${String(icon.src || "").replace(/^\/+/, "")}`,
+    }));
+  }
+  return manifest;
+}
+
+function serveManifest(url, res) {
+  const manifest = manifestPayloadForRequest(url);
+  res.writeHead(200, { "content-type": "application/manifest+json; charset=utf-8", "cache-control": "no-store" });
+  res.end(JSON.stringify(manifest, null, 2));
+}
+
 function waitForReady() {
   const url = `http://127.0.0.1:${codexPort}/readyz`;
   return new Promise((resolve, reject) => {
@@ -699,6 +757,8 @@ class SharedBridge {
     this.pending = new Map();
     this.threadId = null;
     this.activeTurnId = null;
+    this.createdAt = Date.now();
+    this.listUpdatedAt = 0;
     this.ready = false;
     this.startupFailed = false;
     this.history = [];
@@ -939,6 +999,7 @@ class SharedBridge {
   appendHistory(entry) {
     this.history.push(entry);
     this.history = capHistory(this.history);
+    if (entry?.text) this.listUpdatedAt = Date.now();
   }
 
   approval(requestMsg, decision) {
@@ -966,6 +1027,108 @@ function getBridge(threadId, connectionId = crypto.randomUUID()) {
   const key = bridgeKeyForRequest(threadId, connectionId);
   if (!bridges.has(key)) bridges.set(key, new SharedBridge(threadId, key));
   return bridges.get(key);
+}
+
+function timestampValueMs(value, unit = "auto") {
+  if (value === undefined || value === null || value === "") return 0;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) return 0;
+    if (unit === "ms") return value;
+    if (unit === "seconds") return value * 1000;
+    return value > 0 && value < 10_000_000_000 ? value * 1000 : value;
+  }
+  const text = String(value).trim();
+  if (!text) return 0;
+  const numeric = Number(text);
+  if (Number.isFinite(numeric)) return timestampValueMs(numeric, unit);
+  const parsed = Date.parse(text);
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+function threadListTimestamp(thread = {}) {
+  const fields = [
+    ["updatedAt", "auto"],
+    ["updated_at_ms", "ms"],
+    ["updated_at", "auto"],
+    ["createdAt", "auto"],
+    ["created_at_ms", "ms"],
+    ["created_at", "auto"],
+  ];
+  for (const [field, unit] of fields) {
+    const timestamp = timestampValueMs(thread[field], unit);
+    if (timestamp) return timestamp;
+  }
+  return 0;
+}
+
+function copyThreadTimeFields(target, source, fields) {
+  for (const field of fields) {
+    if (source && source[field] !== undefined && source[field] !== null && source[field] !== "") target[field] = source[field];
+    else delete target[field];
+  }
+}
+
+function localThreadList() {
+  return Array.from(bridges.values())
+    .filter((bridge) => bridge.threadId)
+    .map((bridge) => {
+      const userEntry = [...bridge.history].reverse().find((entry) => entry.type === "user");
+      const preview = userEntry?.text || bridge.threadId;
+      const localActivityAt = threadListTimestamp({ updatedAt: bridge.listUpdatedAt || 0 });
+      const updatedAt = localActivityAt || threadListTimestamp({ updatedAt: bridge.createdAt || 0 });
+      return {
+        id: bridge.threadId,
+        name: preview.split("\n").find(Boolean) || bridge.threadId,
+        preview,
+        cwd: workdir,
+        provider: "codex",
+        updatedAt,
+        updated_at: updatedAt,
+        createdAt: bridge.createdAt || updatedAt,
+        created_at: bridge.createdAt || updatedAt,
+        localActivityAt,
+      };
+    });
+}
+
+function mergeThreadListData(remoteThreads = [], localThreads = []) {
+  const byId = new Map();
+  for (const thread of Array.isArray(remoteThreads) ? remoteThreads : []) {
+    if (thread?.id) byId.set(thread.id, thread);
+  }
+  for (const thread of Array.isArray(localThreads) ? localThreads : []) {
+    if (!thread?.id) continue;
+    const existing = byId.get(thread.id);
+    const merged = {
+      ...existing,
+      ...thread,
+      name: thread.name === thread.id && existing?.name ? existing.name : thread.name,
+      preview: thread.preview === thread.id && existing?.preview ? existing.preview : thread.preview,
+    };
+    if (existing) {
+      const existingTimestamp = threadListTimestamp(existing);
+      const localActivityAt = threadListTimestamp({ updatedAt: thread.localActivityAt || 0 });
+      if (!localActivityAt || (existingTimestamp && localActivityAt <= existingTimestamp)) {
+        copyThreadTimeFields(merged, existing, ["updatedAt", "updated_at", "updated_at_ms"]);
+      }
+      copyThreadTimeFields(merged, existing, ["createdAt", "created_at", "created_at_ms"]);
+    }
+    byId.set(thread.id, merged);
+  }
+  return Array.from(byId.values()).sort((a, b) => threadListTimestamp(b) - threadListTimestamp(a));
+}
+
+async function codexThreadListPayload() {
+  const result = await appServerRequest("thread/list", {
+    limit: 30,
+    sortKey: "updated_at",
+    sortDirection: "desc",
+    archived: false,
+    useStateDbOnly: false,
+  });
+  const remoteData = Array.isArray(result.data) ? result.data.map((thread) => ({ ...thread, provider: "codex" })) : result.data;
+  const data = Array.isArray(remoteData) ? mergeThreadListData(remoteData, localThreadList()) : remoteData;
+  return { ...result, provider: "codex", activeProvider: "codex", data };
 }
 
 function bindBrowser(browser, phoneToken, threadId) {
@@ -1010,14 +1173,7 @@ async function main() {
     if (url.pathname === "/api/threads") {
       if (!requireToken(url, phoneToken, res)) return;
       try {
-        const result = await appServerRequest("thread/list", {
-          limit: 30,
-          sortKey: "updated_at",
-          sortDirection: "desc",
-          archived: false,
-          useStateDbOnly: false,
-        });
-        sendJson(res, 200, result);
+        sendJson(res, 200, await codexThreadListPayload());
       } catch (error) {
         sendJson(res, 500, { error: error.message });
       }
@@ -1081,6 +1237,10 @@ async function main() {
           ready: bridge.ready,
         })),
       });
+      return;
+    }
+    if (url.pathname === "/site.webmanifest") {
+      serveManifest(url, res);
       return;
     }
     if (url.pathname === "/api/history-sync") {
@@ -1266,12 +1426,20 @@ if (require.main === module) {
   module.exports = {
     decorateReviewFiles,
     discoverWorkspaceEntries,
+    manifestHrefForRequest,
+    manifestPayloadForRequest,
+    maskTokenValue,
+    mergeThreadListData,
     relativeDisplayPath,
+    requestTokenFromHeaders,
     reviewSummary,
     runGit,
     safeOpenPath,
     safePathWithin,
+    safeProxyBasePath,
     safeRelativePath,
     safeWorkdirPath,
+    threadListTimestamp,
+    tokenMetadata,
   };
 }

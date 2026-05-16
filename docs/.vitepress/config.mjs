@@ -30,8 +30,10 @@ export default defineConfig({
             text: "Guide",
             items: [
               { text: "Phone Bridge", link: "/guide/phone-bridge" },
+              { text: "Official Mobile Comparison", link: "/guide/official-codex-mobile-comparison" },
               { text: "Protocol Notes", link: "/guide/protocol" },
               { text: "Security", link: "/guide/security" },
+              { text: "Contributing", link: "/guide/contributing" },
               { text: "v0.3.0 Release", link: "/guide/releases/v0.3.0" },
               { text: "v0.3.0 Walkthrough", link: "/guide/articles/v0.3.0-desktop-bridge" },
               { text: "v0.2.1 Release", link: "/guide/releases/v0.2.1" },
@@ -59,8 +61,10 @@ export default defineConfig({
             text: "ガイド",
             items: [
               { text: "Phone Bridge", link: "/ja/guide/phone-bridge" },
+              { text: "公式 Mobile との違い", link: "/ja/guide/official-codex-mobile-comparison" },
               { text: "Protocol Notes", link: "/ja/guide/protocol" },
               { text: "Security", link: "/ja/guide/security" },
+              { text: "Contributing", link: "/ja/guide/contributing" },
               { text: "v0.3.0 Release", link: "/ja/guide/releases/v0.3.0" },
               { text: "v0.3.0 Walkthrough", link: "/ja/guide/articles/v0.3.0-desktop-bridge" },
               { text: "v0.2.1 Release", link: "/ja/guide/releases/v0.2.1" },
