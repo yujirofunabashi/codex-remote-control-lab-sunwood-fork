@@ -104,7 +104,7 @@ PHONE_NOTIFY_TIMEOUT_MS=5000 npm run phone
 
 履歴同期は既定で有効です。Web 側の turn 完了後、bridge は `thread/read` と scan-backed な `thread/list` を実行して app-server の履歴/index を温めます。`/api/threads` も state DB 限定ではなく scan-and-repair で取得します。これにより Codex Desktop 側で thread を開き直す/再読込したときに、更新済み session を見つけやすくします。ただし、通常の Desktop 会話画面へライブ注入するものではありません。追加の履歴 refresh を止めたい場合は `CODEX_HISTORY_SYNC=0` を指定します。
 
-通知は opt-in です。`PHONE_NTFY_TOPIC` がある場合は ntfy topic へ、`PHONE_PUSHOVER_TOKEN` と `PHONE_PUSHOVER_USER` がある場合は Pushover へ、`PHONE_DISCORD_WEBHOOK_URL` がある場合は Discord へ起動 URL を送ります。作業 event 通知も使う場合は `PHONE_NOTIFY_EVENTS=1` を設定します。`approval_required`、`question_required`、`turn_completed`、`test_failed`、`connection_lost`、`history_sync_failed`、`long_running` を送信でき、`PHONE_NOTIFY_EVENT_DEDUPE_MS` で短時間の重複通知を抑制します。起動通知は互換性のため token 付き URL を含み得るので private/protected topic、account、channel 限定で使ってください。event 通知の URL には token を含めません。
+通知は opt-in です。`PHONE_NTFY_TOPIC` がある場合は ntfy topic へ、`PHONE_PUSHOVER_TOKEN` と `PHONE_PUSHOVER_USER` がある場合は Pushover へ、`PHONE_DISCORD_WEBHOOK_URL` がある場合は Discord へ起動 URL を送ります。task 完了/中断通知は、設定済み provider へ送ります。その他の作業 event 通知も使う場合は `PHONE_NOTIFY_EVENTS=1` を設定します。`approval_required`、`question_required`、`test_failed`、`connection_lost`、`history_sync_failed`、`long_running` を送信でき、`PHONE_NOTIFY_EVENT_DEDUPE_MS` で非強制 event の短時間重複通知を抑制します。起動通知は互換性のため token 付き URL を含み得るので private/protected topic、account、channel 限定で使ってください。event 通知の URL には token を含めません。
 
 現在の bridge は次をサポートします。
 

@@ -165,6 +165,25 @@ test("notifyTaskEvent is quiet unless event notifications are enabled", async ()
   assert.deepEqual(results, []);
 });
 
+test("notifyTaskEvent can force completion notifications for configured providers", async () => {
+  const requests = [];
+  const results = await notifyTaskEvent(
+    { status: "completed", provider: "codex", threadId: "thread-123" },
+    {
+      env: { PHONE_DISCORD_WEBHOOK_URL: "https://discord.com/api/webhooks/123/abc" },
+      force: true,
+      fetch: async (url, options) => {
+        requests.push({ url, options });
+        return { ok: true, status: 204 };
+      },
+    },
+  );
+
+  assert.deepEqual(results, [{ type: "discord", ok: true }]);
+  assert.equal(requests.length, 1);
+  assert.match(JSON.parse(requests[0].options.body).content, /codex task completed/);
+});
+
 test("notifyEvent dedupes and strips tokenized URLs", async () => {
   const requests = [];
   const env = {

@@ -88,7 +88,7 @@ async function mockApi(page, origin) {
       });
     }
     if (url.pathname === "/api/threads") return route.fulfill({ json: { data: staleThreadList } });
-    if (url.pathname === "/api/thread") return route.fulfill({ json: { threadId: "thread-mobile-compact", history } });
+    if (url.pathname === "/api/thread") return route.fulfill({ json: { threadId: url.searchParams.get("thread") || "thread-mobile-compact", history } });
     if (url.pathname === "/api/artifacts") return route.fulfill({ json: { data: [] } });
     if (url.pathname === "/api/terminal/run") {
       return route.fulfill({
@@ -121,7 +121,38 @@ async function mockApi(page, origin) {
           workdir: root,
           repoName: "codex-remote-control-lab",
           gitBranch: "feature/mobile-terminal-compact",
-          bridges: [{ threadId: "thread-mobile-compact", clients: 1, ready: true }],
+          bridges: [
+            {
+              threadId: "thread-mobile-compact",
+              clients: 1,
+              ready: true,
+              workdir: root,
+              repoName: "codex-remote-control-lab",
+              workspaceLocation: root,
+              gitBranch: "feature/mobile-terminal-compact",
+              run: {
+                state: "done",
+                repoName: "codex-remote-control-lab",
+                workspaceLocation: root,
+                gitBranch: "feature/mobile-terminal-compact",
+              },
+            },
+            {
+              threadId: "thread-artifacts",
+              clients: 1,
+              ready: true,
+              workdir: artifactRepo,
+              repoName: "artifact-workspace",
+              workspaceLocation: artifactRepo,
+              gitBranch: "feature/artifacts",
+              run: {
+                state: "done",
+                repoName: "artifact-workspace",
+                workspaceLocation: artifactRepo,
+                gitBranch: "feature/artifacts",
+              },
+            },
+          ],
         },
       });
     }
@@ -131,14 +162,36 @@ async function mockApi(page, origin) {
 
 async function mockWebSocket(page) {
   await page.addInitScript((payload) => {
+    window.__mockWebSocketUrls = [];
     class MockWebSocket extends EventTarget {
-      constructor() {
+      constructor(url) {
         super();
+        window.__mockWebSocketUrls.push(String(url || ""));
+        const target = new URL(String(url || ""), location.href);
+        const requestedThreadId = target.searchParams.get("thread") || payload.threadId;
+        const requestedWorkdir = target.searchParams.get("workdir") || payload.workdir;
+        const repoName = requestedWorkdir.split(/[\\/]/).filter(Boolean).pop() || payload.repoName;
+        const readyPayload = {
+          ...payload,
+          threadId: requestedThreadId,
+          workdir: requestedWorkdir,
+          repoName,
+          workspaceLocation: requestedWorkdir,
+          thread: {
+            id: requestedThreadId,
+            name: requestedThreadId === "thread-artifacts" ? "Artifact preview polish" : payload.threadTitle || "Mobile terminal compact polish",
+            displayTitle: requestedThreadId === "thread-artifacts" ? "Artifact preview polish" : payload.threadTitle || "Mobile terminal compact polish",
+            preview: requestedThreadId === "thread-artifacts" ? "Artifact preview polish" : payload.threadTitle || "Mobile terminal compact polish",
+            cwd: requestedWorkdir,
+            provider: "codex",
+            updatedAt: Date.now(),
+          },
+        };
         this.readyState = MockWebSocket.CONNECTING;
         setTimeout(() => {
           this.readyState = MockWebSocket.OPEN;
           this.dispatchEvent(new Event("open"));
-          this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(payload) }));
+          this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(readyPayload) }));
           setTimeout(() => {
             this.dispatchEvent(
               new MessageEvent("message", {
@@ -202,7 +255,7 @@ async function run() {
       localStorage.setItem("codexPhoneRepoColors:v1", JSON.stringify(colors));
       localStorage.setItem("codexPhoneThreadInboxFilter:v1", "recent");
     }, repoColorOverrides);
-    await page.goto(`${origin}/?token=${token}`, { waitUntil: "networkidle" });
+    await page.goto(`${origin}/?token=${token}&thread=thread-artifacts`, { waitUntil: "networkidle" });
     await page.waitForSelector('[data-state="ready"], [data-state="done"]');
     await page.waitForTimeout(300);
     const pwaDismiss = page.locator("[data-pwa-dismiss]");
@@ -212,7 +265,29 @@ async function run() {
     const title = (await page.locator("#threadTitle").textContent())?.trim();
     check("thread title is dynamic (not the fixed label)", title && title !== "稼働中スレッド", `title="${title}"`);
     check("no #threadSubtitle element remains", (await page.locator("#threadSubtitle").count()) === 0);
-    await page.waitForFunction(() => document.querySelector("#runState")?.dataset.state === "done");
+    const startupNavigation = await page.evaluate((expectedWorkdir) => {
+      const target = window.__mockWebSocketUrls?.[0] || "";
+      const parsed = new URL(target);
+      return {
+        thread: parsed.searchParams.get("thread"),
+        workdir: parsed.searchParams.get("workdir"),
+        currentUrlThread: new URL(location.href).searchParams.get("thread"),
+        expectedWorkdir,
+      };
+    }, root);
+    check(
+      "startup keeps the active worktree instead of a stale thread workspace",
+      !startupNavigation.thread && startupNavigation.currentUrlThread !== "thread-artifacts" && startupNavigation.workdir === root,
+      JSON.stringify(startupNavigation),
+    );
+    await page.waitForFunction(() => document.querySelector("#runState")?.dataset.state === "done").catch(async (error) => {
+      const debug = await page.evaluate(() => ({
+        runState: document.querySelector("#runState")?.dataset.state || "",
+        runLabel: document.querySelector("#runStateLabel")?.textContent || "",
+        wsUrls: window.__mockWebSocketUrls || [],
+      }));
+      throw new Error(`${error.message} ${JSON.stringify(debug)} ${consoleErrors.join(" | ")}`);
+    });
     await page.waitForTimeout(300);
     const completedListState = await page.evaluate(() => ({
       currentGroupCount: document.querySelectorAll(".current-thread-group").length,
@@ -361,6 +436,56 @@ async function run() {
       fs.mkdirSync(shotsDir, { recursive: true });
       await page.screenshot({ path: path.join(shotsDir, "sidebar.png") });
     }
+    await page.locator(".project-group", { hasText: "drawer-workspace" }).locator(".project-new-thread").click();
+    await page.waitForFunction(() => window.__mockWebSocketUrls?.some((url) => url.includes("fresh=1") && url.includes("drawer-workspace")));
+    const crossRepoCreate = await page.evaluate((expectedWorkdir) => {
+      const target = [...(window.__mockWebSocketUrls || [])].reverse().find((url) => url.includes("fresh=1") && url.includes("drawer-workspace")) || "";
+      const parsed = new URL(target);
+      return {
+        fresh: parsed.searchParams.get("fresh"),
+        workdir: parsed.searchParams.get("workdir"),
+      };
+    }, drawerRepo);
+    check(
+      "cross-repo new-thread button keeps the target workdir",
+      crossRepoCreate.fresh === "1" && crossRepoCreate.workdir === drawerRepo,
+      JSON.stringify(crossRepoCreate),
+    );
+    await page.locator("#mobileThreads").click();
+    await page.waitForTimeout(120);
+    await page.locator(".thread-item", { hasText: "Artifact preview polish" }).locator(".thread-select").click();
+    await page.waitForFunction(() => window.__mockWebSocketUrls?.some((url) => url.includes("thread-artifacts")));
+    const crossRepoNavigation = await page.evaluate((expectedWorkdir) => {
+      const target = [...(window.__mockWebSocketUrls || [])].reverse().find((url) => url.includes("thread-artifacts")) || "";
+      const parsed = new URL(target);
+      return {
+        thread: parsed.searchParams.get("thread"),
+        workdir: parsed.searchParams.get("workdir"),
+      };
+    }, artifactRepo);
+    check(
+      "cross-repo thread selection keeps the target workdir",
+      crossRepoNavigation.thread === "thread-artifacts" && crossRepoNavigation.workdir === artifactRepo,
+      JSON.stringify(crossRepoNavigation),
+    );
+    await page.waitForFunction(() => document.querySelector("#sidebarProjectName")?.textContent?.trim() === "artifact-workspace");
+    await page.waitForTimeout(1300);
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await page.waitForTimeout(250);
+    const selectedWorkspaceAfterFleetRefresh = await page.evaluate(() => ({
+      sidebarProject: document.querySelector("#sidebarProjectName")?.textContent?.trim() || "",
+      workspaceRepo: document.querySelector("#workspaceRepo")?.textContent?.trim() || "",
+      fullPath: document.querySelector("#workspaceIndicator")?.dataset.fullPath || "",
+      bridgePill: document.querySelector("#bridgePillLabel")?.textContent?.trim() || "",
+    }));
+    check(
+      "fleet refresh keeps the selected thread workspace",
+      selectedWorkspaceAfterFleetRefresh.sidebarProject === "artifact-workspace" &&
+        selectedWorkspaceAfterFleetRefresh.workspaceRepo === "artifact-workspace" &&
+        selectedWorkspaceAfterFleetRefresh.fullPath === artifactRepo &&
+        selectedWorkspaceAfterFleetRefresh.bridgePill === "artifact-workspace",
+      JSON.stringify(selectedWorkspaceAfterFleetRefresh),
+    );
     await page.evaluate(() => {
       document.body.classList.remove("show-sidebar");
       document.querySelector("#mobileThreads")?.setAttribute("aria-expanded", "false");

@@ -6,7 +6,7 @@ const os = require("os");
 const path = require("path");
 const { execFileSync, spawn } = require("child_process");
 const WebSocket = require("ws");
-const { bridgeKeyForRequest, shouldDisposeIdleBridge, shouldPromoteBridgeKey } = require("./bridge-state");
+const { bridgeKeyForRequest, bridgeMatchesWorkdir, shouldDisposeIdleBridge, shouldPromoteBridgeKey, shouldReplaceBridgeForWorkdir } = require("./bridge-state");
 const { isHistorySyncEnabled, runHistorySync } = require("./history-sync");
 const { bridgeUrls, notificationTargets, notifyBridgeUrls, notifyEvent, notifyTaskEvent, stripTokenFromUrl } = require("./phone-notify");
 const { settingEnvKeysForSlot, slotEnvKey, slotSettingValue } = require("./phone-slot-settings");
@@ -1016,17 +1016,19 @@ function logNotifyResults(context, results) {
   }
 }
 
-function notifyRunEvent(status, { provider = agentProvider, threadId, turnId, message, model: eventModel = modelForProvider(provider) } = {}) {
+function notifyRunEvent(status, { provider = agentProvider, threadId, turnId, message, model: eventModel = modelForProvider(provider), workdir: eventWorkdir = workdir } = {}) {
   notifyTaskEvent({
     status,
     provider: normalizeProvider(provider),
     threadId,
     turnId,
     model: eventModel,
-    workdir,
+    workdir: eventWorkdir,
     message,
     url: bridgeUrlForThread(threadId, provider),
     urls: bridgeUrlsForThread(threadId, provider),
+  }, {
+    force: status === "completed" || status === "interrupted",
   })
     .then((results) => logNotifyResults(`task ${status}`, results))
     .catch((error) => console.warn(`[notify] task ${status} error: ${error.message}`));
@@ -2390,6 +2392,7 @@ class SharedBridge {
               model: this.model,
               threadId: this.threadId,
               message: error.text,
+              workdir: this.workdir,
             });
           }
           this.startNextQueuedTurn();
@@ -2486,6 +2489,7 @@ class SharedBridge {
           model: this.model,
           threadId: this.threadId,
           turnId: completedTurnId,
+          workdir: this.workdir,
         });
         this.syncHistory("turn completed");
         this.startNextQueuedTurn();
@@ -2511,6 +2515,7 @@ class SharedBridge {
           threadId: this.threadId,
           turnId: this.activeTurnId,
           message: msg.method,
+          workdir: this.workdir,
         });
         return;
       }
@@ -2532,6 +2537,7 @@ class SharedBridge {
           threadId: this.threadId,
           turnId: this.activeTurnId,
           message: error.text,
+          workdir: this.workdir,
         });
         return;
       }
@@ -2565,6 +2571,7 @@ class SharedBridge {
           threadId: this.threadId,
           turnId: this.activeTurnId,
           message: error.message,
+          workdir: this.workdir,
         });
       }
     });
@@ -3175,24 +3182,51 @@ class ClaudeBridge {
 
 function getBridge(threadId, provider = agentProvider, connectionId = crypto.randomUUID(), options = {}) {
   const requestedProvider = normalizeProvider(provider);
-  if (!threadId && !options.fresh) {
+  const requestedWorkdir = requestedProvider === "codex" && options.workdir ? validateWorkdir(options.workdir) : "";
+  const bridgeOptions = requestedWorkdir ? { ...options, workdir: requestedWorkdir } : options;
+  const bridgeHasActiveWork = (bridge) => Boolean(typeof bridge?.hasActiveWork === "function" && bridge.hasActiveWork());
+  const bridgeNeedsReplacement = (bridge) =>
+    shouldReplaceBridgeForWorkdir({
+      bridgeWorkdir: bridge?.workdir || workdir,
+      targetWorkdir: requestedWorkdir,
+      active: bridgeHasActiveWork(bridge),
+    });
+  const bridgeMatchesRequestWorkdir = (bridge) =>
+    bridgeMatchesWorkdir({
+      bridgeWorkdir: bridge?.workdir || workdir,
+      targetWorkdir: requestedWorkdir,
+    });
+
+  if (!threadId && !bridgeOptions.fresh) {
     for (const [key, bridge] of bridges.entries()) {
       if (bridge.provider !== requestedProvider) continue;
       if (bridge.requestedThreadId) continue;
+      if (bridgeNeedsReplacement(bridge)) {
+        if (typeof bridge.dispose === "function") bridge.dispose();
+        bridges.delete(key);
+        continue;
+      }
+      if (!bridgeMatchesRequestWorkdir(bridge)) continue;
       if (typeof bridge.isReusable !== "function" || bridge.isReusable()) return bridge;
       if (typeof bridge.dispose === "function") bridge.dispose();
       bridges.delete(key);
     }
   }
-  const baseKey = bridgeKeyForRequest(threadId, connectionId, options);
+  const baseKey = bridgeKeyForRequest(threadId, connectionId, bridgeOptions);
   const key = bridgeMapKey(requestedProvider, baseKey);
-  const existing = bridges.get(key);
+  let existing = bridges.get(key);
+  if (existing && bridgeNeedsReplacement(existing)) {
+    if (typeof existing.dispose === "function") existing.dispose();
+    bridges.delete(key);
+    existing = null;
+  }
   if (existing && typeof existing.isReusable === "function" && !existing.isReusable()) {
     existing.dispose();
     bridges.delete(key);
+    existing = null;
   }
-  if (!bridges.has(key)) {
-    bridges.set(key, requestedProvider === "claude" ? new ClaudeBridge(threadId, baseKey) : new SharedBridge(threadId, baseKey, options));
+  if (!existing && !bridges.has(key)) {
+    bridges.set(key, requestedProvider === "claude" ? new ClaudeBridge(threadId, baseKey) : new SharedBridge(threadId, baseKey, bridgeOptions));
   }
   return bridges.get(key);
 }
@@ -3238,16 +3272,21 @@ async function bindBrowser(browser, phoneToken, threadId, provider = agentProvid
 }
 
 function bridgeSummaries() {
-  return Array.from(bridges.values()).map((bridge) => ({
-    threadId: bridge.threadId,
-    clients: bridge.clients.size,
-    ready: bridge.ready,
-    provider: bridge.provider || agentProvider,
-    run: typeof bridge.runPayload === "function" ? bridge.runPayload() : null,
-    pendingApproval: bridge.pendingApproval || null,
-    terminalTail: Array.isArray(bridge.terminalHistory) ? bridge.terminalHistory.slice(-12) : [],
-    lastEventAt: lastBridgeEventAt || null,
-  }));
+  return Array.from(bridges.values()).map((bridge) => {
+    const meta = currentWorkspaceMeta(bridge.workdir || workdir);
+    return {
+      threadId: bridge.threadId,
+      clients: bridge.clients.size,
+      ready: bridge.ready,
+      provider: bridge.provider || agentProvider,
+      workdir: bridge.workdir || workdir,
+      ...meta,
+      run: typeof bridge.runPayload === "function" ? bridge.runPayload() : null,
+      pendingApproval: bridge.pendingApproval || null,
+      terminalTail: Array.isArray(bridge.terminalHistory) ? bridge.terminalHistory.slice(-12) : [],
+      lastEventAt: lastBridgeEventAt || null,
+    };
+  });
 }
 
 function healthBridgeSummaries() {
@@ -3525,7 +3564,7 @@ function threadRecordForBridge(bridge = {}) {
     name: title,
     displayTitle: title,
     preview,
-    cwd: workdir,
+    cwd: bridge.workdir || workdir,
     provider: bridge.provider || agentProvider,
     updatedAt,
     updated_at: updatedAt,
@@ -3959,12 +3998,13 @@ async function main() {
         return;
       }
       try {
+        const targetWorkdir = url.searchParams.get("workdir") ? validateWorkdir(url.searchParams.get("workdir")) : workdir;
         const snapshot = await readThreadSnapshot({
           threadId,
           liveBridge: findBridgeByThreadId(threadId, requestedProvider) || findLiveBridge(bridges, threadId),
           request: appServerRequest,
           model: modelForProvider(requestedProvider),
-          workdir,
+          workdir: targetWorkdir,
           historyFromThread,
         });
         sendJson(res, 200, { provider: requestedProvider, activeProvider: requestedProvider, ...snapshot });

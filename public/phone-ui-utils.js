@@ -183,7 +183,8 @@
   }
 
   function workspaceKeyForThreadRecord(thread = {}, fallback = "") {
-    const raw = thread.cwd || thread.workspaceLocation || thread.workdir || fallback || "";
+    const record = thread || {};
+    const raw = record.cwd || record.workspaceLocation || record.workdir || fallback || "";
     return String(raw).trim().replace(/\\/g, "/").replace(/\/+$/, "");
   }
 
