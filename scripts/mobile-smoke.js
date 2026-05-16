@@ -27,11 +27,13 @@ const mime = new Map([
   [".webmanifest", "application/manifest+json"],
 ]);
 
+const activeThread = { id: "thread-mobile-compact", name: "Mobile terminal compact polish", cwd: root, updatedAt: Date.now() };
 const threads = [
-  { id: "thread-mobile-compact", name: "Mobile terminal compact polish", cwd: root, updatedAt: Date.now() },
+  activeThread,
   { id: "thread-artifacts", name: "Artifact preview polish", cwd: root, updatedAt: Date.now() - 3600_000 },
   { id: "thread-drawer", name: "Drawer and composer tuning", cwd: root, updatedAt: Date.now() - 86_400_000 },
 ];
+const staleThreadList = threads.filter((thread) => thread.id !== activeThread.id);
 
 const history = [
   { type: "user", text: "モバイルの terminal compact レイアウトを確認したい。" },
@@ -78,7 +80,7 @@ async function mockApi(page, origin) {
         },
       });
     }
-    if (url.pathname === "/api/threads") return route.fulfill({ json: { data: threads } });
+    if (url.pathname === "/api/threads") return route.fulfill({ json: { data: staleThreadList } });
     if (url.pathname === "/api/thread") return route.fulfill({ json: { threadId: "thread-mobile-compact", history } });
     if (url.pathname === "/api/artifacts") return route.fulfill({ json: { data: [] } });
     if (url.pathname === "/api/file") {
@@ -117,6 +119,18 @@ async function mockWebSocket(page) {
           this.readyState = MockWebSocket.OPEN;
           this.dispatchEvent(new Event("open"));
           this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(payload) }));
+          setTimeout(() => {
+            this.dispatchEvent(
+              new MessageEvent("message", {
+                data: JSON.stringify({
+                  type: "turn",
+                  status: "completed",
+                  turnId: "turn-smoke-completed",
+                  run: { state: "done", label: "完了しました", updatedAt: Date.now() },
+                }),
+              }),
+            );
+          }, 180);
         }, 80);
       }
       send() {}
@@ -174,6 +188,17 @@ async function run() {
     const title = (await page.locator("#threadTitle").textContent())?.trim();
     check("thread title is dynamic (not the fixed label)", title && title !== "稼働中スレッド", `title="${title}"`);
     check("no #threadSubtitle element remains", (await page.locator("#threadSubtitle").count()) === 0);
+    await page.waitForFunction(() => document.querySelector("#runState")?.dataset.state === "done");
+    await page.waitForTimeout(300);
+    const completedListState = await page.evaluate(() => ({
+      currentGroupCount: document.querySelectorAll(".current-thread-group").length,
+      activeNormalRows: document.querySelectorAll(".project-group:not(.current-thread-group) .thread-item.active").length,
+    }));
+    check(
+      "completed current thread returns to the normal list without restart",
+      completedListState.currentGroupCount === 0 && completedListState.activeNormalRows === 1,
+      JSON.stringify(completedListState),
+    );
 
     // Issue 2: status + quick actions live together in one band, clearly separable.
     check("composer status band exists", (await page.locator(".composer-status-bar").count()) === 1);

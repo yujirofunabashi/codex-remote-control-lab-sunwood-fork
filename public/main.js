@@ -2533,10 +2533,20 @@ function visibleThreadGroups(options = {}) {
   return groups;
 }
 
-function currentThreadListRecord() {
+function currentThreadListRecord(overrides = {}) {
   if (!selectedThread) return null;
   const existing = selectedThreadRecord();
-  if (existing) return existing;
+  if (existing) {
+    return normalizeThreadRecord(
+      {
+        ...existing,
+        ...overrides,
+        id: selectedThread,
+        provider: overrides.provider || existing.provider || currentThreadProvider(),
+      },
+      overrides.provider || existing.provider || currentThreadProvider(),
+    );
+  }
   return normalizeThreadRecord(
     {
       id: selectedThread,
@@ -2545,9 +2555,16 @@ function currentThreadListRecord() {
       cwd: currentWorkspace.workspaceLocation || currentWorkspace.repoName || "",
       updatedAt: Date.now(),
       runState: currentRunState,
+      ...overrides,
     },
-    currentThreadProvider(),
+    overrides.provider || currentThreadProvider(),
   );
+}
+
+function preserveSelectedThreadInList(overrides = {}) {
+  const current = currentThreadListRecord(overrides);
+  if (!current) return null;
+  return upsertThreadRecord(current, current.provider || currentThreadProvider());
 }
 
 function createThreadListItem(thread, options = {}) {
@@ -3661,7 +3678,16 @@ async function loadThreads({ background = false, provider = "" } = {}) {
     const resultProvider = normalizeProviderName(result.provider || requestedProvider || activeProvider) || currentThreadProvider();
     if (requestedProvider && requestedProvider !== currentThreadProvider()) return;
     if (!threadProviderExplicit) threadProvider = resultProvider;
-    threadCache = (result.data || []).map((thread) => normalizeThreadRecord(thread, resultProvider));
+    let nextThreads = (result.data || []).map((thread) => normalizeThreadRecord(thread, resultProvider));
+    if (selectedThread && !nextThreads.some((thread) => sameThreadRecord(thread, { id: selectedThread, provider: resultProvider }))) {
+      const current = currentThreadListRecord({
+        provider: resultProvider,
+        updatedAt: Date.now(),
+        runState: currentRunState,
+      });
+      if (current) nextThreads = [current, ...nextThreads];
+    }
+    threadCache = nextThreads;
     const state = getBridgeState(activeBridgeId);
     state.threadCache = threadCache;
     state.activeProvider = activeProvider;
@@ -5350,8 +5376,13 @@ function connect({ preserveHistory = false, freshThread = false } = {}) {
       liveOutputGroup = "";
       getBridgeState(bridgeId).pendingApproval = null;
       applyServerRunState(msg.run || { state: "done", label: "完了しました", turnId: msg.turnId });
+      preserveSelectedThreadInList({
+        updatedAt: Date.now(),
+        runState: msg.run?.state || "done",
+      });
       updateThreadNavigation();
-      loadThreads();
+      loadThreads({ background: true });
+      window.setTimeout(() => loadThreads({ background: true }).catch(() => {}), 1200);
       refreshSelectedThread();
       return;
     }
