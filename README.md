@@ -119,10 +119,10 @@ The current phone bridge supports:
 - Bridge Fleet / Worktree Switchboard for registering multiple bridge profiles in one tab
 - global running monitor and global approval inbox across registered bridges
 - per-thread accent colors saved in browser local storage, so concurrent work is easier to distinguish
-- chat / terminal view switching for command, file change, approval, and error monitoring logs
+- chat / terminal view switching, with Terminal reserved for manual command input and output instead of chat status logs
 - a mobile cockpit header with state, position, per-thread color, compact path, and a mini thread switcher
 - mobile-width thread switching through guarded horizontal swipes, the header previous/next buttons, or the position pill
-- a phone-first terminal view with filter chips, search, copy-visible-log, auto-scroll pause, font controls, safe key-intent chips, and focus mode
+- a phone-first terminal view with an active-workspace prompt, filter chips, search, copy-visible-output, auto-scroll pause, font controls, safe key-intent chips, and focus mode
 - sticky approval cards visible from chat and terminal views, with larger approve/reject controls and terminal transcript feedback
 - quick action chips that insert common follow-up prompts without auto-sending
 - default history-sync refresh for Desktop reopen/refresh continuity

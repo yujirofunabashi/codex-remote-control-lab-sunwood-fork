@@ -135,9 +135,9 @@ PHONE_NOTIFY_TIMEOUT_MS=5000 npm run phone
 
 ### モバイル terminal compact layout
 
-スマホ幅の terminal view では、Chat / Term 切替を header 内の小さな segmented control にまとめ、pathbar、toolbar、Text / Keys、status、quick actions、composer を compact 表示にします。通常の Safari tab でも terminal 表示領域を優先し、`Focus` / `Max` では pathbar、quick actions、artifact panel などを隠してさらに広く使えます。
+スマホ幅の terminal view では、Chat / Term 切替を header 内の小さな segmented control にまとめ、terminal command 入力と実行結果を優先表示します。chat composer は terminal view では隠し、chat の状態ログは terminal 本文へ流さず、手動で実行した command の出力だけを表示します。空の terminal と実行後の末尾には `user@host cwd %` 形式の現在地 prompt を出します。通常の Safari tab でも terminal 表示領域を優先し、`Focus` / `Max` では pathbar、artifact panel などを隠してさらに広く使えます。
 
-terminal toolbar は普段は `Filter / All / Search / Auto / ...` の 1 行だけを表示します。`...` から filter、search、wrap、auto-scroll、表示クリア、表示コピー、文字サイズ、Max、QuickBar pin を開けます。`Clear visible` はこの端末の表示だけを消し、server history は削除しません。`Copy visible` は既存の token masking を通した表示ログだけをコピーします。
+terminal toolbar は普段は `Filter / All / Search / Auto / ...` の 1 行だけを表示します。`...` から filter、search、wrap、auto-scroll、表示クリア、表示コピー、文字サイズ、Max、QuickBar pin を開けます。`Clear visible` はこの端末の表示だけを消し、server history は削除しません。`Copy visible` は既存の token masking を通した表示出力だけをコピーします。
 
 `Text` / `Keys` は入力欄左下の小さなボタンに統合されています。QuickBar は terminal view で入力欄 focus 中、Keys mode 中、または QuickBar pin 中だけ表示されます。`Ctrl+C` は確認付きで、`$` は raw shell 実行ではなく安全な実行依頼テンプレートを挿入します。
 

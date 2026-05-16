@@ -418,6 +418,7 @@
       message,
       detail,
       turnId: entry.turnId || null,
+      source: entry.source || null,
     };
   }
 

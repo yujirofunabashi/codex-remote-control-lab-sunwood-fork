@@ -2235,6 +2235,27 @@ body.terminal-focus-mode .composer-footer {
   background: rgba(255, 255, 255, 0.07);
 }
 
+.terminal-prompt-line {
+  display: block;
+  min-width: 0;
+  padding: 3px 0 8px;
+  color: color-mix(in srgb, var(--terminal-fg) 88%, transparent);
+}
+
+.terminal-prompt-label {
+  overflow-wrap: anywhere;
+}
+
+.terminal-prompt-cursor {
+  display: inline-block;
+  width: 9px;
+  height: 1.25em;
+  margin-left: 8px;
+  border: 1px solid color-mix(in srgb, var(--terminal-fg) 72%, transparent);
+  background: color-mix(in srgb, var(--terminal-fg) 10%, transparent);
+  vertical-align: text-bottom;
+}
+
 .terminal-message,
 .terminal-detail {
   min-width: 0;
@@ -2924,6 +2945,10 @@ body[data-terminal-input-mode="keys"] .terminal-input-mode-button {
   box-shadow: var(--composer-shadow);
   overflow: visible;
   margin-bottom: 6px;
+}
+
+body[data-main-view="terminal"] .composer {
+  display: none;
 }
 
 .attachments {
@@ -5851,6 +5876,9 @@ body[data-main-view="terminal"] .pwa-install-hint {
   }
 
   body[data-main-view="terminal"] .titlebar {
+    grid-template-areas:
+      "drawer title view actions"
+      "bridge bridge bridge pill";
     padding: 5px 8px;
     row-gap: 3px;
   }
@@ -5863,13 +5891,21 @@ body[data-main-view="terminal"] .pwa-install-hint {
   body[data-main-view="terminal"] .mobile-toggle,
   body[data-main-view="terminal"] .icon-button,
   body[data-main-view="terminal"] .header-color-button {
-    width: 28px;
-    min-width: 28px;
-    height: 28px;
+    width: 30px;
+    min-width: 30px;
+    height: 30px;
   }
 
   body[data-main-view="terminal"] .mobile-toggle-icon {
-    inset: 7px 8px;
+    inset: 6px 7px;
+  }
+
+  body[data-main-view="terminal"] .mobile-toggle-icon::before {
+    width: 5px;
+  }
+
+  body[data-main-view="terminal"] .thread-nav {
+    display: none;
   }
 
   body[data-main-view="terminal"] .thread-nav-button {
@@ -5943,8 +5979,9 @@ body[data-main-view="terminal"] .pwa-install-hint {
   }
 
   body[data-main-view="terminal"] .terminal-command-form input {
-    height: 34px;
-    font-size: 12px;
+    height: 36px;
+    font-size: 16px;
+    line-height: 1.2;
   }
 
   body[data-main-view="terminal"] .terminal-command-form button {

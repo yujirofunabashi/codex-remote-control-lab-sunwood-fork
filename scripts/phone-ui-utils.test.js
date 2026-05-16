@@ -109,11 +109,12 @@ test("workspace helpers keep thread switching scoped to one worktree", () => {
 
 test("terminal event normalization, filtering, search, and cap are stable", () => {
   const entries = [
-    normalizeTerminalEntry({ ts: 1, kind: "command", message: "$ npm test" }),
+    normalizeTerminalEntry({ ts: 1, kind: "command", message: "$ npm test", source: "manual" }),
     normalizeTerminalEntry({ ts: 2, kind: "file", message: "file changes: public/main.js" }),
     normalizeTerminalEntry({ ts: 3, kind: "approval", message: "approval requested" }),
     normalizeTerminalEntry({ ts: 4, kind: "error", message: "failed" }),
   ];
+  assert.equal(entries[0].source, "manual");
 
   assert.deepEqual(
     visibleTerminalEntries(entries, { filter: "file" }).map((entry) => entry.kind),
