@@ -631,7 +631,7 @@ const themeOptions = [
   { id: "cyberpunk", name: "サイバーパンク", detail: "暗め / ネオンアクセント" },
   { id: "botanical", name: "ボタニカル", detail: "葉色 / 紙のような柔らかさ" },
 ];
-const threadColorStorageKey = "codexPhoneThreadColors:v1";
+const repoColorStorageKey = "codexPhoneRepoColors:v1";
 const threadDraftStorageKey = "codexPhoneThreadDrafts:v1";
 const mainViewStorageKey = "codexPhoneMainView:v1";
 const swipeHintStorageKey = "codexPhoneSwipeHintSeen:v1";
@@ -667,7 +667,7 @@ const threadColorPalette = [
   "#475569",
 ];
 let selectedTheme = localStorage.getItem("codexPhoneTheme") || "simple";
-let threadColorOverrides = readJsonStorage(threadColorStorageKey, {});
+let repoColorOverrides = readJsonStorage(repoColorStorageKey, {});
 let threadDrafts = readJsonStorage(threadDraftStorageKey, {});
 let terminalScrollPositions = readJsonStorage(terminalScrollStorageKey, {});
 let chatScrollPositions = readJsonStorage(chatScrollStorageKey, {});
@@ -832,48 +832,79 @@ function currentThreadColorKey() {
   });
 }
 
-function threadColorForKey(key) {
-  return sanitizeHexColor(threadColorOverrides[key]) || fallbackThreadColor(key);
+function repoColorKeyForContext(context = {}) {
+  const provider = normalizeProviderName(context?.provider) || currentThreadProvider();
+  const bridgePrefix = activeBridgeId || homeBridgeId || "home";
+  const workspace =
+    workspaceKeyForThread(context) ||
+    String(context?.cwd || context?.workdir || context?.workspaceLocation || currentWorkspace.workspaceLocation || currentWorkspace.repoName || "").trim();
+  const repo = String(context?.repoName || currentWorkspace.repoName || projectForThread(context) || "").trim();
+  const workspaceName = workspace.split(/[\\/]/).filter(Boolean).pop() || "";
+  const keyBase = repo || workspaceName || workspace || `${location.host}${appBasePath || "/"}`;
+  return `${bridgePrefix}:${provider}:repo:${keyBase}`;
 }
 
-function threadColorForThread(thread) {
-  return threadColorForKey(threadColorKeyFor(thread));
+function repoLabelForContext(context = {}, fallback = "このリポ") {
+  const repoName = String(context?.repoName || "").trim();
+  if (repoName) return repoName;
+  const project = projectForThread(context);
+  if (project && project !== "No project") return project;
+  return currentWorkspace.repoName || fallback;
 }
 
-function setThreadColorOverride(key, color) {
+function currentRepoColorKey() {
+  const selected = threadCache.find((thread) => thread.id === selectedThread);
+  if (selected) return repoColorKeyForContext(selected);
+  return repoColorKeyForContext({
+    provider: currentThreadProvider(),
+    cwd: currentWorkspace.workspaceLocation || currentWorkspace.repoName || "",
+    repoName: currentWorkspace.repoName,
+  });
+}
+
+function repoColorForKey(key) {
+  return sanitizeHexColor(repoColorOverrides[key]) || fallbackThreadColor(key);
+}
+
+function repoColorForThread(thread) {
+  return repoColorForKey(repoColorKeyForContext(thread));
+}
+
+function setRepoColorOverride(key, color) {
   const sanitized = sanitizeHexColor(color);
   if (!key || !sanitized) return;
-  threadColorOverrides = { ...threadColorOverrides, [key]: sanitized };
-  writeJsonStorage(threadColorStorageKey, threadColorOverrides);
+  repoColorOverrides = { ...repoColorOverrides, [key]: sanitized };
+  writeJsonStorage(repoColorStorageKey, repoColorOverrides);
   applyCurrentThreadAccent();
   renderThreadList();
   renderTerminalTranscript();
 }
 
-function resetThreadColorOverride(key) {
-  if (!key || !Object.prototype.hasOwnProperty.call(threadColorOverrides, key)) return;
-  const next = { ...threadColorOverrides };
+function resetRepoColorOverride(key) {
+  if (!key || !Object.prototype.hasOwnProperty.call(repoColorOverrides, key)) return;
+  const next = { ...repoColorOverrides };
   delete next[key];
-  threadColorOverrides = next;
-  writeJsonStorage(threadColorStorageKey, threadColorOverrides);
+  repoColorOverrides = next;
+  writeJsonStorage(repoColorStorageKey, repoColorOverrides);
   applyCurrentThreadAccent();
   renderThreadList();
   renderTerminalTranscript();
 }
 
 function applyCurrentThreadAccent() {
-  const key = currentThreadColorKey();
-  const color = threadColorForKey(key);
+  const key = currentRepoColorKey();
+  const color = repoColorForKey(key);
   const contrast = contrastColorFor(color);
   document.documentElement.style.setProperty("--thread-accent", color);
   document.documentElement.style.setProperty("--thread-accent-contrast", contrast);
   document.documentElement.style.setProperty("--thread-accent-soft", `color-mix(in srgb, ${color} 12%, transparent)`);
   document.documentElement.style.setProperty("--thread-accent-ring", `color-mix(in srgb, ${color} 42%, transparent)`);
-  document.documentElement.dataset.threadColorMode = threadColorOverrides[key] ? "custom" : "auto";
+  document.documentElement.dataset.threadColorMode = repoColorOverrides[key] ? "custom" : "auto";
+  document.documentElement.dataset.repoColorMode = repoColorOverrides[key] ? "custom" : "auto";
   if (headerThreadColorButton) {
     headerThreadColorButton.style.backgroundColor = color;
     headerThreadColorButton.style.color = contrast;
-    headerThreadColorButton.title = `${threadColorOverrides[key] ? "カスタム" : "自動"} ${color}`;
+    headerThreadColorButton.title = `リポ色: ${repoColorOverrides[key] ? "カスタム" : "自動"} ${color}`;
   }
 }
 
@@ -2576,16 +2607,18 @@ function preserveSelectedThreadInList(overrides = {}) {
 
 function createThreadListItem(thread, options = {}) {
   const displayTitle = options.displayTitle || titleForThread(thread);
+  const repoColor = repoColorForThread(thread);
+  const repoLabel = repoLabelForContext(thread);
   const item = document.createElement("div");
   item.className = thread.id === selectedThread ? "thread-item active" : "thread-item";
   item.title = displayTitle;
-  item.style.setProperty("--item-thread-accent", threadColorForThread(thread));
+  item.style.setProperty("--item-thread-accent", repoColor);
   const colorButton = document.createElement("button");
   colorButton.type = "button";
   colorButton.className = "thread-color-button";
-  colorButton.title = `${displayTitle} の色を変更`;
-  colorButton.setAttribute("aria-label", `${displayTitle} の色を変更`);
-  colorButton.style.backgroundColor = threadColorForThread(thread);
+  colorButton.title = `${repoLabel} のリポ色を変更`;
+  colorButton.setAttribute("aria-label", `${repoLabel} のリポ色を変更`);
+  colorButton.style.backgroundColor = repoColor;
   colorButton.addEventListener("click", (event) => {
     event.stopPropagation();
     openThreadColorPanel(thread);
@@ -3442,7 +3475,7 @@ function renderThreadSwitcher() {
     row.disabled = threadSwitchBusy || liveTurnActive || Boolean(pendingApproval);
     const dot = document.createElement("span");
     dot.className = "thread-switcher-dot";
-    dot.style.backgroundColor = threadColorForThread(thread);
+    dot.style.backgroundColor = repoColorForThread(thread);
     const main = document.createElement("span");
     main.className = "thread-switcher-main";
     const title = document.createElement("strong");
@@ -3533,16 +3566,18 @@ function renderThreadColorSettings(thread = null, options = {}) {
   const target = thread || threadCache.find((candidate) => candidate.id === selectedThread) || {
     provider: currentThreadProvider(),
     cwd: currentWorkspace.workspaceLocation || currentWorkspace.repoName || "",
+    repoName: currentWorkspace.repoName,
   };
-  const key = threadColorKeyFor(target);
-  const activeColor = threadColorForKey(key);
-  const customColor = sanitizeHexColor(threadColorOverrides[key]);
+  const key = repoColorKeyForContext(target);
+  const activeColor = repoColorForKey(key);
+  const customColor = sanitizeHexColor(repoColorOverrides[key]);
+  const repoLabel = repoLabelForContext(target, "現在のリポ");
   const group = document.createElement("section");
   group.className = "thread-color-settings";
 
   const title = document.createElement("div");
   title.className = "theme-settings-title";
-  title.textContent = thread ? "チャット色" : "現在のチャット色";
+  title.textContent = `${repoLabel} のリポ色`;
   group.appendChild(title);
 
   const current = document.createElement("div");
@@ -3563,12 +3598,12 @@ function renderThreadColorSettings(thread = null, options = {}) {
     button.className = sanitizeHexColor(color) === activeColor ? "active" : "";
     button.style.backgroundColor = color;
     button.title = color;
-    button.setAttribute("aria-label", `チャット色 ${color}`);
+    button.setAttribute("aria-label", `リポ色 ${color}`);
     if (sanitizeHexColor(color) === activeColor) button.setAttribute("aria-current", "true");
     button.addEventListener("click", () => {
-      setThreadColorOverride(key, color);
+      setRepoColorOverride(key, color);
       if (!thread || thread.id === selectedThread) applyCurrentThreadAccent();
-      showToast(`チャット色を ${color} に変更しました。`);
+      showToast(`${repoLabel} のリポ色を ${color} に変更しました。`);
       if (options.inline) openThreadColorPopover(thread);
       else openThreadColorPanel(thread);
     });
@@ -3581,13 +3616,13 @@ function renderThreadColorSettings(thread = null, options = {}) {
   const input = document.createElement("input");
   input.type = "color";
   input.value = activeColor;
-  input.setAttribute("aria-label", "任意のチャット色");
+  input.setAttribute("aria-label", "任意のリポ色");
   const applyButton = document.createElement("button");
   applyButton.type = "button";
   applyButton.textContent = "適用";
   applyButton.addEventListener("click", () => {
-    setThreadColorOverride(key, input.value);
-    showToast(`チャット色を ${sanitizeHexColor(input.value)} に変更しました。`);
+    setRepoColorOverride(key, input.value);
+    showToast(`${repoLabel} のリポ色を ${sanitizeHexColor(input.value)} に変更しました。`);
     if (options.inline) openThreadColorPopover(thread);
     else openThreadColorPanel(thread);
   });
@@ -3596,8 +3631,8 @@ function renderThreadColorSettings(thread = null, options = {}) {
   resetButton.className = "secondary";
   resetButton.textContent = "自動色に戻す";
   resetButton.addEventListener("click", () => {
-    resetThreadColorOverride(key);
-    showToast("チャット色を自動に戻しました。");
+    resetRepoColorOverride(key);
+    showToast(`${repoLabel} のリポ色を自動に戻しました。`);
     if (options.inline) openThreadColorPopover(thread);
     else openThreadColorPanel(thread);
   });
@@ -3620,7 +3655,7 @@ function renderThreadColorSettings(thread = null, options = {}) {
 }
 
 function openThreadColorPanel(thread = null) {
-  clearPanel("チャット色", "workspace");
+  clearPanel("リポ色", "workspace");
   artifactList.replaceChildren();
   renderThreadColorSettings(thread);
 }
@@ -3634,11 +3669,11 @@ function openThreadColorPopover(thread = null) {
   const header = document.createElement("div");
   header.className = "thread-color-popover-header";
   const title = document.createElement("strong");
-  title.textContent = "チャット色";
+  title.textContent = "リポ色";
   const close = document.createElement("button");
   close.type = "button";
   close.textContent = "×";
-  close.setAttribute("aria-label", "チャット色を閉じる");
+  close.setAttribute("aria-label", "リポ色を閉じる");
   close.addEventListener("click", closeThreadColorPopover);
   header.append(title, close);
   threadColorPopover.appendChild(header);
