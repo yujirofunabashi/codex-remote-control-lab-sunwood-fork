@@ -16,6 +16,7 @@ const {
   normalizeBridgeEntry,
   normalizeTerminalEntry,
   parseBridgeUrl,
+  prioritizeSelectedThread,
   pwaManifestTokenIssues,
   redactSensitiveText,
   removeBridgeFromRegistry,
@@ -75,6 +76,18 @@ test("threadDisplayTitle provides one title source for inbox and selected thread
   assert.equal(threadDisplayTitle({ id: opaqueId, name: opaqueId }), "名前未設定のチャット");
   assert.equal(threadDisplayTitle({ id: "t3", name: "" }), "名前未設定のチャット");
   assert.equal(threadDisplayTitle({ id: "t4", name: "abcdefghijklmnopqrstuvwxyz", preview: "ignored" }, { max: 14 }), "abcdefghijklmn...");
+});
+
+test("prioritizeSelectedThread keeps the active thread visible at the top of a limited list", () => {
+  const threads = [{ id: "oldest" }, { id: "older" }, { id: "current" }, { id: "newer" }];
+  assert.deepEqual(
+    prioritizeSelectedThread(threads, "current", 3).map((thread) => thread.id),
+    ["current", "oldest", "older"],
+  );
+  assert.deepEqual(
+    prioritizeSelectedThread(threads, "missing", 3).map((thread) => thread.id),
+    ["oldest", "older", "current"],
+  );
 });
 
 test("compactWorkspacePath middle-truncates long mobile paths", () => {

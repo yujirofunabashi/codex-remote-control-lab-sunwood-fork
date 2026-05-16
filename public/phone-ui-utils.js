@@ -533,6 +533,17 @@
     });
   }
 
+  function prioritizeSelectedThread(threads = [], selectedThreadId = "", limit = 6) {
+    const list = Array.isArray(threads) ? threads : [];
+    const max = Math.max(0, Number(limit || 0));
+    if (!selectedThreadId) return list.slice(0, max);
+    const selectedIndex = list.findIndex((thread) => String(thread?.id || "") === String(selectedThreadId));
+    if (selectedIndex < 0) return list.slice(0, max);
+    const selected = list[selectedIndex];
+    const rest = list.filter((_, index) => index !== selectedIndex);
+    return [selected, ...rest].slice(0, max);
+  }
+
   return {
     defaultThreadPalette,
     terminalHistoryLimit,
@@ -579,6 +590,7 @@
     keyIntentText,
     deriveThreadStatus,
     sortThreadsForInbox,
+    prioritizeSelectedThread,
     threadStatusFromKey,
   };
 });

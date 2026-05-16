@@ -2518,17 +2518,22 @@ function visibleThreadGroups() {
     if (!groups.has(project)) groups.set(project, []);
     groups.get(project).push(thread);
   }
+  if (selectedThread) {
+    for (const [project, threads] of groups) {
+      if (!threads.some((thread) => thread.id === selectedThread)) continue;
+      const selectedFirst = new Map([[project, threads]]);
+      for (const [otherProject, otherThreads] of groups) {
+        if (otherProject !== project) selectedFirst.set(otherProject, otherThreads);
+      }
+      return selectedFirst;
+    }
+  }
   return groups;
 }
 
 function limitedVisibleThreads(threads, limit = 6) {
-  const visible = threads.slice(0, limit);
-  if (!selectedThread || visible.some((thread) => thread.id === selectedThread)) return visible;
-  const selected = threads.find((thread) => thread.id === selectedThread);
-  if (!selected) return visible;
-  if (visible.length >= limit) visible[visible.length - 1] = selected;
-  else visible.push(selected);
-  return visible;
+  if (uiUtils.prioritizeSelectedThread) return uiUtils.prioritizeSelectedThread(threads, selectedThread, limit);
+  return threads.slice(0, limit);
 }
 
 function visibleThreadsInListOrder() {
