@@ -236,7 +236,11 @@ async function run() {
       logTab: document.querySelector("#terminalViewButton")?.textContent?.trim(),
       statusTitle: document.querySelector("#statusButton")?.getAttribute("title"),
     }));
-    check("internal bridge label is replaced in connection labels", userFacingLabels.fleet === "現在の接続先" && userFacingLabels.bridge === "現在の接続先", JSON.stringify(userFacingLabels));
+    check(
+      "bridge pill identifies the active worktree",
+      userFacingLabels.fleet === "現在の接続先" && userFacingLabels.bridge === "codex-remote-control-lab",
+      JSON.stringify(userFacingLabels),
+    );
     check("main tabs use Japanese user-facing labels", userFacingLabels.chatTab?.includes("チャット") && userFacingLabels.logTab?.includes("ログ"), JSON.stringify(userFacingLabels));
     check("status panel is named for connection state", userFacingLabels.statusTitle === "接続状態", JSON.stringify(userFacingLabels));
     await page.locator("#bridgePill").click();
