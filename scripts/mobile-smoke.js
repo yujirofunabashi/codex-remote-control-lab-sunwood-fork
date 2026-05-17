@@ -350,7 +350,7 @@ async function run() {
       userFacingLabels.fleet === "現在の接続先" && userFacingLabels.bridge === "codex-remote-control-lab",
       JSON.stringify(userFacingLabels),
     );
-    check("main tabs identify chat and Terminal views", userFacingLabels.chatTab?.includes("チャット") && userFacingLabels.logTab?.includes("Terminal"), JSON.stringify(userFacingLabels));
+    check("main tabs identify Codex and Terminal views", userFacingLabels.chatTab?.includes("Codex") && userFacingLabels.logTab?.includes("Terminal"), JSON.stringify(userFacingLabels));
     check("status panel is named for connection state", userFacingLabels.statusTitle === "接続状態", JSON.stringify(userFacingLabels));
     await page.locator("#bridgePill").click();
     await page.waitForTimeout(120);
@@ -499,7 +499,7 @@ async function run() {
       await page.screenshot({ path: path.join(shotsDir, "chat.png") });
     }
 
-    // Chat / Term switch still works.
+    // Codex / Terminal switch still works.
     await page.locator("#terminalViewButton").click();
     await page.waitForTimeout(250);
     check("terminal view activates", (await page.locator("#mainTerminalView:not(.hidden)").count()) === 1);

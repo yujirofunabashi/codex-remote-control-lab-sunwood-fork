@@ -99,7 +99,7 @@ background の thread 一覧 polling は、同じ error の連続表示を抑え
 - `/api/*`、WebSocket、token 付き URL、uploads、raw file response を除外する PWA app shell cache
 - thread 位置、稼働状態、thread 色、compact cwd、mini thread switcher をまとめた cockpit header
 - text input、terminal log、artifact preview、approval card、横スクロール領域では誤発火しない swipe navigation
-- unread badge と draft / scroll 復元つきの chat / terminal 切り替え
+- unread badge と draft / scroll 復元つきの Codex / Terminal 切り替え
 - 手動 command 入力と出力に専念する phone terminal。chat composer と chat status log は terminal 面に出さず、`user@host cwd %` 形式の現在地 prompt を表示
 - filter chip、client-side search、表示出力コピー、auto-scroll pause、wrap / font control、key-intent chip、CSS focus mode
 - chat / terminal のどちらでも見える approval card

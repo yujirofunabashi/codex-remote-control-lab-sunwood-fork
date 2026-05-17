@@ -133,7 +133,7 @@ Claude mode is intentionally narrower than Codex mode. It has Claude Code sessio
 - PWA app shell caching that excludes `/api/*`, WebSocket, tokenized URLs, uploads, and raw file responses
 - cockpit header with thread position, run state, per-thread accent color, compact cwd, and a mini thread switcher
 - guarded swipe navigation that avoids text inputs, terminal logs, artifact previews, approval cards, and horizontal scrollers
-- chat / terminal view switching with unread badges and preserved drafts/scroll position
+- Codex / Terminal view switching with unread badges and preserved drafts/scroll position
 - phone terminal mode reserved for manual command input/output, with the chat composer and chat status logs kept out of the terminal surface and a `user@host cwd %` prompt shown for the active workspace
 - terminal filter chips, client-side search, visible-output copy, auto-scroll pause, wrap/font controls, key-intent chips, and CSS focus mode
 - approval cards that stay visible from both chat and terminal views
