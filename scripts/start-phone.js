@@ -3571,6 +3571,15 @@ function copyThreadTimeFields(target, source, fields) {
   }
 }
 
+function copyThreadContextFields(target, source, fields) {
+  for (const field of fields) {
+    if (!source || source[field] === undefined || source[field] === null || source[field] === "") continue;
+    target[field] = source[field];
+  }
+}
+
+const canonicalThreadContextFields = ["cwd", "workdir", "workspaceLocation", "repoName", "gitBranch"];
+
 function threadRecordForBridge(bridge = {}) {
   if (!bridge.threadId) return null;
   const userEntry = [...(bridge.history || [])].reverse().find((entry) => entry.type === "user");
@@ -3584,6 +3593,9 @@ function threadRecordForBridge(bridge = {}) {
     displayTitle: title,
     preview,
     cwd: bridge.workdir || workdir,
+    bridgeWorkdir: bridge.workdir || workdir,
+    lastExecutionCwd: bridge.workdir || workdir,
+    contextSource: "live-bridge",
     provider: bridge.provider || agentProvider,
     updatedAt,
     updated_at: updatedAt,
@@ -3609,10 +3621,17 @@ function mergeThreadListData(remoteThreads = [], localThreads = []) {
       preview: thread.preview === thread.id && existing?.preview ? existing.preview : thread.preview,
     };
     if (existing) {
+      copyThreadContextFields(merged, existing, canonicalThreadContextFields);
       const existingTimestamp = threadListTimestamp(existing);
       const localActivityAt = threadListTimestamp({ updatedAt: thread.localActivityAt || 0 });
       if (!localActivityAt || (existingTimestamp && localActivityAt <= existingTimestamp)) {
         copyThreadTimeFields(merged, existing, ["updatedAt", "updated_at", "updated_at_ms"]);
+        copyThreadContextFields(merged, existing, [
+          ...canonicalThreadContextFields,
+          "lastExecutionCwd",
+          "lastExecutionCwdAt",
+          "contextSource",
+        ]);
       }
       copyThreadTimeFields(merged, existing, ["createdAt", "created_at", "created_at_ms"]);
     }
@@ -3634,13 +3653,15 @@ async function codexThreadListPayload(requestedProvider) {
   return { ...result, provider: requestedProvider, activeProvider: requestedProvider, data };
 }
 
-function findBridgeByThreadId(threadId, provider = "") {
+function findBridgeByThreadId(threadId, provider = "", options = {}) {
   const requestedProvider = provider ? normalizeProvider(provider) : "";
-  return Array.from(bridges.values()).find(
-    (bridge) =>
-      (!requestedProvider || bridge.provider === requestedProvider) &&
-      (bridge.threadId === threadId || bridge.baseBridgeKey === threadId || bridge.bridgeKey === threadId),
-  );
+  const targetWorkdir = options.workdir ? validateWorkdir(options.workdir) : "";
+  return Array.from(bridges.values()).find((bridge) => {
+    const matchesThread = bridge.threadId === threadId || bridge.requestedThreadId === threadId || bridge.baseBridgeKey === threadId || bridge.bridgeKey === threadId;
+    if (!matchesThread || (requestedProvider && bridge.provider !== requestedProvider)) return false;
+    if (!targetWorkdir) return true;
+    return bridgeMatchesWorkdir({ bridgeWorkdir: bridge.workdir || workdir, targetWorkdir });
+  });
 }
 
 function localModelList(provider = agentProvider) {
@@ -4020,7 +4041,9 @@ async function main() {
         const targetWorkdir = url.searchParams.get("workdir") ? validateWorkdir(url.searchParams.get("workdir")) : workdir;
         const snapshot = await readThreadSnapshot({
           threadId,
-          liveBridge: findBridgeByThreadId(threadId, requestedProvider) || findLiveBridge(bridges, threadId),
+          liveBridge:
+            findBridgeByThreadId(threadId, requestedProvider, { workdir: targetWorkdir }) ||
+            findLiveBridge(bridges, threadId, { workdir: targetWorkdir }),
           request: appServerRequest,
           model: modelForProvider(requestedProvider),
           workdir: targetWorkdir,

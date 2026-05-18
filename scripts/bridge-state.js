@@ -1,5 +1,8 @@
 function bridgeKeyForRequest(threadId, connectionId, options = {}) {
-  if (threadId) return threadId;
+  if (threadId) {
+    const workdir = normalizeWorkdirKey(options.workdir || options.cwd || "");
+    return workdir ? `${threadId}::${workdir}` : threadId;
+  }
   if (options.fresh) return `new:${connectionId || "fresh"}`;
   return "new:shared";
 }

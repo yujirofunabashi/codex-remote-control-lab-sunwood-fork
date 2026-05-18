@@ -93,10 +93,17 @@ const threadTitle = document.querySelector("#threadTitle");
 const composer = document.querySelector("#composer");
 const promptInput = document.querySelector("#prompt");
 const workspaceIndicator = document.querySelector("#workspaceIndicator");
+const workspaceSourceTag = document.querySelector("#workspaceSourceTag");
 const workspaceRepo = document.querySelector("#workspaceRepo");
 const workspaceLocation = document.querySelector("#workspaceLocation");
+const workspaceBranchTag = document.querySelector("#workspaceBranchTag");
 const branchName = document.querySelector("#branchName");
 const workspaceConnectionDot = document.querySelector("#workspaceConnectionDot");
+const contextMismatch = document.querySelector("#contextMismatch");
+const contextMismatchSummary = document.querySelector("#contextMismatchSummary");
+const contextAgentCwd = document.querySelector("#contextAgentCwd");
+const contextBridgeCwd = document.querySelector("#contextBridgeCwd");
+const contextFreshness = document.querySelector("#contextFreshness");
 const sidebarProjectName = document.querySelector("#sidebarProjectName");
 const sendButton = document.querySelector("#send");
 const sendLabel = document.querySelector("#sendLabel");
@@ -563,6 +570,7 @@ function getBridgeState(bridgeId = activeBridgeId) {
       lastEventAt: 0,
       lastError: "",
       currentWorkspace: { repoName: "", workspaceLocation: "", gitBranch: "" },
+      workspaceFollowsSelectedThread: false,
       activeProvider: "codex",
       threadProvider: "",
       threadProviderExplicit: false,
@@ -729,6 +737,7 @@ let selectedThreadRefreshActive = false;
 let activeProvider = "codex";
 let threadProvider = initialProviderParam || normalizeProviderName(selectedThread.startsWith("claude:") ? "claude" : "");
 let threadProviderExplicit = Boolean(threadProvider);
+let workspaceFollowsSelectedThread = Boolean(selectedThread);
 const selectedThreadByProvider = new Map();
 if (selectedThread && threadProvider) selectedThreadByProvider.set(threadProvider, selectedThread);
 let activeDraftKey = "";
@@ -780,6 +789,7 @@ const bridgeStates = new Map();
 let activeBridgeId = "";
 let fleetPollTimer = null;
 let fleetRefreshInFlight = false;
+let fleetRefreshPromise = null;
 const suppressedSocketReconnects = new WeakSet();
 const apiTimeoutMs = 9000;
 const uploadTimeoutMs = 60_000;
@@ -1487,6 +1497,14 @@ function selectedThreadWorkdir(fallback = currentWorkspace.workspaceLocation || 
   return workspaceKeyForThread(selectedThreadRecord(), fallback);
 }
 
+function selectedThreadWorkdirKnown() {
+  return Boolean(selectedThread && selectedThreadRecord() && selectedThreadWorkdir(""));
+}
+
+function shouldDeferSelectedThreadWorkdir() {
+  return initialUrlThreadPending && !selectedThreadWorkdirKnown();
+}
+
 function currentWorkspaceWorkdir() {
   return usableWorkspaceLocation(currentWorkspace.workspaceLocation || "");
 }
@@ -1500,15 +1518,19 @@ function activeBridgeWorkdir(fallback = "") {
 }
 
 function currentRequestWorkdir(fallback = "") {
-  const selected = initialUrlThreadPending ? "" : selectedThreadWorkdir("");
-  return workspaceKeyForThread({ cwd: currentWorkspaceWorkdir() || selected || activeBridgeWorkdir() || fallback });
+  const selected = shouldDeferSelectedThreadWorkdir() ? "" : selectedThreadWorkdir("");
+  return workspaceKeyForThread({
+    cwd: (workspaceFollowsSelectedThread ? selected : "") || currentWorkspaceWorkdir() || activeBridgeWorkdir() || selected || fallback,
+  });
 }
 
 function connectionWorkdir(explicitWorkdir = "") {
   const explicit = workspaceKeyForThread({ cwd: explicitWorkdir });
   if (explicit) return explicit;
-  const selected = initialUrlThreadPending ? "" : selectedThreadWorkdir("");
-  return workspaceKeyForThread({ cwd: currentWorkspaceWorkdir() || selected || activeBridgeWorkdir() });
+  const selected = shouldDeferSelectedThreadWorkdir() ? "" : selectedThreadWorkdir("");
+  return workspaceKeyForThread({
+    cwd: (workspaceFollowsSelectedThread ? selected : "") || currentWorkspaceWorkdir() || activeBridgeWorkdir() || selected,
+  });
 }
 
 function isSameCurrentWorkspaceThread(thread, baseKey = currentThreadWorkspaceKey()) {
@@ -2057,6 +2079,47 @@ function addStatus(text) {
   addStatusGroupItem(text);
 }
 
+function renderContextMismatch(snapshot = contextSnapshot()) {
+  if (!contextMismatch) return;
+  const agent = snapshot.agent;
+  const bridge = snapshot.bridge;
+  const show = Boolean(snapshot.mismatch && agent?.workspaceLocation && bridge?.workspaceLocation);
+  contextMismatch.classList.toggle("hidden", !show);
+  document.body.classList.toggle("context-mismatch-visible", show);
+  if (!show) {
+    if (contextMismatchSummary) contextMismatchSummary.textContent = "確認してください";
+    if (contextAgentCwd) contextAgentCwd.textContent = "--";
+    if (contextBridgeCwd) contextBridgeCwd.textContent = "--";
+    if (contextFreshness) contextFreshness.textContent = "--";
+    contextMismatch.removeAttribute("title");
+    contextMismatch.removeAttribute("aria-label");
+    return;
+  }
+  const agentRepo = agent.repoName || basenameFromPath(agent.workspaceLocation);
+  const bridgeRepo = bridge.repoName || basenameFromPath(bridge.workspaceLocation);
+  const compactAgent = compactWorkspaceLocation(agent.workspaceLocation);
+  const compactBridge = compactWorkspaceLocation(bridge.workspaceLocation);
+  if (contextMismatchSummary) {
+    contextMismatchSummary.textContent = `${agentRepo || "Agent"} / ${bridgeRepo || "Bridge"}`;
+  }
+  if (contextAgentCwd) {
+    contextAgentCwd.textContent = agent.workspaceLocation;
+    contextAgentCwd.title = agent.workspaceLocation;
+  }
+  if (contextBridgeCwd) {
+    contextBridgeCwd.textContent = bridge.workspaceLocation;
+    contextBridgeCwd.title = bridge.workspaceLocation;
+  }
+  if (contextFreshness) {
+    contextFreshness.textContent = agent.updatedAt ? `${timestampLabel(agent.updatedAt)} の thread metadata` : "thread metadata";
+  }
+  contextMismatch.title = `Agent cwd: ${agent.workspaceLocation}\nBridge repo: ${bridge.workspaceLocation}`;
+  contextMismatch.setAttribute(
+    "aria-label",
+    `Agent cwd ${compactAgent} と Bridge repo ${compactBridge} が違います。詳細を開くとフルパスを確認できます。`,
+  );
+}
+
 function compactWorkspaceLocation(location) {
   if (uiUtils.compactWorkspacePath) return uiUtils.compactWorkspacePath(location, { keepStart: 1, keepEnd: 1 });
   const value = String(location || "").trim();
@@ -2080,20 +2143,26 @@ function setWorkspaceMeta(meta = {}) {
   if (Object.prototype.hasOwnProperty.call(meta, "hostName")) currentHostName = String(meta.hostName || "").trim();
   if (!currentHostName && meta.health?.hostName) currentHostName = String(meta.health.hostName || "").trim();
 
-  const repo = currentWorkspace.repoName;
-  const location = currentWorkspace.workspaceLocation;
+  const snapshot = contextSnapshot();
+  const displayMeta = snapshot.display || {};
+  const repo = displayMeta.repoName || "";
+  const location = displayMeta.workspaceLocation || "";
   const displayLocation = compactWorkspaceLocation(location);
-  const branch = currentWorkspace.gitBranch;
+  const branch = snapshot.bridge.gitBranch || displayMeta.gitBranch || currentWorkspace.gitBranch;
+  if (workspaceSourceTag) workspaceSourceTag.textContent = snapshot.agent ? "Agent cwd" : "Bridge repo";
+  if (workspaceBranchTag) workspaceBranchTag.textContent = snapshot.agent ? "Bridge branch" : "Branch";
   workspaceRepo.textContent = repo || "--";
   if (sidebarProjectName) sidebarProjectName.textContent = repo || location.split(/[\\/]/).filter(Boolean).pop() || "作業場所";
   workspaceLocation.textContent = displayLocation || "--";
   branchName.textContent = branch || "--";
   const empty = !repo && !location && !branch;
   workspaceIndicator.classList.toggle("empty", empty);
-  const label = empty ? "作業場所を取得できません" : `repo: ${repo || "--"} / 現在地: ${location || "--"} / branch: ${branch || "--"}`;
+  const sourceLabel = snapshot.agent ? "Agent cwd" : "Bridge repo";
+  const label = empty ? "作業場所を取得できません" : `${sourceLabel}: ${repo || "--"} / 現在地: ${location || "--"} / branch: ${branch || "--"}`;
   workspaceIndicator.title = label;
   workspaceIndicator.setAttribute("aria-label", label);
   workspaceIndicator.dataset.fullPath = location || repo || "";
+  renderContextMismatch(snapshot);
   if (!selectedThread) {
     applyCurrentThreadAccent();
     activeDraftKey = currentThreadColorKey();
@@ -2785,6 +2854,14 @@ function createThreadListItem(thread, options = {}) {
   time.textContent = formatRelativeTime(thread.updatedAt || thread.createdAt);
   const status = deriveThreadStatus(thread);
   selectButton.append(title, time);
+  const threadWorkdir = workspaceKeyForThread(thread);
+  if (threadWorkdir) {
+    const workdir = document.createElement("span");
+    workdir.className = "thread-workdir";
+    workdir.textContent = `cwd: ${compactWorkspaceLocation(threadWorkdir)}`;
+    workdir.title = threadWorkdir;
+    selectButton.append(workdir);
+  }
   if (status.label) {
     const badge = document.createElement("span");
     badge.className = `thread-status-badge ${status.tone || status.key}`;
@@ -2915,6 +2992,7 @@ function renderThreadList() {
   }
   updateThreadNavigation();
   renderThreadSwitcher();
+  renderContextMismatch();
 }
 
 function adjacentThread(direction) {
@@ -3032,12 +3110,107 @@ function basenameFromPath(value = "") {
   return String(value || "").split(/[\\/]/).filter(Boolean).pop() || "";
 }
 
+function timestampLabel(value) {
+  const timestamp = Number(value || 0);
+  if (!timestamp) return "";
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString("ja-JP", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function threadRecordTimestamp(thread = {}) {
+  if (uiUtils.threadTimestamp) return uiUtils.threadTimestamp(thread);
+  return thread?.updatedAt || thread?.updated_at || thread?.updated_at_ms || thread?.createdAt || thread?.created_at || thread?.created_at_ms || 0;
+}
+
 function hasWorkspaceMeta(meta = {}) {
   return Boolean(meta?.repoName || usableWorkspaceLocation(meta?.workspaceLocation || "") || meta?.gitBranch);
 }
 
+function selectedThreadExecutionMeta() {
+  if (!workspaceFollowsSelectedThread || !selectedThread || shouldDeferSelectedThreadWorkdir()) return null;
+  const record = selectedThreadRecord();
+  const workdir = usableWorkspaceLocation(
+    record?.lastExecutionCwd || record?.cwd || record?.workspaceLocation || record?.workdir || "",
+  );
+  if (!workdir) return null;
+  return {
+    source: "agent",
+    repoName: record?.repoName || basenameFromPath(workdir),
+    workspaceLocation: workdir,
+    gitBranch: record?.gitBranch || "",
+    updatedAt: threadRecordTimestamp(record || {}),
+  };
+}
+
+function currentWorkspaceExecutionMeta() {
+  const workdir = currentWorkspaceWorkdir();
+  if (!workdir) return null;
+  return {
+    source: "agent",
+    repoName: currentWorkspace.repoName || basenameFromPath(workdir),
+    workspaceLocation: workdir,
+    gitBranch: currentWorkspace.gitBranch || "",
+    updatedAt: getBridgeState(activeBridgeId).lastEventAt || 0,
+  };
+}
+
+function activeBridgeExecutionMeta() {
+  const entry = activeBridge() || {};
+  const state = getBridgeState(activeBridgeId);
+  const runMeta = selectedBridgeRunWorkspaceMeta(state.status);
+  if (hasWorkspaceMeta(runMeta)) {
+    return {
+      source: "bridge-run",
+      repoName: runMeta.repoName || basenameFromPath(runMeta.workspaceLocation),
+      workspaceLocation: runMeta.workspaceLocation,
+      gitBranch: runMeta.gitBranch || "",
+      updatedAt: state.lastEventAt || 0,
+    };
+  }
+  const current = currentWorkspaceDisplayMeta();
+  if (hasWorkspaceMeta(current)) {
+    return {
+      source: "bridge-run",
+      repoName: current.repoName || basenameFromPath(current.workspaceLocation),
+      workspaceLocation: current.workspaceLocation,
+      gitBranch: current.gitBranch || "",
+      updatedAt: state.lastEventAt || 0,
+    };
+  }
+  const info = state.info || {};
+  const status = state.status || {};
+  const workdir = usableWorkspaceLocation(info.cwd || info.workdir || status.workdir || entry.workdir || "");
+  return {
+    source: "bridge",
+    repoName: (info.repoRoot || workdir || "").split(/[\\/]/).filter(Boolean).pop() || "",
+    workspaceLocation: workdir,
+    gitBranch: info.branch || info.gitBranch || status.gitBranch || "",
+    updatedAt: state.lastEventAt || 0,
+  };
+}
+
+function contextSnapshot() {
+  const bridge = activeBridgeExecutionMeta();
+  const agent = currentWorkspaceExecutionMeta() || selectedThreadExecutionMeta();
+  const display = agent || {
+    source: "bridge",
+    repoName: currentWorkspace.repoName || bridge.repoName,
+    workspaceLocation: currentWorkspaceWorkdir() || bridge.workspaceLocation,
+    gitBranch: currentWorkspace.gitBranch || bridge.gitBranch,
+    updatedAt: bridge.updatedAt,
+  };
+  const mismatch = Boolean(agent?.workspaceLocation && bridge.workspaceLocation && agent.workspaceLocation !== bridge.workspaceLocation);
+  return { agent, bridge, display, mismatch };
+}
+
 function currentWorkspaceDisplayMeta() {
-  const location = currentWorkspaceWorkdir() || (initialUrlThreadPending ? "" : selectedThreadWorkdir(""));
+  const location = currentWorkspaceWorkdir() || (shouldDeferSelectedThreadWorkdir() ? "" : selectedThreadWorkdir(""));
   return {
     repoName: currentWorkspace.repoName || basenameFromPath(location),
     workspaceLocation: location,
@@ -3050,14 +3223,14 @@ function bridgeUsesCurrentWorkspace(entry = {}) {
 }
 
 function bridgeDisplayWorkspaceMeta(entry = {}, state = getBridgeState(entry.id)) {
-  if (bridgeUsesCurrentWorkspace(entry)) {
-    const current = currentWorkspaceDisplayMeta();
-    if (hasWorkspaceMeta(current)) return current;
-    const selectedRun = selectedBridgeRunWorkspaceMeta(state.status);
-    if (hasWorkspaceMeta(selectedRun)) return selectedRun;
-  }
   const info = state.info || {};
   const status = state.status || {};
+  if (bridgeUsesCurrentWorkspace(entry)) {
+    const selectedRun = selectedBridgeRunWorkspaceMeta(status);
+    if (hasWorkspaceMeta(selectedRun)) return selectedRun;
+    const current = currentWorkspaceDisplayMeta();
+    if (hasWorkspaceMeta(current)) return current;
+  }
   const infoMeta = workspaceMetaFromBridgeInfo(info);
   if (hasWorkspaceMeta(infoMeta)) return infoMeta;
   const statusMeta = workspaceMetaFromRun(status);
@@ -3137,7 +3310,7 @@ function workspaceMetaFromRun(run = {}) {
 }
 
 function selectedBridgeRunWorkspaceMeta(status = {}) {
-  if (!selectedThread || initialUrlThreadPending) return null;
+  if (!selectedThread || shouldDeferSelectedThreadWorkdir()) return null;
   const currentStatus = status || {};
   const runs = Array.isArray(currentStatus.bridges) ? currentStatus.bridges : [];
   const selectedRun = runs.find((item) => item.threadId === selectedThread);
@@ -3446,7 +3619,7 @@ async function refreshBridgeState(bridgeId, { force = false } = {}) {
     const status = await fetchJsonForBridge(entry, `/api/status?provider=${encodeURIComponent(provider)}`);
     state.status = status;
     if (bridgeId === activeBridgeId) {
-      setWorkspaceMeta(selectedBridgeRunWorkspaceMeta(status) || workspaceMetaFromBridgeInfo(info));
+      setWorkspaceMeta((workspaceFollowsSelectedThread && selectedBridgeRunWorkspaceMeta(status)) || workspaceMetaFromBridgeInfo(info));
     }
     state.runState = bridgeRunSummary(bridgeId).run?.state || "ready";
     state.lastEventAt = Date.now();
@@ -3476,12 +3649,16 @@ async function refreshBridgeState(bridgeId, { force = false } = {}) {
 }
 
 async function refreshFleet({ force = false } = {}) {
-  if (fleetRefreshInFlight) return;
+  if (fleetRefreshInFlight) return fleetRefreshPromise;
   fleetRefreshInFlight = true;
-  try {
+  fleetRefreshPromise = (async () => {
     await Promise.all((bridgeRegistry.bridges || []).map((entry) => refreshBridgeState(entry.id, { force })));
+  })();
+  try {
+    await fleetRefreshPromise;
   } finally {
     fleetRefreshInFlight = false;
+    fleetRefreshPromise = null;
     renderFleet();
   }
 }
@@ -3494,6 +3671,7 @@ function captureActiveBridgeState() {
   state.pendingApproval = pendingApproval;
   state.artifactItems = artifactItems;
   state.currentWorkspace = { ...currentWorkspace };
+  state.workspaceFollowsSelectedThread = workspaceFollowsSelectedThread;
   state.activeProvider = activeProvider;
   state.threadProvider = threadProvider;
   state.threadProviderExplicit = threadProviderExplicit;
@@ -3512,12 +3690,13 @@ function applyActiveBridgeState(bridgeId) {
   pendingApproval = state.pendingApproval || null;
   artifactItems = Array.isArray(state.artifactItems) ? state.artifactItems : [];
   Object.assign(currentWorkspace, state.currentWorkspace || {});
+  workspaceFollowsSelectedThread = Boolean(state.workspaceFollowsSelectedThread);
   token = effectiveBridgeToken(activeBridge()) || "";
   selectedThreadByProvider.clear();
   if (selectedThread && threadProvider) selectedThreadByProvider.set(threadProvider, selectedThread);
 }
 
-async function setActiveBridge(bridgeId, { silent = false } = {}) {
+async function setActiveBridge(bridgeId, { silent = false, reconnect = true, followThreadWorkdir = false } = {}) {
   if (!bridgeById(bridgeId) || bridgeId === activeBridgeId) {
     renderFleet();
     return;
@@ -3534,6 +3713,7 @@ async function setActiveBridge(bridgeId, { silent = false } = {}) {
   };
   persistBridgeRegistry();
   applyActiveBridgeState(bridgeId);
+  workspaceFollowsSelectedThread = Boolean(followThreadWorkdir);
   updateUrlThread();
   lastHistorySignature = "";
   assistantEntry = null;
@@ -3545,10 +3725,29 @@ async function setActiveBridge(bridgeId, { silent = false } = {}) {
   renderArtifactIndex(artifactItems);
   restoreDraftForCurrentThread();
   applyCurrentThreadAccent();
-  setWorkspaceMeta({});
+  if (!workspaceFollowsSelectedThread) {
+    const state = getBridgeState(bridgeId);
+    const entry = activeBridge() || {};
+    const infoMeta = workspaceMetaFromBridgeInfo(state.info || {});
+    setWorkspaceMeta(
+      hasWorkspaceMeta(infoMeta)
+        ? infoMeta
+        : {
+            repoName: basenameFromPath(entry.workdir || ""),
+            workspaceLocation: usableWorkspaceLocation(entry.workdir || ""),
+            gitBranch: "",
+          },
+    );
+  } else {
+    setWorkspaceMeta({});
+  }
   renderTerminalTranscript();
   renderFleet();
   if (!silent) showToast(`${bridgeDisplayLabel(activeBridge())} に切り替えました。`);
+  if (!reconnect) {
+    refreshBridgeState(bridgeId, { force: true }).catch(() => {});
+    return;
+  }
   await refreshBridgeState(bridgeId).catch(() => {});
   loadArtifacts();
   loadThreads({ background: true }).finally(() => connect());
@@ -4072,6 +4271,17 @@ async function loadThreads({ background = false, provider = "" } = {}) {
       });
       if (current) nextThreads = [current, ...nextThreads];
     }
+    const pendingUrlThread = initialUrlThreadPending
+      ? nextThreads.find((thread) => sameThreadRecord(thread, { id: selectedThread, provider: resultProvider }))
+      : null;
+    const pendingUrlWorkdir = workspaceKeyForThread(pendingUrlThread);
+    if (pendingUrlThread && pendingUrlWorkdir) {
+      initialUrlThreadPending = false;
+      workspaceFollowsSelectedThread = true;
+      await switchToBridgeForWorkdir(pendingUrlWorkdir, { reconnect: false, followThreadWorkdir: true });
+      selectedThread = pendingUrlThread.id;
+      selectedThreadByProvider.set(resultProvider, selectedThread);
+    }
     threadCache = nextThreads;
     const state = getBridgeState(activeBridgeId);
     state.threadCache = threadCache;
@@ -4079,6 +4289,13 @@ async function loadThreads({ background = false, provider = "" } = {}) {
     state.threadProvider = threadProvider;
     state.threadProviderExplicit = threadProviderExplicit;
     updateSelectedThreadHeading();
+    if (pendingUrlThread && pendingUrlWorkdir) {
+      setWorkspaceMeta({
+        repoName: pendingUrlThread.repoName || projectForThread(pendingUrlThread),
+        workspaceLocation: pendingUrlWorkdir,
+        gitBranch: pendingUrlThread.gitBranch || "",
+      });
+    }
     renderThreadList();
     applyCurrentThreadAccent();
     showInitialSwipeHint();
@@ -4198,7 +4415,7 @@ function syncReadyThread(threadId) {
   renderTerminalTranscript();
 }
 
-function selectThread(threadId, options = {}) {
+async function selectThread(threadId, options = {}) {
   saveScrollPositions();
   saveDraftForActiveThread();
   threadSwitchBusy = true;
@@ -4206,6 +4423,8 @@ function selectThread(threadId, options = {}) {
   updateThreadNavigation();
   updateHeaderStatus();
   const workdir = workspaceKeyForThread({ cwd: options.workdir || "" });
+  workspaceFollowsSelectedThread = Boolean(workdir || threadId);
+  if (workdir) await switchToBridgeForWorkdir(workdir, { reconnect: false, followThreadWorkdir: true });
   if (workdir) {
     setWorkspaceMeta({ repoName: options.project || projectForThread({ cwd: workdir }), workspaceLocation: workdir, gitBranch: "" });
   }
@@ -4229,23 +4448,36 @@ function selectThread(threadId, options = {}) {
   }, 420);
 }
 
-async function switchToBridgeForWorkdir(workdir) {
+async function switchToBridgeForWorkdir(workdir, options = {}) {
   const target = workspaceKeyForThread({ cwd: workdir });
-  if (!target) return;
-  const match = (bridgeRegistry.bridges || []).find((entry) => {
+  if (!target) return false;
+  const findMatch = () => (bridgeRegistry.bridges || []).find((entry) => {
     const state = getBridgeState(entry.id);
     return (
       workspaceKeyForThread({ cwd: entry.workdir }) === target ||
       workspaceKeyForThread({ cwd: state.info?.cwd || state.info?.workdir || state.status?.workdir }) === target
     );
   });
-  if (match && match.id !== activeBridgeId) await setActiveBridge(match.id, { silent: true });
+  let match = findMatch();
+  if (!match && options.refresh !== false) {
+    await refreshFleet().catch(() => {});
+    match = findMatch();
+  }
+  if (!match || match.id === activeBridgeId) return false;
+  await setActiveBridge(match.id, {
+    silent: true,
+    reconnect: options.reconnect !== false,
+    followThreadWorkdir: options.followThreadWorkdir === true,
+  });
+  addStatus(`threadの作業場所に合わせて接続先を切り替えました: ${projectForThread({ cwd: target })}`);
+  return true;
 }
 
 async function startNewThread(options = {}) {
   const workdir = String(options.workdir || "").trim();
+  workspaceFollowsSelectedThread = Boolean(workdir);
   if (workdir) {
-    await switchToBridgeForWorkdir(workdir);
+    await switchToBridgeForWorkdir(workdir, { reconnect: false, followThreadWorkdir: true });
     setWorkspaceMeta({ repoName: options.project || projectForThread({ cwd: workdir }), workspaceLocation: workdir, gitBranch: "" });
   }
   selectThread("", { fresh: true, workdir });

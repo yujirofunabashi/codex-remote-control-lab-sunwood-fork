@@ -11,12 +11,25 @@ function liveBridgeSnapshot(bridge, threadId) {
   };
 }
 
-function findLiveBridge(bridges, threadId) {
+function normalizeWorkdirKey(value) {
+  return String(value || "")
+    .trim()
+    .replace(/\\/g, "/")
+    .replace(/\/+$/, "");
+}
+
+function bridgeMatchesWorkdir(bridge, targetWorkdir = "") {
+  const target = normalizeWorkdirKey(targetWorkdir);
+  if (!target) return true;
+  return normalizeWorkdirKey(bridge?.workdir || "") === target;
+}
+
+function findLiveBridge(bridges, threadId, options = {}) {
   if (!bridges || !threadId) return null;
   const direct = bridges.get?.(threadId);
-  if (direct) return direct;
+  if (direct && bridgeMatchesWorkdir(direct, options.workdir)) return direct;
   for (const bridge of bridges.values?.() || []) {
-    if (bridge.threadId === threadId || bridge.requestedThreadId === threadId) return bridge;
+    if ((bridge.threadId === threadId || bridge.requestedThreadId === threadId) && bridgeMatchesWorkdir(bridge, options.workdir)) return bridge;
   }
   return null;
 }
