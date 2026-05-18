@@ -96,7 +96,7 @@ PHONE_DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/... npm run phone
 PHONE_NOTIFY_TIMEOUT_MS=5000 npm run phone
 ```
 
-複数 bridge / 複数 worktree を 1 つの browser tab で扱う場合は、Bridge Fleet / Worktree Switchboard を使います。通常通り 1 つ目の bridge を開き、ヘッダーまたは sidebar の bridge/worktree pill から、残りの protected startup URL または base URL と token を追加します。active bridge を切り替えると chat / terminal / thread / artifact / approval UI はその bridge の状態へ切り替わり、inactive bridge の稼働・エラー・承認待ちは global monitor / inbox に出ます。
+複数 bridge / 複数 worktree を 1 つの browser tab で扱う場合は、Bridge Fleet / Worktree Switchboard を使います。通常通り 1 つ目の bridge を開き、ヘッダーまたは sidebar の bridge/worktree pill から、残りの protected startup URL または base URL と token を追加します。`CODEX_APP_SERVER_PORT` を指定しない場合、各 slot の Codex app-server は `PHONE_UI_PORT - 1` を使います。たとえば `45224 -> 45223` になり、`45214 -> 45213` の既定 app-server を複数 slot が奪い合いません。active bridge を切り替えると chat / terminal / thread / artifact / approval UI はその bridge の状態へ切り替わり、inactive bridge の稼働・エラー・承認待ちは global monitor / inbox に出ます。
 
 各 bridge は token-protected な `GET /api/bridge/info` で label、port、cwd、branch、dirty summary、model、capabilities を返します。token は UI では mask され、host profile には base URL と metadata だけを保存し、保存 token は端末内の token store、保存しない token は sessionStorage に分けます。`.phone-fleet.local.json` を作って `npm run phone:fleet` を使うと、複数 slot をまとめて起動できます。この local config は Git に入れないでください。
 

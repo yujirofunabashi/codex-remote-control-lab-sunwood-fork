@@ -23,6 +23,15 @@ test("fleet config normalizes bridge ports and workdir", () => {
   assert.equal(config.bridges[0].appServerPort, 45213);
 });
 
+test("fleet config defaults each app-server port from its phone slot", () => {
+  const config = normalizeFleetConfig({
+    bridges: [{ id: "work-b", workdir: "/tmp/work-b", phonePort: 45224 }],
+  });
+
+  assert.equal(config.bridges[0].phonePort, 45224);
+  assert.equal(config.bridges[0].appServerPort, 45223);
+});
+
 test("fleet config rejects duplicate ports", () => {
   assert.throws(
     () =>

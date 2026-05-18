@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { settingEnvKeysForSlot, slotEnvKey, slotSettingValue } = require("./phone-slot-settings");
+const { defaultCodexAppServerPort, settingEnvKeysForSlot, slotEnvKey, slotSettingValue } = require("./phone-slot-settings");
 
 test("slotEnvKey scopes a base environment key to a phone UI port", () => {
   assert.equal(slotEnvKey("PHONE_WORKDIR", 45224), "PHONE_WORKDIR_45224");
@@ -59,4 +59,15 @@ test("settingEnvKeysForSlot includes shared and port-scoped keys for pin detecti
     "PHONE_WORKDIR_45224",
     "CODEX_WORKDIR_45224",
   ]);
+});
+
+test("defaultCodexAppServerPort pairs each phone UI slot with its own upstream port", () => {
+  assert.equal(defaultCodexAppServerPort(45214), 45213);
+  assert.equal(defaultCodexAppServerPort(45224), 45223);
+  assert.equal(defaultCodexAppServerPort(45244), 45243);
+});
+
+test("defaultCodexAppServerPort falls back when the paired port would be invalid", () => {
+  assert.equal(defaultCodexAppServerPort(1024), 45213);
+  assert.equal(defaultCodexAppServerPort("not-a-port"), 45213);
 });

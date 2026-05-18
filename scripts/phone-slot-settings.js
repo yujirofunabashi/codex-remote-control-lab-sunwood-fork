@@ -52,7 +52,15 @@ function slotSettingValue(env, baseKey, port, { launchEnvKeys, fallbackKeys = []
   return globalValue !== undefined ? globalValue : fallback;
 }
 
+function defaultCodexAppServerPort(phonePort, fallback = 45213) {
+  const port = Number(phonePort);
+  const candidate = port - 1;
+  if (Number.isInteger(candidate) && candidate >= 1024 && candidate <= 65535) return candidate;
+  return fallback;
+}
+
 module.exports = {
+  defaultCodexAppServerPort,
   settingEnvKeysForSlot,
   slotEnvKey,
   slotSettingValue,

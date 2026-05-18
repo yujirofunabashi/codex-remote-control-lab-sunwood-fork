@@ -9,7 +9,7 @@ const WebSocket = require("ws");
 const { bridgeKeyForRequest, bridgeMatchesWorkdir, shouldDisposeIdleBridge, shouldPromoteBridgeKey, shouldReplaceBridgeForWorkdir } = require("./bridge-state");
 const { isHistorySyncEnabled, runHistorySync } = require("./history-sync");
 const { bridgeUrls, notificationTargets, notifyBridgeUrls, notifyEvent, notifyTaskEvent, stripTokenFromUrl } = require("./phone-notify");
-const { settingEnvKeysForSlot, slotEnvKey, slotSettingValue } = require("./phone-slot-settings");
+const { defaultCodexAppServerPort, settingEnvKeysForSlot, slotEnvKey, slotSettingValue } = require("./phone-slot-settings");
 const { findLiveBridge, readThreadSnapshot } = require("./thread-read");
 
 const root = path.resolve(__dirname, "..");
@@ -18,6 +18,14 @@ function normalizeProvider(input) {
   const value = String(input || "codex").trim().toLowerCase();
   if (value === "codex" || value === "claude") return value;
   throw new Error(`Unsupported PHONE_AGENT_PROVIDER: ${value}`);
+}
+
+function normalizeServiceTier(input) {
+  if (input === null) return null;
+  const value = String(input || "").trim().toLowerCase();
+  if (!value || value === "standard" || value === "normal" || value === "flex") return null;
+  if (value === "fast") return "fast";
+  throw new Error(`Unsupported service tier: ${value}`);
 }
 
 function appIdSlug(input, fallback) {
@@ -373,7 +381,12 @@ const isClaudeProvider = agentProvider === "claude";
 const phoneAppId = appIdSlug(process.env.PHONE_APP_ID, `${agentProvider}-${uiPort}`);
 const phoneAppName = process.env.PHONE_APP_NAME || `${defaultAppNameForProvider(agentProvider)} ${uiPort}`;
 const phoneAppShortName = process.env.PHONE_APP_SHORT_NAME || `${defaultAppShortNameForProvider(agentProvider)} ${uiPort}`;
-const codexPort = Number(process.env.CODEX_APP_SERVER_PORT || 45213);
+const codexPort = Number(
+  slotSettingValue(process.env, "CODEX_APP_SERVER_PORT", uiPort, {
+    launchEnvKeys,
+    fallback: defaultCodexAppServerPort(uiPort),
+  }),
+);
 const codexSocketPath = process.env.CODEX_APP_SERVER_SOCK || "";
 const codexUrl = process.env.CODEX_APP_SERVER_URL || (codexSocketPath ? "ws://codex-app-server/rpc" : `ws://127.0.0.1:${codexPort}`);
 const shouldStartCodexServer = !process.env.CODEX_APP_SERVER_URL && !codexSocketPath;
@@ -2119,6 +2132,7 @@ class SharedBridge {
     this.model = modelForProvider(this.provider);
     this.requestedThreadId = requestedThreadId;
     this.workdir = options.workdir ? validateWorkdir(options.workdir) : workdir;
+    this.serviceTier = Object.prototype.hasOwnProperty.call(options, "serviceTier") ? normalizeServiceTier(options.serviceTier) : null;
     this.baseBridgeKey = baseBridgeKey;
     this.bridgeKey = bridgeMapKey(this.provider, baseBridgeKey);
     this.clients = new Set();
@@ -2310,6 +2324,7 @@ class SharedBridge {
   requestNewThread(statusText = "新しいthreadを開始中...") {
     const id = this.request("thread/start", {
       model: this.model,
+      serviceTier: this.serviceTier,
       cwd: this.workdir,
       approvalPolicy: "on-request",
       sandbox: "workspace-write",
@@ -2342,6 +2357,7 @@ class SharedBridge {
       const id = this.request("thread/resume", {
         threadId: this.requestedThreadId,
         model: this.model,
+        serviceTier: this.serviceTier,
         cwd: this.workdir,
         approvalPolicy: "on-request",
         sandbox: "workspace-write",
@@ -2741,6 +2757,7 @@ class SharedBridge {
       input,
     };
     params.model = options.model || this.model;
+    if (Object.prototype.hasOwnProperty.call(options, "serviceTier")) params.serviceTier = normalizeServiceTier(options.serviceTier);
     if (options.approvalPolicy) params.approvalPolicy = options.approvalPolicy;
     if (options.sandboxMode) params.sandboxPolicy = sandboxPolicyForMode(options.sandboxMode);
     const id = this.request("turn/start", {
@@ -3184,7 +3201,8 @@ class ClaudeBridge {
 function getBridge(threadId, provider = agentProvider, connectionId = crypto.randomUUID(), options = {}) {
   const requestedProvider = normalizeProvider(provider);
   const requestedWorkdir = requestedProvider === "codex" && options.workdir ? validateWorkdir(options.workdir) : "";
-  const bridgeOptions = requestedWorkdir ? { ...options, workdir: requestedWorkdir } : options;
+  const requestedServiceTier = requestedProvider === "codex" && Object.prototype.hasOwnProperty.call(options, "serviceTier") ? normalizeServiceTier(options.serviceTier) : null;
+  const bridgeOptions = { ...options, ...(requestedWorkdir ? { workdir: requestedWorkdir } : {}), serviceTier: requestedServiceTier };
   const bridgeHasActiveWork = (bridge) => Boolean(typeof bridge?.hasActiveWork === "function" && bridge.hasActiveWork());
   const bridgeNeedsReplacement = (bridge) =>
     shouldReplaceBridgeForWorkdir({
@@ -4112,7 +4130,11 @@ async function main() {
       return;
     }
     wss.handleUpgrade(req, socket, head, (ws) => {
-      bindBrowser(ws, phoneToken, threadId, requestedProvider, { fresh, workdir: url.searchParams.get("workdir") || "" }).catch((error) => {
+      bindBrowser(ws, phoneToken, threadId, requestedProvider, {
+        fresh,
+        workdir: url.searchParams.get("workdir") || "",
+        serviceTier: url.searchParams.has("serviceTier") ? url.searchParams.get("serviceTier") : undefined,
+      }).catch((error) => {
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: "error", text: error.message }));
           ws.close();

@@ -78,7 +78,7 @@ PHONE_NOTIFY_EVENTS=1 npm run phone
 PHONE_NOTIFY_EVENT_DEDUPE_MS=60000 npm run phone
 ```
 
-For parallel operation, treat each `PHONE_UI_PORT` as a fixed workspace slot. Pin the slot with `PHONE_WORKDIR`, and switch Codex or Claude from the browser UI as needed. Settings saved from the browser UI use port-scoped `.env` keys such as `PHONE_WORKDIR_45224`, so one slot's worktree choice does not become every port's default. `PHONE_AGENT_PROVIDER` only sets the default provider for that slot after restart.
+For parallel operation, treat each `PHONE_UI_PORT` as a fixed workspace slot. Pin the slot with `PHONE_WORKDIR`, and switch Codex or Claude from the browser UI as needed. When `CODEX_APP_SERVER_PORT` is not set, each slot uses `PHONE_UI_PORT - 1` for its local Codex app-server, such as `45224 -> 45223`, so parallel slots do not reuse the `45214 -> 45213` upstream by accident. Settings saved from the browser UI use port-scoped `.env` keys such as `PHONE_WORKDIR_45224`, so one slot's worktree choice does not become every port's default. `PHONE_AGENT_PROVIDER` only sets the default provider for that slot after restart.
 
 Bridge Fleet / Worktree Switchboard manages those slots from one browser tab. Start each bridge on a different port, open one bridge, then use the bridge/worktree pill to paste the remaining protected startup URLs or base URLs plus tokens. Saved host profiles keep base URLs and metadata separate from the local device token store. The active bridge drives the existing chat, terminal, thread, artifact, model, and approval UI; inactive bridges are polled through token-protected APIs for running state, errors, terminal tail, and approval requests.
 
@@ -139,7 +139,7 @@ Claude mode is intentionally narrower than Codex mode. It has Claude Code sessio
 - approval cards that stay visible from both chat and terminal views
 - quick action chips that insert prompt templates without auto-sending
 - model, plugin, config, auth, and automation lookups
-- Codex model labels use `5.5-L/M/H/XH`, where `L/M/H/XH` mean Low, Medium, High, and Extra High
+- Codex model badges stay abbreviated, such as `5.5-L/M/H/XH`; Fast mode adds a `⚡` suffix, and the dropdown exposes it as a one-row toggle above Low / Medium / High / Extra High reasoning
 - approval and sandbox mode controls for the next turn
 - repository artifact preview
 - Markdown rendering for chat and artifacts
