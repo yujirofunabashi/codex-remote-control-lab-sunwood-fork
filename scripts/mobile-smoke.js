@@ -552,6 +552,16 @@ async function run() {
       retainedLocalThread >= 1,
       retainedThreadListText,
     );
+    const retainedLocalThreadOrder = await page.evaluate(() => {
+      const groups = Array.from(document.querySelectorAll(".project-group:not(.current-thread-group)"));
+      const codexGroup = groups.find((group) => group.querySelector(".project-name")?.textContent?.trim() === "codex-remote-control-lab");
+      return Array.from(codexGroup?.querySelectorAll(".thread-title") || []).map((item) => item.textContent?.trim() || "");
+    });
+    check(
+      "previously opened local thread is promoted within its repo immediately",
+      retainedLocalThreadOrder[0] === "Mobile terminal compact polish",
+      JSON.stringify(retainedLocalThreadOrder.slice(0, 4)),
+    );
     await page.locator(".thread-item", { hasText: "Artifact preview polish" }).locator(".thread-select").click();
     await page.waitForFunction(() => window.__mockWebSocketUrls?.some((url) => url.includes("thread-artifacts")));
     const crossRepoNavigation = await page.evaluate((expectedWorkdir) => {

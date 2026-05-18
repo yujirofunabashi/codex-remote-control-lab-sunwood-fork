@@ -240,6 +240,19 @@
     return 0;
   }
 
+  function threadSortTimestamp(thread = {}) {
+    const localFields = [
+      ["lastViewedAt", "auto"],
+      ["last_viewed_at", "auto"],
+      ["localViewedAt", "auto"],
+    ];
+    for (const [field, unit] of localFields) {
+      const timestamp = timestampValueMs(thread[field], unit);
+      if (timestamp) return timestamp;
+    }
+    return threadTimestamp(thread);
+  }
+
   function redactSensitiveText(value) {
     return String(value || "")
       .replace(/([?&](?:token|key)=)[^&\s]+/gi, "$1[redacted]")
@@ -468,7 +481,7 @@
     syncing: { key: "syncing", label: "同期中", tone: "syncing", group: "running", priority: 50 },
     diff_available: { key: "diff_available", label: "変更あり", tone: "diff", group: "recent", priority: 40 },
     disconnected: { key: "disconnected", label: "再接続必要", tone: "error", group: "attention", priority: 35 },
-    done: { key: "done", label: "", tone: "done", group: "recent", priority: 10 },
+    done: { key: "done", label: "", tone: "done", group: "recent", priority: 20 },
     recent: { key: "recent", label: "", tone: "recent", group: "recent", priority: 20 },
   };
 
@@ -531,7 +544,7 @@
       const aStatus = deriveThreadStatus(a, runtimeState);
       const bStatus = deriveThreadStatus(b, runtimeState);
       if (bStatus.priority !== aStatus.priority) return bStatus.priority - aStatus.priority;
-      return threadTimestamp(b) - threadTimestamp(a);
+      return threadSortTimestamp(b) - threadSortTimestamp(a);
     });
   }
 
