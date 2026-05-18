@@ -128,17 +128,37 @@
         </header>
         <button type="button" id="workspaceIndicator" class="workspace-strip empty" aria-live="polite" aria-label="作業場所を取得できません">
           <span class="workspace-place">
-            <span class="workspace-tag" aria-hidden="true">場所</span>
+            <span id="workspaceSourceTag" class="workspace-tag" aria-hidden="true">Bridge repo</span>
             <span id="workspaceRepo" class="workspace-repo">--</span>
             <span class="workspace-separator" aria-hidden="true">›</span>
             <span id="workspaceLocation" class="workspace-location">--</span>
           </span>
           <span class="workspace-branch">
             <span id="workspaceConnectionDot" class="workspace-connection-dot" aria-hidden="true"></span>
-            <span class="workspace-tag" aria-hidden="true">ブランチ</span>
+            <span id="workspaceBranchTag" class="workspace-tag" aria-hidden="true">Bridge branch</span>
             <span id="branchName" class="branch-name">--</span>
           </span>
         </button>
+        <details id="contextMismatch" class="context-mismatch hidden" aria-live="polite">
+          <summary>
+            <strong>Agent cwd と Bridge repo が違います</strong>
+            <span id="contextMismatchSummary">確認してください</span>
+          </summary>
+          <dl>
+            <div>
+              <dt>Agent cwd</dt>
+              <dd id="contextAgentCwd">--</dd>
+            </div>
+            <div>
+              <dt>Bridge repo</dt>
+              <dd id="contextBridgeCwd">--</dd>
+            </div>
+            <div>
+              <dt>更新</dt>
+              <dd id="contextFreshness">--</dd>
+            </div>
+          </dl>
+        </details>
         <section id="threadColorPopover" class="thread-color-popover hidden" role="dialog" aria-label="リポ色"></section>
         <section id="threadSwitcher" class="thread-switcher hidden" role="dialog" aria-modal="false" aria-label="チャット切替">
           <header class="thread-switcher-header">

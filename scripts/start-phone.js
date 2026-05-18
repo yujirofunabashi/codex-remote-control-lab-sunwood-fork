@@ -3571,6 +3571,13 @@ function copyThreadTimeFields(target, source, fields) {
   }
 }
 
+function copyThreadContextFields(target, source, fields) {
+  for (const field of fields) {
+    if (!source || source[field] === undefined || source[field] === null || source[field] === "") continue;
+    target[field] = source[field];
+  }
+}
+
 function threadRecordForBridge(bridge = {}) {
   if (!bridge.threadId) return null;
   const userEntry = [...(bridge.history || [])].reverse().find((entry) => entry.type === "user");
@@ -3584,6 +3591,9 @@ function threadRecordForBridge(bridge = {}) {
     displayTitle: title,
     preview,
     cwd: bridge.workdir || workdir,
+    bridgeWorkdir: bridge.workdir || workdir,
+    lastExecutionCwd: bridge.workdir || workdir,
+    contextSource: "live-bridge",
     provider: bridge.provider || agentProvider,
     updatedAt,
     updated_at: updatedAt,
@@ -3613,6 +3623,16 @@ function mergeThreadListData(remoteThreads = [], localThreads = []) {
       const localActivityAt = threadListTimestamp({ updatedAt: thread.localActivityAt || 0 });
       if (!localActivityAt || (existingTimestamp && localActivityAt <= existingTimestamp)) {
         copyThreadTimeFields(merged, existing, ["updatedAt", "updated_at", "updated_at_ms"]);
+        copyThreadContextFields(merged, existing, [
+          "cwd",
+          "workdir",
+          "workspaceLocation",
+          "repoName",
+          "gitBranch",
+          "lastExecutionCwd",
+          "lastExecutionCwdAt",
+          "contextSource",
+        ]);
       }
       copyThreadTimeFields(merged, existing, ["createdAt", "created_at", "created_at_ms"]);
     }

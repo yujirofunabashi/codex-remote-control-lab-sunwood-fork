@@ -479,13 +479,25 @@ async function run() {
       workspaceRepo: document.querySelector("#workspaceRepo")?.textContent?.trim() || "",
       fullPath: document.querySelector("#workspaceIndicator")?.dataset.fullPath || "",
       bridgePill: document.querySelector("#bridgePillLabel")?.textContent?.trim() || "",
+      mismatchHidden: document.querySelector("#contextMismatch")?.classList.contains("hidden"),
+      mismatchText: document.querySelector("#contextMismatch")?.innerText || "",
+      mismatchTitle: document.querySelector("#contextMismatch")?.getAttribute("title") || "",
     }));
     check(
-      "fleet refresh keeps the selected thread workspace",
+      "fleet refresh keeps selected Agent cwd while bridge pill stays bridge-scoped",
       selectedWorkspaceAfterFleetRefresh.sidebarProject === "artifact-workspace" &&
         selectedWorkspaceAfterFleetRefresh.workspaceRepo === "artifact-workspace" &&
         selectedWorkspaceAfterFleetRefresh.fullPath === artifactRepo &&
-        selectedWorkspaceAfterFleetRefresh.bridgePill === "artifact-workspace",
+        selectedWorkspaceAfterFleetRefresh.bridgePill === "codex-remote-control-lab",
+      JSON.stringify(selectedWorkspaceAfterFleetRefresh),
+    );
+    check(
+      "repo mismatch warning names Agent cwd and Bridge repo",
+      selectedWorkspaceAfterFleetRefresh.mismatchHidden === false &&
+        selectedWorkspaceAfterFleetRefresh.mismatchText.includes("Agent cwd") &&
+        selectedWorkspaceAfterFleetRefresh.mismatchText.includes("Bridge repo") &&
+        selectedWorkspaceAfterFleetRefresh.mismatchTitle.includes(artifactRepo) &&
+        selectedWorkspaceAfterFleetRefresh.mismatchTitle.includes(root),
       JSON.stringify(selectedWorkspaceAfterFleetRefresh),
     );
     await page.evaluate(() => {
