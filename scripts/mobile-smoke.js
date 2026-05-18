@@ -37,6 +37,7 @@ const threads = [
   { id: "thread-artifacts", name: "Artifact preview polish", cwd: artifactRepo, updatedAt: Date.now() - 3600_000 },
   { id: "thread-drawer", name: "Drawer and composer tuning", cwd: drawerRepo, updatedAt: Date.now() - 86_400_000 },
 ];
+const threadsById = Object.fromEntries(threads.map((thread) => [thread.id, thread]));
 const staleThreadList = threads.filter((thread) => thread.id !== activeThread.id);
 const repoColorOverrides = {
   "repo:codex-remote-control-lab": "#2563eb",
@@ -165,8 +166,10 @@ async function mockWebSocket(page) {
         window.__mockWebSocketUrls.push(String(url || ""));
         const target = new URL(String(url || ""), location.href);
         const requestedThreadId = target.searchParams.get("thread") || payload.threadId;
-        const requestedWorkdir = target.searchParams.get("workdir") || payload.workdir;
+        const requestedThread = payload.threadsById[requestedThreadId] || payload.threadsById[payload.threadId] || {};
+        const requestedWorkdir = target.searchParams.get("workdir") || requestedThread.cwd || payload.workdir;
         const repoName = requestedWorkdir.split(/[\\/]/).filter(Boolean).pop() || payload.repoName;
+        const threadTitle = requestedThread.name || requestedThread.displayTitle || payload.threadTitle || "Mobile terminal compact polish";
         const readyPayload = {
           ...payload,
           threadId: requestedThreadId,
@@ -174,10 +177,11 @@ async function mockWebSocket(page) {
           repoName,
           workspaceLocation: requestedWorkdir,
           thread: {
+            ...requestedThread,
             id: requestedThreadId,
-            name: requestedThreadId === "thread-artifacts" ? "Artifact preview polish" : payload.threadTitle || "Mobile terminal compact polish",
-            displayTitle: requestedThreadId === "thread-artifacts" ? "Artifact preview polish" : payload.threadTitle || "Mobile terminal compact polish",
-            preview: requestedThreadId === "thread-artifacts" ? "Artifact preview polish" : payload.threadTitle || "Mobile terminal compact polish",
+            name: threadTitle,
+            displayTitle: threadTitle,
+            preview: threadTitle,
             cwd: requestedWorkdir,
             provider: "codex",
             updatedAt: Date.now(),
@@ -222,6 +226,7 @@ async function mockWebSocket(page) {
     workdir: root,
     repoName: "codex-remote-control-lab",
     gitBranch: "feature/mobile-terminal-compact",
+    threadsById,
   });
 }
 
@@ -537,8 +542,16 @@ async function run() {
         unregisteredRepoNavigation.mismatchHidden === true,
       JSON.stringify(unregisteredRepoNavigation),
     );
+    await page.waitForTimeout(650);
     await page.locator("#mobileThreads").click();
     await page.waitForTimeout(120);
+    const retainedLocalThread = await page.locator(".thread-item", { hasText: "Mobile terminal compact polish" }).count();
+    const retainedThreadListText = retainedLocalThread ? "" : (await page.locator("#threadList").innerText()).replace(/\s+/g, " ").slice(0, 360);
+    check(
+      "previous local-only thread remains visible after switching threads",
+      retainedLocalThread >= 1,
+      retainedThreadListText,
+    );
     await page.locator(".thread-item", { hasText: "Artifact preview polish" }).locator(".thread-select").click();
     await page.waitForFunction(() => window.__mockWebSocketUrls?.some((url) => url.includes("thread-artifacts")));
     const crossRepoNavigation = await page.evaluate((expectedWorkdir) => {
