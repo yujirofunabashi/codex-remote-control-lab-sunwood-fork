@@ -89,8 +89,16 @@ Implemented first patch:
 
 - Preserve remote thread `cwd` / repo metadata when a live bridge reconnect only
   has stale bridge-local metadata.
+- Preserve remote thread `cwd` / repo metadata as canonical even when a newer
+  live bridge record reports a different execution cwd. Keep that live cwd as
+  `lastExecutionCwd` so the UI can warn without moving the thread to the wrong
+  repo group.
 - Prefer selected thread `cwd` for resumed thread requests once the thread
   metadata is known.
+- When a bookmarked / restored URL opens a thread from another repo, clear the
+  initial pending state as soon as the thread list provides its `cwd`, refresh
+  saved bridge metadata if needed, and switch to the matching bridge before the
+  WebSocket connects.
 - Keep bridge/fleet labels bridge-scoped, while the workspace context can show
   the selected thread's `Agent cwd`.
 - When a selected thread's `cwd` matches a registered bridge workdir,
@@ -104,6 +112,30 @@ Verification:
 - `node --check public/main.js && node --check public/phone-ui-utils.js && node --check scripts/start-phone.js && node --check scripts/mobile-smoke.js`
 - `node --test scripts/thread-list.test.js scripts/bridge-state.test.js scripts/phone-ui-utils.test.js`
 - `node scripts/mobile-smoke.js --shots`
+- `npm run check`
+- `npm test`
+- `npm run docs:build`
+
+Follow-up hardening in the same branch:
+
+- Add an explicit UI state for whether the active workspace follows the selected
+  thread `cwd` or the manually selected bridge. Manual bridge switches now stop
+  old thread metadata from driving the next WebSocket `workdir`.
+- Render the mismatch warning from the active execution workspace first, not
+  from the selected thread's historical `cwd`.
+- Scope server-side live bridge reuse by `threadId + workdir`, not just
+  `threadId`, so a live bridge opened for the same thread in an old cwd cannot
+  satisfy a later cross-repo thread navigation request.
+- Filter live bridge history reads by the requested `workdir` before falling
+  back to app-server thread reads/resumes.
+- Prioritize selected run / active execution workspace over the bridge process
+  cwd for the mobile header pill, workspace labels, and mismatch warning. A
+  cross-repo thread can legitimately run through the same phone bridge process;
+  that should show the thread repo as the active work repo, not warn just
+  because the bridge process was launched from `codex-remote-control-lab`.
+- `node --test scripts/thread-list.test.js scripts/bridge-state.test.js scripts/thread-read.test.js scripts/phone-ui-utils.test.js`
+- `node scripts/mobile-smoke.js` includes both cross-repo existing-thread
+  navigation with and without a registered matching bridge.
 - `npm run check`
 - `npm test`
 - `npm run docs:build`

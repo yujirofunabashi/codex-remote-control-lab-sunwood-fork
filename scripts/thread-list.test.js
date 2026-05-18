@@ -66,6 +66,40 @@ test("mergeThreadListData preserves remote cwd when reconnect metadata is stale"
   assert.equal(merged[0].repoName, "trading-lab");
 });
 
+test("mergeThreadListData keeps remote cwd as canonical even when a live bridge is newer", () => {
+  const merged = mergeThreadListData(
+    [
+      {
+        id: "thread-1",
+        name: "Trading work",
+        cwd: "/Users/minijiro/WORK_LOCAL/00_WORKSPACE/personal/trading-lab",
+        repoName: "trading-lab",
+        updatedAt: 2000,
+        provider: "codex",
+      },
+    ],
+    [
+      {
+        id: "thread-1",
+        name: "Trading work",
+        cwd: "/Users/minijiro/WORK_LOCAL/00_MINI_WORKSPACE/codex-remote-control-lab",
+        repoName: "codex-remote-control-lab",
+        lastExecutionCwd: "/Users/minijiro/WORK_LOCAL/00_MINI_WORKSPACE/codex-remote-control-lab",
+        updatedAt: 999999,
+        localActivityAt: 999999,
+        contextSource: "live-bridge",
+        provider: "codex",
+      },
+    ],
+  );
+
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].cwd, "/Users/minijiro/WORK_LOCAL/00_WORKSPACE/personal/trading-lab");
+  assert.equal(merged[0].repoName, "trading-lab");
+  assert.equal(merged[0].lastExecutionCwd, "/Users/minijiro/WORK_LOCAL/00_MINI_WORKSPACE/codex-remote-control-lab");
+  assert.equal(merged[0].updatedAt, 999999);
+});
+
 test("threadRecordForBridge gives ready payload and local list the same display title", () => {
   const bridge = {
     threadId: "thread-1",

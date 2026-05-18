@@ -36,6 +36,18 @@ test("findLiveBridge finds starting bridges by requested thread id", () => {
   assert.equal(findLiveBridge(bridges, "thread-123"), bridge);
 });
 
+test("findLiveBridge filters by requested workdir when provided", () => {
+  const wrong = { threadId: "thread-123", requestedThreadId: null, workdir: "/tmp/app" };
+  const right = { threadId: "thread-123", requestedThreadId: null, workdir: "/tmp/other" };
+  const bridges = new Map([
+    ["thread-123::/tmp/app", wrong],
+    ["thread-123::/tmp/other", right],
+  ]);
+
+  assert.equal(findLiveBridge(bridges, "thread-123", { workdir: "/tmp/other/" }), right);
+  assert.equal(findLiveBridge(bridges, "thread-123", { workdir: "/tmp/missing" }), null);
+});
+
 test("readThreadSnapshot does not call app-server for a live bridge thread", async () => {
   let calls = 0;
   const snapshot = await readThreadSnapshot({

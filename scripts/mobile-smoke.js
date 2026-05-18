@@ -96,7 +96,7 @@ async function mockApi(page, origin) {
       });
     }
     if (url.pathname === "/api/threads") {
-      return route.fulfill({ json: { data: artifactBridge ? threads.filter((thread) => thread.cwd === artifactRepo) : staleThreadList } });
+      return route.fulfill({ json: { data: artifactBridge ? threads : staleThreadList } });
     }
     if (url.pathname === "/api/thread") return route.fulfill({ json: { threadId: url.searchParams.get("thread") || "thread-mobile-compact", history } });
     if (url.pathname === "/api/artifacts") return route.fulfill({ json: { data: [] } });
@@ -260,7 +260,6 @@ async function run() {
               id: artifactBridgeId,
               label: "artifact-workspace",
               baseUrl: artifactBridgeOrigin,
-              workdir: artifactRepo,
               port: 45224,
               status: "connected",
               rememberToken: true,
@@ -273,6 +272,22 @@ async function run() {
     await page.goto(`${origin}/?token=${token}&thread=thread-artifacts`, { waitUntil: "networkidle" });
     await page.waitForSelector('[data-state="ready"], [data-state="done"]');
     await page.waitForTimeout(300);
+    const startupNavigation = await page.evaluate((expectedWorkdir) => {
+      const target = [...(window.__mockWebSocketUrls || [])].reverse().find((url) => url.includes("thread-artifacts")) || "";
+      const parsed = new URL(target);
+      return {
+        thread: parsed.searchParams.get("thread"),
+        workdir: parsed.searchParams.get("workdir"),
+        host: parsed.host,
+      };
+    }, artifactRepo);
+    check(
+      "startup URL thread switches to the refreshed matching bridge and workdir",
+      startupNavigation.thread === "thread-artifacts" &&
+        startupNavigation.workdir === artifactRepo &&
+        startupNavigation.host === "127.0.0.1:45224",
+      JSON.stringify(startupNavigation),
+    );
     const pwaDismiss = page.locator("[data-pwa-dismiss]");
     if (await pwaDismiss.count()) await pwaDismiss.click();
 
@@ -280,21 +295,6 @@ async function run() {
     const title = (await page.locator("#threadTitle").textContent())?.trim();
     check("thread title is dynamic (not the fixed label)", title && title !== "稼働中スレッド", `title="${title}"`);
     check("no #threadSubtitle element remains", (await page.locator("#threadSubtitle").count()) === 0);
-    const startupNavigation = await page.evaluate((expectedWorkdir) => {
-      const target = window.__mockWebSocketUrls?.[0] || "";
-      const parsed = new URL(target);
-      return {
-        thread: parsed.searchParams.get("thread"),
-        workdir: parsed.searchParams.get("workdir"),
-        currentUrlThread: new URL(location.href).searchParams.get("thread"),
-        expectedWorkdir,
-      };
-    }, root);
-    check(
-      "startup keeps the active worktree instead of a stale thread workspace",
-      !startupNavigation.thread && startupNavigation.currentUrlThread !== "thread-artifacts" && startupNavigation.workdir === root,
-      JSON.stringify(startupNavigation),
-    );
     await page.waitForFunction(() => document.querySelector("#runState")?.dataset.state === "done").catch(async (error) => {
       const debug = await page.evaluate(() => ({
         runState: document.querySelector("#runState")?.dataset.state || "",
@@ -360,7 +360,7 @@ async function run() {
     }));
     check(
       "bridge pill identifies the active worktree",
-      userFacingLabels.fleet === "現在の接続先" && userFacingLabels.bridge === "codex-remote-control-lab",
+      userFacingLabels.fleet === "artifact-workspace" && userFacingLabels.bridge === "artifact-workspace",
       JSON.stringify(userFacingLabels),
     );
     check("main tabs identify Codex and Terminal views", userFacingLabels.chatTab?.includes("Codex") && userFacingLabels.logTab?.includes("Terminal"), JSON.stringify(userFacingLabels));
@@ -373,7 +373,53 @@ async function run() {
       !/(Home bridge|Bridge Fleet|Worktree|\btoken\b)/.test(connectionSheetText),
       connectionSheetText.replace(/\s+/g, " ").slice(0, 240),
     );
-    await page.locator("#closeBridgeFleet").click();
+    await page.locator(".bridge-sheet-card", { hasText: "codex-remote-control-lab" }).locator("button", { hasText: "切替" }).click();
+    await page.waitForFunction(
+      (expectedWorkdir) =>
+        [...(window.__mockWebSocketUrls || [])].reverse().some((url) => {
+          const parsed = new URL(url);
+          return parsed.host !== "127.0.0.1:45224" && parsed.searchParams.get("workdir") === expectedWorkdir && !parsed.searchParams.get("thread");
+        }),
+      root,
+    );
+    const manualBridgeSwitch = await page.evaluate((expectedWorkdir) => {
+      const target =
+        [...(window.__mockWebSocketUrls || [])].reverse().find((url) => {
+          const parsed = new URL(url);
+          return parsed.host !== "127.0.0.1:45224" && parsed.searchParams.get("workdir") === expectedWorkdir;
+        }) || "";
+      const parsed = new URL(target);
+      return {
+        thread: parsed.searchParams.get("thread"),
+        workdir: parsed.searchParams.get("workdir"),
+        host: parsed.host,
+        workspaceRepo: document.querySelector("#workspaceRepo")?.textContent?.trim() || "",
+        bridgePill: document.querySelector("#bridgePillLabel")?.textContent?.trim() || "",
+        mismatchHidden: document.querySelector("#contextMismatch")?.classList.contains("hidden"),
+      };
+    }, root);
+    check(
+      "manual bridge switch drops stale thread cwd and uses the active bridge workdir",
+      !manualBridgeSwitch.thread &&
+        manualBridgeSwitch.workdir === root &&
+        manualBridgeSwitch.workspaceRepo === "codex-remote-control-lab" &&
+        manualBridgeSwitch.mismatchHidden === true,
+      JSON.stringify(manualBridgeSwitch),
+    );
+    if (await page.locator("#bridgeFleetSheet.hidden").count()) {
+      await page.locator("#bridgePill").click();
+      await page.waitForTimeout(120);
+    }
+    const artifactSwitchCard = page.locator(".bridge-sheet-card", { hasText: "artifact-workspace" });
+    await artifactSwitchCard.scrollIntoViewIfNeeded();
+    await artifactSwitchCard.locator("button", { hasText: "切替" }).click();
+    await page.waitForFunction(() =>
+      [...(window.__mockWebSocketUrls || [])].reverse().some((url) => {
+        const parsed = new URL(url);
+        return parsed.host === "127.0.0.1:45224" && parsed.searchParams.get("workdir")?.includes("artifact-workspace");
+      }),
+    );
+    if (!(await page.locator("#bridgeFleetSheet.hidden").count())) await page.locator("#closeBridgeFleet").click();
 
     await page.locator("#mobileThreads").click();
     await page.waitForTimeout(120);
@@ -465,6 +511,31 @@ async function run() {
       "cross-repo new-thread button keeps the target workdir",
       crossRepoCreate.fresh === "1" && crossRepoCreate.workdir === drawerRepo,
       JSON.stringify(crossRepoCreate),
+    );
+    await page.locator("#mobileThreads").click();
+    await page.waitForTimeout(120);
+    await page.locator(".thread-item", { hasText: "Drawer and composer tuning" }).locator(".thread-select").click();
+    await page.waitForFunction(() => window.__mockWebSocketUrls?.some((url) => url.includes("thread-drawer")));
+    const unregisteredRepoNavigation = await page.evaluate((expectedWorkdir) => {
+      const target = [...(window.__mockWebSocketUrls || [])].reverse().find((url) => url.includes("thread-drawer")) || "";
+      const parsed = new URL(target);
+      return {
+        thread: parsed.searchParams.get("thread"),
+        workdir: parsed.searchParams.get("workdir"),
+        host: parsed.host,
+        workspaceRepo: document.querySelector("#workspaceRepo")?.textContent?.trim() || "",
+        bridgePill: document.querySelector("#bridgePillLabel")?.textContent?.trim() || "",
+        mismatchHidden: document.querySelector("#contextMismatch")?.classList.contains("hidden"),
+      };
+    }, drawerRepo);
+    check(
+      "cross-repo existing thread without a matching bridge still carries the target workdir",
+      unregisteredRepoNavigation.thread === "thread-drawer" &&
+        unregisteredRepoNavigation.workdir === drawerRepo &&
+        unregisteredRepoNavigation.workspaceRepo === "drawer-workspace" &&
+        unregisteredRepoNavigation.bridgePill === "drawer-workspace" &&
+        unregisteredRepoNavigation.mismatchHidden === true,
+      JSON.stringify(unregisteredRepoNavigation),
     );
     await page.locator("#mobileThreads").click();
     await page.waitForTimeout(120);

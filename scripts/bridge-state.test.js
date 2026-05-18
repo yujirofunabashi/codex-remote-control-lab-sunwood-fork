@@ -15,8 +15,16 @@ test("explicit fresh new thread requests get their own bridge key", () => {
   assert.notEqual(bridgeKeyForRequest("", "a", { fresh: true }), bridgeKeyForRequest("", "b", { fresh: true }));
 });
 
-test("existing thread bridge requests keep the thread id as the shared key", () => {
+test("existing thread bridge requests keep the thread id as the shared key without a workdir", () => {
   assert.equal(bridgeKeyForRequest("thread-123", "ignored"), "thread-123");
+});
+
+test("existing thread bridge requests are scoped by requested workdir", () => {
+  assert.equal(bridgeKeyForRequest("thread-123", "ignored", { workdir: "/tmp/app/" }), "thread-123::/tmp/app");
+  assert.notEqual(
+    bridgeKeyForRequest("thread-123", "ignored", { workdir: "/tmp/app" }),
+    bridgeKeyForRequest("thread-123", "ignored", { workdir: "/tmp/other" }),
+  );
 });
 
 test("any idle bridge can be disposed when its last browser client leaves", () => {
