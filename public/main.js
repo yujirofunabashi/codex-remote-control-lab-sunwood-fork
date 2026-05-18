@@ -2785,6 +2785,7 @@ function mergeThreadCacheRecords(serverThreads = [], localThreads = [], provider
       workspaceLocation: normalized.workspaceLocation || local.workspaceLocation,
       repoName: normalized.repoName || local.repoName,
       gitBranch: normalized.gitBranch || local.gitBranch,
+      lastViewedAt: normalized.lastViewedAt || local.lastViewedAt || 0,
       updatedAt: normalized.updatedAt || local.updatedAt || 0,
       createdAt: normalized.createdAt || local.createdAt || 0,
     });
@@ -2877,6 +2878,15 @@ function preserveSelectedThreadInList(overrides = {}) {
   return upsertThreadRecord(current, current.provider || currentThreadProvider());
 }
 
+function markSelectedThreadViewed(overrides = {}) {
+  return preserveSelectedThreadInList({ ...overrides, lastViewedAt: Date.now() });
+}
+
+function markThreadViewed(thread, provider = currentThreadProvider()) {
+  if (!thread?.id) return null;
+  return upsertThreadRecord({ ...thread, lastViewedAt: Date.now() }, provider);
+}
+
 function createThreadListItem(thread, options = {}) {
   const displayTitle = options.displayTitle || titleForThread(thread);
   const repoColor = repoColorForThread(thread);
@@ -2920,7 +2930,7 @@ function createThreadListItem(thread, options = {}) {
     badge.textContent = status.label;
     selectButton.append(badge);
   }
-  selectButton.addEventListener("click", () => selectThread(thread.id, { workdir: workspaceKeyForThread(thread), project: projectForThread(thread) }));
+  selectButton.addEventListener("click", () => selectThread(thread.id, { thread, workdir: workspaceKeyForThread(thread), project: projectForThread(thread) }));
   item.append(colorButton, selectButton);
   return item;
 }
@@ -4460,13 +4470,15 @@ function syncReadyThread(threadId) {
     return;
   }
   if (selectedThread === threadId) {
+    markSelectedThreadViewed({ runState: currentRunState });
     updateSelectedThreadHeading();
     renderThreadList();
     return;
   }
-  preserveSelectedThreadInList({ runState: currentRunState });
+  markSelectedThreadViewed({ runState: currentRunState });
   const previousKey = currentThreadColorKey();
   selectedThread = threadId;
+  markSelectedThreadViewed({ runState: currentRunState });
   updateUrlThread();
   updateSelectedThreadHeading();
   const nextKey = currentThreadColorKey();
@@ -4480,7 +4492,7 @@ function syncReadyThread(threadId) {
 async function selectThread(threadId, options = {}) {
   saveScrollPositions();
   saveDraftForActiveThread();
-  preserveSelectedThreadInList({ runState: currentRunState });
+  markSelectedThreadViewed({ runState: currentRunState });
   threadSwitchBusy = true;
   initialUrlThreadPending = false;
   updateThreadNavigation();
@@ -4493,6 +4505,16 @@ async function selectThread(threadId, options = {}) {
   }
   selectedThread = threadId;
   selectedThreadByProvider.set(currentThreadProvider(), selectedThread);
+  markThreadViewed(
+    {
+      ...(options.thread || {}),
+      id: threadId,
+      provider: currentThreadProvider(),
+      cwd: options.workdir || options.thread?.cwd || currentWorkspace.workspaceLocation || "",
+      runState: currentRunState,
+    },
+    currentThreadProvider(),
+  );
   updateUrlThread();
   updateSelectedThreadHeading();
   restoreDraftForCurrentThread();
@@ -6052,16 +6074,20 @@ function connect({ preserveHistory = false, freshThread = false, workdir = "" } 
       });
       setWorkspaceMeta(readyWorkspace);
       const state = getBridgeState(bridgeId);
+      const readyViewedAt = Date.now();
       upsertThreadRecord(
-        msg.thread || {
-          id: msg.threadId,
-          name: msg.threadTitle || "",
-          displayTitle: msg.threadTitle || "",
-          preview: msg.threadTitle || "",
-          provider: msg.provider || activeProvider,
-          cwd: msg.workdir,
-          updatedAt: 0,
-        },
+        msg.thread
+          ? { ...msg.thread, lastViewedAt: readyViewedAt }
+          : {
+              id: msg.threadId,
+              name: msg.threadTitle || "",
+              displayTitle: msg.threadTitle || "",
+              preview: msg.threadTitle || "",
+              provider: msg.provider || activeProvider,
+              cwd: msg.workdir,
+              updatedAt: 0,
+              lastViewedAt: readyViewedAt,
+            },
         msg.provider || activeProvider,
       );
       state.selectedThread = msg.threadId || selectedThread;

@@ -69,6 +69,16 @@ test("thread timestamp helpers parse ISO, seconds, and millisecond fields", () =
   );
 });
 
+test("sortThreadsForInbox promotes recently viewed local threads without changing updatedAt", () => {
+  assert.deepEqual(
+    sortThreadsForInbox([
+      { id: "stale-but-opened", updatedAt: 1000, lastViewedAt: 9000, runState: "done" },
+      { id: "newer-remote", updatedAt: 8000 },
+    ]).map((thread) => thread.id),
+    ["stale-but-opened", "newer-remote"],
+  );
+});
+
 test("threadDisplayTitle provides one title source for inbox and selected thread header", () => {
   const opaqueId = "123e4567-e89b-12d3-a456-426614174000";
   assert.equal(threadDisplayTitle({ id: "t0", displayTitle: "Live ready title", name: "Stale list title" }), "Live ready title");
