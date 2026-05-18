@@ -93,8 +93,10 @@ Implemented first patch:
   metadata is known.
 - Keep bridge/fleet labels bridge-scoped, while the workspace context can show
   the selected thread's `Agent cwd`.
+- When a selected thread's `cwd` matches a registered bridge workdir,
+  automatically switch to that bridge before opening the thread.
 - Add a compact expandable mismatch warning when `Agent cwd` and `Bridge repo`
-  differ.
+  differ and no matching bridge switch has resolved the mismatch.
 - Show each thread's known `cwd` in the drawer.
 
 Verification:
@@ -102,6 +104,9 @@ Verification:
 - `node --check public/main.js && node --check public/phone-ui-utils.js && node --check scripts/start-phone.js && node --check scripts/mobile-smoke.js`
 - `node --test scripts/thread-list.test.js scripts/bridge-state.test.js scripts/phone-ui-utils.test.js`
 - `node scripts/mobile-smoke.js --shots`
+- `npm run check`
+- `npm test`
+- `npm run docs:build`
 
 ## Acceptance Criteria
 

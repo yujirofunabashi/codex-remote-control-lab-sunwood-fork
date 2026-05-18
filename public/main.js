@@ -2071,7 +2071,15 @@ function renderContextMismatch(snapshot = contextSnapshot()) {
   const show = Boolean(snapshot.mismatch && agent?.workspaceLocation && bridge?.workspaceLocation);
   contextMismatch.classList.toggle("hidden", !show);
   document.body.classList.toggle("context-mismatch-visible", show);
-  if (!show) return;
+  if (!show) {
+    if (contextMismatchSummary) contextMismatchSummary.textContent = "確認してください";
+    if (contextAgentCwd) contextAgentCwd.textContent = "--";
+    if (contextBridgeCwd) contextBridgeCwd.textContent = "--";
+    if (contextFreshness) contextFreshness.textContent = "--";
+    contextMismatch.removeAttribute("title");
+    contextMismatch.removeAttribute("aria-label");
+    return;
+  }
   const agentRepo = agent.repoName || basenameFromPath(agent.workspaceLocation);
   const bridgeRepo = bridge.repoName || basenameFromPath(bridge.workspaceLocation);
   const compactAgent = compactWorkspaceLocation(agent.workspaceLocation);
@@ -3635,7 +3643,7 @@ function applyActiveBridgeState(bridgeId) {
   if (selectedThread && threadProvider) selectedThreadByProvider.set(threadProvider, selectedThread);
 }
 
-async function setActiveBridge(bridgeId, { silent = false } = {}) {
+async function setActiveBridge(bridgeId, { silent = false, reconnect = true } = {}) {
   if (!bridgeById(bridgeId) || bridgeId === activeBridgeId) {
     renderFleet();
     return;
@@ -3667,6 +3675,10 @@ async function setActiveBridge(bridgeId, { silent = false } = {}) {
   renderTerminalTranscript();
   renderFleet();
   if (!silent) showToast(`${bridgeDisplayLabel(activeBridge())} に切り替えました。`);
+  if (!reconnect) {
+    refreshBridgeState(bridgeId, { force: true }).catch(() => {});
+    return;
+  }
   await refreshBridgeState(bridgeId).catch(() => {});
   loadArtifacts();
   loadThreads({ background: true }).finally(() => connect());
@@ -4316,7 +4328,7 @@ function syncReadyThread(threadId) {
   renderTerminalTranscript();
 }
 
-function selectThread(threadId, options = {}) {
+async function selectThread(threadId, options = {}) {
   saveScrollPositions();
   saveDraftForActiveThread();
   threadSwitchBusy = true;
@@ -4324,6 +4336,7 @@ function selectThread(threadId, options = {}) {
   updateThreadNavigation();
   updateHeaderStatus();
   const workdir = workspaceKeyForThread({ cwd: options.workdir || "" });
+  if (workdir) await switchToBridgeForWorkdir(workdir, { reconnect: false });
   if (workdir) {
     setWorkspaceMeta({ repoName: options.project || projectForThread({ cwd: workdir }), workspaceLocation: workdir, gitBranch: "" });
   }
@@ -4347,9 +4360,9 @@ function selectThread(threadId, options = {}) {
   }, 420);
 }
 
-async function switchToBridgeForWorkdir(workdir) {
+async function switchToBridgeForWorkdir(workdir, options = {}) {
   const target = workspaceKeyForThread({ cwd: workdir });
-  if (!target) return;
+  if (!target) return false;
   const match = (bridgeRegistry.bridges || []).find((entry) => {
     const state = getBridgeState(entry.id);
     return (
@@ -4357,13 +4370,16 @@ async function switchToBridgeForWorkdir(workdir) {
       workspaceKeyForThread({ cwd: state.info?.cwd || state.info?.workdir || state.status?.workdir }) === target
     );
   });
-  if (match && match.id !== activeBridgeId) await setActiveBridge(match.id, { silent: true });
+  if (!match || match.id === activeBridgeId) return false;
+  await setActiveBridge(match.id, { silent: true, reconnect: options.reconnect !== false });
+  addStatus(`threadの作業場所に合わせて接続先を切り替えました: ${projectForThread({ cwd: target })}`);
+  return true;
 }
 
 async function startNewThread(options = {}) {
   const workdir = String(options.workdir || "").trim();
   if (workdir) {
-    await switchToBridgeForWorkdir(workdir);
+    await switchToBridgeForWorkdir(workdir, { reconnect: false });
     setWorkspaceMeta({ repoName: options.project || projectForThread({ cwd: workdir }), workspaceLocation: workdir, gitBranch: "" });
   }
   selectThread("", { fresh: true, workdir });

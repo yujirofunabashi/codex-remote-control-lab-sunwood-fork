@@ -1128,6 +1128,7 @@ button.project-heading.active {
 }
 
 .titlebar {
+  grid-row: 1;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto auto auto auto auto auto;
   align-items: center;
@@ -1652,6 +1653,7 @@ p {
 }
 
 .content-grid {
+  grid-row: 4;
   display: grid;
   grid-template-columns: minmax(420px, 1fr) 380px;
   width: 100%;
@@ -1686,6 +1688,7 @@ body.terminal-focus-mode #connect,
 body.terminal-focus-mode #mobileSettingsButton,
 body.terminal-focus-mode #menuButton,
 body.terminal-focus-mode .workspace-strip,
+body.terminal-focus-mode .context-mismatch,
 body.terminal-focus-mode .main-view-bar,
 body.terminal-focus-mode .log,
 body.terminal-focus-mode .quick-actions,
@@ -1700,6 +1703,7 @@ body.terminal-focus-mode .workspace {
 }
 
 body.terminal-focus-mode .content-grid {
+  grid-row: 2;
   grid-template-columns: minmax(0, 1fr);
   align-self: stretch;
   height: auto;
@@ -3112,6 +3116,7 @@ textarea::placeholder {
 }
 
 .workspace-strip {
+  grid-row: 2;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
@@ -3139,6 +3144,7 @@ textarea::placeholder {
 }
 
 .context-mismatch {
+  grid-row: 3;
   width: 100%;
   max-width: 100%;
   min-width: 0;
@@ -5119,6 +5125,7 @@ body[data-main-view="terminal"] .pwa-install-hint {
   }
 
   .context-mismatch {
+    grid-row: 2;
     padding: 6px 10px;
     font-size: 11px;
   }
@@ -5136,7 +5143,7 @@ body[data-main-view="terminal"] .pwa-install-hint {
   }
 
   .content-grid {
-    grid-row: auto;
+    grid-row: 3;
   }
 
   .sidebar-scrim {

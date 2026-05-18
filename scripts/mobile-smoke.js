@@ -18,6 +18,8 @@ const wantShots = process.argv.includes("--shots");
 const shotsDir = path.join(root, ".uploads", "mobile-smoke");
 const artifactRepo = path.join(root, "..", "artifact-workspace");
 const drawerRepo = path.join(root, "..", "drawer-workspace");
+const artifactBridgeOrigin = "http://127.0.0.1:45224";
+const artifactBridgeId = "artifact-bridge";
 
 const mime = new Map([
   [".css", "text/css"],
@@ -74,30 +76,37 @@ function startServer() {
 async function mockApi(page, origin) {
   await page.route("**/*", async (route) => {
     const url = new URL(route.request().url());
-    if (url.origin !== origin || !url.pathname.startsWith("/api/")) return route.continue();
+    if (!url.pathname.startsWith("/api/")) return route.continue();
+    const artifactBridge = url.origin === artifactBridgeOrigin;
+    const activeRoot = artifactBridge ? artifactRepo : root;
+    const activeRepoName = artifactBridge ? "artifact-workspace" : "codex-remote-control-lab";
+    const activeBranch = artifactBridge ? "feature/artifacts" : "feature/mobile-terminal-compact";
     if (url.pathname === "/api/bridge/info") {
       return route.fulfill({
         json: {
-          label: "Home bridge",
+          label: artifactBridge ? "artifact-workspace" : "Home bridge",
           hostName: "mini-smoke",
           provider: "codex",
-          repoRoot: root,
-          cwd: root,
-          workdir: root,
-          branch: "feature/mobile-terminal-compact",
+          repoRoot: activeRoot,
+          cwd: activeRoot,
+          workdir: activeRoot,
+          branch: activeBranch,
+          uiPort: artifactBridge ? 45224 : 45214,
         },
       });
     }
-    if (url.pathname === "/api/threads") return route.fulfill({ json: { data: staleThreadList } });
+    if (url.pathname === "/api/threads") {
+      return route.fulfill({ json: { data: artifactBridge ? threads.filter((thread) => thread.cwd === artifactRepo) : staleThreadList } });
+    }
     if (url.pathname === "/api/thread") return route.fulfill({ json: { threadId: url.searchParams.get("thread") || "thread-mobile-compact", history } });
     if (url.pathname === "/api/artifacts") return route.fulfill({ json: { data: [] } });
     if (url.pathname === "/api/terminal/run") {
       return route.fulfill({
         json: {
           command: "pwd",
-          cwd: root,
+          cwd: activeRoot,
           code: 0,
-          stdout: root,
+          stdout: activeRoot,
           stderr: "",
           truncated: false,
           durationMs: 12,
@@ -108,7 +117,7 @@ async function mockApi(page, origin) {
       return route.fulfill({ json: { path: url.searchParams.get("path") || "README.md", kind: "markdown", text: "# Smoke" } });
     }
     if (url.pathname === "/api/config") {
-      return route.fulfill({ json: { auth: { authMethod: "token" }, config: { config: { model: "gpt-5.5", cwd: root } }, errors: [] } });
+      return route.fulfill({ json: { auth: { authMethod: "token" }, config: { config: { model: "gpt-5.5", cwd: activeRoot } }, errors: [] } });
     }
     if (url.pathname === "/api/models") {
       return route.fulfill({ json: { data: [{ model: "gpt-5.5", displayName: "GPT-5.5", defaultReasoningEffort: "medium" }] } });
@@ -116,42 +125,27 @@ async function mockApi(page, origin) {
     if (url.pathname === "/api/status") {
       return route.fulfill({
         json: {
-          uiPort: 45214,
+          uiPort: artifactBridge ? 45224 : 45214,
           codexUrl: "ws://127.0.0.1:45213",
           historySyncEnabled: true,
           health: { hostName: "mini-smoke" },
-          workdir: root,
-          repoName: "codex-remote-control-lab",
-          gitBranch: "feature/mobile-terminal-compact",
+          workdir: activeRoot,
+          repoName: activeRepoName,
+          gitBranch: activeBranch,
           bridges: [
             {
-              threadId: "thread-mobile-compact",
+              threadId: artifactBridge ? "thread-artifacts" : "thread-mobile-compact",
               clients: 1,
               ready: true,
-              workdir: root,
-              repoName: "codex-remote-control-lab",
-              workspaceLocation: root,
-              gitBranch: "feature/mobile-terminal-compact",
+              workdir: activeRoot,
+              repoName: activeRepoName,
+              workspaceLocation: activeRoot,
+              gitBranch: activeBranch,
               run: {
                 state: "done",
-                repoName: "codex-remote-control-lab",
-                workspaceLocation: root,
-                gitBranch: "feature/mobile-terminal-compact",
-              },
-            },
-            {
-              threadId: "thread-artifacts",
-              clients: 1,
-              ready: true,
-              workdir: artifactRepo,
-              repoName: "artifact-workspace",
-              workspaceLocation: artifactRepo,
-              gitBranch: "feature/artifacts",
-              run: {
-                state: "done",
-                repoName: "artifact-workspace",
-                workspaceLocation: artifactRepo,
-                gitBranch: "feature/artifacts",
+                repoName: activeRepoName,
+                workspaceLocation: activeRoot,
+                gitBranch: activeBranch,
               },
             },
           ],
@@ -253,10 +247,29 @@ async function run() {
     page.on("pageerror", (error) => consoleErrors.push(String(error)));
     await mockWebSocket(page);
     await mockApi(page, origin);
-    await page.addInitScript((colors) => {
+    await page.addInitScript((payload) => {
+      const { colors, artifactRepo, artifactBridgeId, artifactBridgeOrigin, token } = payload;
       localStorage.setItem("codexPhoneRepoColors:v1", JSON.stringify(colors));
       localStorage.setItem("codexPhoneThreadInboxFilter:v1", "recent");
-    }, repoColorOverrides);
+      localStorage.setItem(
+        "codexPhoneBridgeRegistry:v1",
+        JSON.stringify({
+          version: 1,
+          bridges: [
+            {
+              id: artifactBridgeId,
+              label: "artifact-workspace",
+              baseUrl: artifactBridgeOrigin,
+              workdir: artifactRepo,
+              port: 45224,
+              status: "connected",
+              rememberToken: true,
+            },
+          ],
+        }),
+      );
+      localStorage.setItem("codexPhoneBridgeTokens:v1", JSON.stringify({ [artifactBridgeId]: token }));
+    }, { colors: repoColorOverrides, artifactRepo, artifactBridgeId, artifactBridgeOrigin, token });
     await page.goto(`${origin}/?token=${token}&thread=thread-artifacts`, { waitUntil: "networkidle" });
     await page.waitForSelector('[data-state="ready"], [data-state="done"]');
     await page.waitForTimeout(300);
@@ -337,7 +350,7 @@ async function run() {
       hidden: el.hidden,
       rows: el.querySelectorAll(".bridge-fleet-row").length,
     }));
-    check("single bridge row is not duplicated in the sidebar", bridgeListState.hidden && bridgeListState.rows === 0, JSON.stringify(bridgeListState));
+    check("registered bridge rows are available in the sidebar", !bridgeListState.hidden && bridgeListState.rows >= 2, JSON.stringify(bridgeListState));
     const userFacingLabels = await page.evaluate(() => ({
       fleet: document.querySelector("#fleetCurrentLabel")?.textContent?.trim(),
       bridge: document.querySelector("#bridgePillLabel")?.textContent?.trim(),
@@ -463,11 +476,14 @@ async function run() {
       return {
         thread: parsed.searchParams.get("thread"),
         workdir: parsed.searchParams.get("workdir"),
+        host: parsed.host,
       };
     }, artifactRepo);
     check(
-      "cross-repo thread selection keeps the target workdir",
-      crossRepoNavigation.thread === "thread-artifacts" && crossRepoNavigation.workdir === artifactRepo,
+      "cross-repo thread selection switches to the target bridge and workdir",
+      crossRepoNavigation.thread === "thread-artifacts" &&
+        crossRepoNavigation.workdir === artifactRepo &&
+        crossRepoNavigation.host === "127.0.0.1:45224",
       JSON.stringify(crossRepoNavigation),
     );
     await page.waitForFunction(() => document.querySelector("#sidebarProjectName")?.textContent?.trim() === "artifact-workspace");
@@ -484,20 +500,16 @@ async function run() {
       mismatchTitle: document.querySelector("#contextMismatch")?.getAttribute("title") || "",
     }));
     check(
-      "fleet refresh keeps selected Agent cwd while bridge pill stays bridge-scoped",
+      "fleet refresh keeps selected Agent cwd and matching bridge",
       selectedWorkspaceAfterFleetRefresh.sidebarProject === "artifact-workspace" &&
         selectedWorkspaceAfterFleetRefresh.workspaceRepo === "artifact-workspace" &&
         selectedWorkspaceAfterFleetRefresh.fullPath === artifactRepo &&
-        selectedWorkspaceAfterFleetRefresh.bridgePill === "codex-remote-control-lab",
+        selectedWorkspaceAfterFleetRefresh.bridgePill === "artifact-workspace",
       JSON.stringify(selectedWorkspaceAfterFleetRefresh),
     );
     check(
-      "repo mismatch warning names Agent cwd and Bridge repo",
-      selectedWorkspaceAfterFleetRefresh.mismatchHidden === false &&
-        selectedWorkspaceAfterFleetRefresh.mismatchText.includes("Agent cwd") &&
-        selectedWorkspaceAfterFleetRefresh.mismatchText.includes("Bridge repo") &&
-        selectedWorkspaceAfterFleetRefresh.mismatchTitle.includes(artifactRepo) &&
-        selectedWorkspaceAfterFleetRefresh.mismatchTitle.includes(root),
+      "repo mismatch warning hides after auto-switching to the matching bridge",
+      selectedWorkspaceAfterFleetRefresh.mismatchHidden === true,
       JSON.stringify(selectedWorkspaceAfterFleetRefresh),
     );
     await page.evaluate(() => {
@@ -581,7 +593,7 @@ async function run() {
     await page.locator("#terminalCommandRun").click();
     await page.waitForTimeout(220);
     const terminalText = await page.locator("#terminalTranscript").innerText();
-    check("terminal command runs from the Terminal view", terminalText.includes("$ pwd") && terminalText.includes(root), terminalText.slice(-400));
+    check("terminal command runs from the selected bridge workdir", terminalText.includes("$ pwd") && terminalText.includes(artifactRepo), terminalText.slice(-400));
     if (wantShots) await page.screenshot({ path: path.join(shotsDir, "terminal.png") });
 
     // Focus the composer: it must stay fully inside the visible viewport (issue 1).
