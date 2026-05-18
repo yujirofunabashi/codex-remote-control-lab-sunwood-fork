@@ -10,6 +10,7 @@ const {
   deriveThreadStatus,
   fallbackThreadColor,
   keyIntentText,
+  limitThreadList,
   maskToken,
   middleEllipsis,
   normalizeBridgeBaseUrl,
@@ -88,6 +89,16 @@ test("prioritizeSelectedThread keeps the active thread visible at the top of a l
     prioritizeSelectedThread(threads, "missing", 3).map((thread) => thread.id),
     ["oldest", "older", "current"],
   );
+});
+
+test("limitThreadList keeps the drawer list stable across thread selection", () => {
+  const threads = ["t1", "t2", "t3", "t4", "t5", "t6", "selected"].map((id) => ({ id }));
+  assert.deepEqual(
+    limitThreadList(threads, 6).map((thread) => thread.id),
+    ["t1", "t2", "t3", "t4", "t5", "t6"],
+  );
+  assert.deepEqual(limitThreadList(threads, 0), []);
+  assert.deepEqual(limitThreadList(null, 6), []);
 });
 
 test("compactWorkspacePath middle-truncates long mobile paths", () => {
