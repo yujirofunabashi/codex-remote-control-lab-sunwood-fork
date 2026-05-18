@@ -2749,6 +2749,58 @@ function sameThreadRecord(a = {}, b = {}) {
   );
 }
 
+function threadRecordKey(thread = {}, provider = currentThreadProvider()) {
+  const id = String(thread.id || "").trim();
+  if (!id) return "";
+  const nextProvider = normalizeProviderName(thread.provider) || normalizeProviderName(provider) || currentThreadProvider();
+  return `${nextProvider}:${id}`;
+}
+
+function mergeThreadCacheRecords(serverThreads = [], localThreads = [], provider = currentThreadProvider()) {
+  const resultProvider = normalizeProviderName(provider) || currentThreadProvider();
+  const localByKey = new Map();
+  for (const thread of localThreads || []) {
+    if (!thread?.id) continue;
+    const normalized = normalizeThreadRecord(thread, thread.provider || resultProvider);
+    const key = threadRecordKey(normalized, resultProvider);
+    if (key) localByKey.set(key, normalized);
+  }
+
+  const merged = [];
+  const seen = new Set();
+  for (const thread of serverThreads || []) {
+    if (!thread?.id) continue;
+    const normalized = normalizeThreadRecord(thread, thread.provider || resultProvider);
+    const key = threadRecordKey(normalized, resultProvider);
+    if (!key || seen.has(key)) continue;
+    const local = localByKey.get(key) || {};
+    merged.push({
+      ...local,
+      ...normalized,
+      name: normalized.name || local.name,
+      preview: normalized.preview || local.preview,
+      displayTitle: normalized.displayTitle || local.displayTitle || "",
+      cwd: normalized.cwd || local.cwd,
+      workdir: normalized.workdir || local.workdir,
+      workspaceLocation: normalized.workspaceLocation || local.workspaceLocation,
+      repoName: normalized.repoName || local.repoName,
+      gitBranch: normalized.gitBranch || local.gitBranch,
+      updatedAt: normalized.updatedAt || local.updatedAt || 0,
+      createdAt: normalized.createdAt || local.createdAt || 0,
+    });
+    seen.add(key);
+  }
+
+  for (const thread of localByKey.values()) {
+    const key = threadRecordKey(thread, resultProvider);
+    const localProvider = normalizeProviderName(thread.provider) || resultProvider;
+    if (!key || seen.has(key) || localProvider !== resultProvider) continue;
+    merged.push(thread);
+    seen.add(key);
+  }
+  return merged;
+}
+
 function upsertThreadRecord(thread, provider = currentThreadProvider()) {
   if (!thread?.id) return null;
   const normalized = normalizeThreadRecord(thread, provider);
@@ -3672,6 +3724,7 @@ async function refreshFleet({ force = false } = {}) {
 
 function captureActiveBridgeState() {
   if (!activeBridgeId) return;
+  preserveSelectedThreadInList({ runState: currentRunState });
   const state = getBridgeState(activeBridgeId);
   state.threadCache = threadCache;
   state.selectedThread = selectedThread;
@@ -4261,6 +4314,7 @@ function switchThreadProvider(provider, { reload = true } = {}) {
 
 async function loadThreads({ background = false, provider = "" } = {}) {
   if (!effectiveBridgeToken(activeBridge())) return;
+  const previousThreadCache = threadCache;
   const requestedProvider = normalizeProviderName(provider || threadProvider);
   const path = requestedProvider ? `/api/threads?provider=${encodeURIComponent(requestedProvider)}` : "/api/threads";
   try {
@@ -4277,6 +4331,7 @@ async function loadThreads({ background = false, provider = "" } = {}) {
       });
       if (current) nextThreads = [current, ...nextThreads];
     }
+    nextThreads = mergeThreadCacheRecords(nextThreads, previousThreadCache, resultProvider);
     const pendingUrlThread = initialUrlThreadPending
       ? nextThreads.find((thread) => sameThreadRecord(thread, { id: selectedThread, provider: resultProvider }))
       : null;
@@ -4409,6 +4464,7 @@ function syncReadyThread(threadId) {
     renderThreadList();
     return;
   }
+  preserveSelectedThreadInList({ runState: currentRunState });
   const previousKey = currentThreadColorKey();
   selectedThread = threadId;
   updateUrlThread();
@@ -4424,6 +4480,7 @@ function syncReadyThread(threadId) {
 async function selectThread(threadId, options = {}) {
   saveScrollPositions();
   saveDraftForActiveThread();
+  preserveSelectedThreadInList({ runState: currentRunState });
   threadSwitchBusy = true;
   initialUrlThreadPending = false;
   updateThreadNavigation();
