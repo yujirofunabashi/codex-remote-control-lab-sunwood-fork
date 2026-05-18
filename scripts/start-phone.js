@@ -3586,7 +3586,8 @@ function threadRecordForBridge(bridge = {}) {
   const preview = userEntry?.text || bridge.threadId;
   const title = preview.split("\n").find(Boolean) || bridge.threadId;
   const localActivityAt = threadListTimestamp({ updatedAt: bridge.listUpdatedAt || 0 });
-  const updatedAt = localActivityAt || threadListTimestamp({ updatedAt: bridge.runState?.updatedAt || bridge.createdAt || 0 });
+  const updatedAt = localActivityAt || 0;
+  const createdAt = localActivityAt ? bridge.createdAt || updatedAt : 0;
   return {
     id: bridge.threadId,
     name: title,
@@ -3599,8 +3600,8 @@ function threadRecordForBridge(bridge = {}) {
     provider: bridge.provider || agentProvider,
     updatedAt,
     updated_at: updatedAt,
-    createdAt: bridge.createdAt || updatedAt,
-    created_at: bridge.createdAt || updatedAt,
+    createdAt,
+    created_at: createdAt,
     localActivityAt,
     runState: bridge.runState?.state || "",
   };

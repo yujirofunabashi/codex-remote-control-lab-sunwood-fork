@@ -535,6 +535,12 @@
     });
   }
 
+  function limitThreadList(threads = [], limit = 6) {
+    const list = Array.isArray(threads) ? threads : [];
+    const max = Math.max(0, Number(limit || 0));
+    return list.slice(0, max);
+  }
+
   function prioritizeSelectedThread(threads = [], selectedThreadId = "", limit = 6) {
     const list = Array.isArray(threads) ? threads : [];
     const max = Math.max(0, Number(limit || 0));
@@ -592,6 +598,7 @@
     keyIntentText,
     deriveThreadStatus,
     sortThreadsForInbox,
+    limitThreadList,
     prioritizeSelectedThread,
     threadStatusFromKey,
   };

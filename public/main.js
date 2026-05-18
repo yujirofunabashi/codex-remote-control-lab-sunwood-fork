@@ -2811,7 +2811,7 @@ function currentThreadListRecord(overrides = {}) {
       provider: currentThreadProvider(),
       displayTitle: "現在のチャット",
       cwd: currentWorkspace.workspaceLocation || currentWorkspace.repoName || "",
-      updatedAt: Date.now(),
+      updatedAt: 0,
       runState: currentRunState,
       ...overrides,
     },
@@ -2874,14 +2874,21 @@ function createThreadListItem(thread, options = {}) {
 }
 
 function limitedVisibleThreads(threads, limit = 6) {
-  if (uiUtils.prioritizeSelectedThread) return uiUtils.prioritizeSelectedThread(threads, selectedThread, limit);
-  return threads.slice(0, limit);
+  if (uiUtils.limitThreadList) return uiUtils.limitThreadList(threads, limit);
+  const list = Array.isArray(threads) ? threads : [];
+  const max = Math.max(0, Number(limit || 0));
+  return list.slice(0, max);
 }
 
 function visibleThreadsInListOrder() {
   const threads = [];
   const baseKey = currentThreadWorkspaceKey();
-  for (const groupThreads of visibleThreadGroups().values()) {
+  const groups = visibleThreadGroups();
+  if (!selectedThreadVisibleInGroups(groups)) {
+    const current = currentThreadListRecord();
+    if (current && isSameCurrentWorkspaceThread(current, baseKey)) threads.push(current);
+  }
+  for (const groupThreads of groups.values()) {
     const scopedThreads = groupThreads.filter((thread) => isSameCurrentWorkspaceThread(thread, baseKey));
     threads.push(...limitedVisibleThreads(scopedThreads, 6));
   }
@@ -4266,7 +4273,6 @@ async function loadThreads({ background = false, provider = "" } = {}) {
     if (selectedThread && !nextThreads.some((thread) => sameThreadRecord(thread, { id: selectedThread, provider: resultProvider }))) {
       const current = currentThreadListRecord({
         provider: resultProvider,
-        updatedAt: Date.now(),
         runState: currentRunState,
       });
       if (current) nextThreads = [current, ...nextThreads];
@@ -5997,7 +6003,7 @@ function connect({ preserveHistory = false, freshThread = false, workdir = "" } 
           preview: msg.threadTitle || "",
           provider: msg.provider || activeProvider,
           cwd: msg.workdir,
-          updatedAt: msg.run?.updatedAt || Date.now(),
+          updatedAt: 0,
         },
         msg.provider || activeProvider,
       );
@@ -6081,7 +6087,6 @@ function connect({ preserveHistory = false, freshThread = false, workdir = "" } 
       getBridgeState(bridgeId).pendingApproval = null;
       applyServerRunState(msg.run || { state: "done", label: "完了しました", turnId: msg.turnId });
       preserveSelectedThreadInList({
-        updatedAt: Date.now(),
         runState: msg.run?.state || "done",
       });
       updateThreadNavigation();

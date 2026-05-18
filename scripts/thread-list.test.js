@@ -5,7 +5,7 @@ const { mergeThreadListData, threadListTimestamp, threadRecordForBridge } = requ
 
 test("mergeThreadListData includes live local Codex threads missing from remote list", () => {
   const remote = [{ id: "remote-1", name: "Remote thread", updatedAt: 1000, provider: "codex" }];
-  const local = [{ id: "live-1", name: "Live prompt", preview: "Live prompt", updatedAt: 2000, provider: "codex" }];
+  const local = [{ id: "live-1", name: "Live prompt", preview: "Live prompt", updatedAt: 2000, localActivityAt: 2000, provider: "codex" }];
 
   assert.deepEqual(
     mergeThreadListData(remote, local).map((thread) => thread.id),
@@ -125,6 +125,22 @@ test("threadRecordForBridge gives ready payload and local list the same display 
   assert.equal(record.bridgeWorkdir, "/tmp/other-repo");
   assert.equal(record.lastExecutionCwd, "/tmp/other-repo");
   assert.equal(record.updatedAt, 1_700_000_001_000);
+});
+
+test("threadRecordForBridge does not make a reconnect look like recent thread activity", () => {
+  const record = threadRecordForBridge({
+    threadId: "thread-1",
+    provider: "codex",
+    workdir: "/tmp/other-repo",
+    createdAt: 1_700_000_000_000,
+    listUpdatedAt: 0,
+    runState: { state: "done", updatedAt: 1_700_000_099_999 },
+    history: [{ type: "user", text: "Existing thread" }],
+  });
+
+  assert.equal(record.updatedAt, 0);
+  assert.equal(record.createdAt, 0);
+  assert.equal(record.localActivityAt, 0);
 });
 
 test("threadListTimestamp accepts numeric and ISO timestamp fields", () => {
