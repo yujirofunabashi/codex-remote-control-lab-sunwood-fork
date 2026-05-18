@@ -145,6 +145,10 @@ const reviewTabButtons = document.querySelectorAll("[data-review-tab]");
 const tokenStorageKey = "codexPhoneToken:v1";
 const params = new URLSearchParams(location.search);
 const initialToken = params.get("token") || "";
+const initialProviderParam = (() => {
+  const value = String(params.get("provider") || "").trim().toLowerCase();
+  return value === "codex" || value === "claude" ? value : "";
+})();
 let storedToken = "";
 try {
   storedToken = localStorage.getItem(tokenStorageKey) || localStorage.getItem("codexPhoneToken") || "";
@@ -581,10 +585,10 @@ function urlWithBridgeToken(url, entry = activeBridge()) {
   return new URL(bridgeAbsoluteUrl(url, bridge), location.href).href;
 }
 
-function authHeadersForBridge(entry = activeBridge(), headers = {}) {
+function authHeadersForBridge(entry = activeBridge(), headers = {}, tokenOverride = "") {
   const bridge = entry || activeBridge();
   const next = { ...headers };
-  const bridgeToken = effectiveBridgeToken(bridge);
+  const bridgeToken = tokenOverride || effectiveBridgeToken(bridge);
   if (bridgeToken && !next.authorization && !next.Authorization) next.authorization = `Bearer ${bridgeToken}`;
   return next;
 }
@@ -609,6 +613,9 @@ function wsUrlForBridge(entry = activeBridge(), provider = currentThreadProvider
   if (threadId) target.searchParams.set("thread", threadId);
   if (options.fresh) target.searchParams.set("fresh", "1");
   if (options.workdir) target.searchParams.set("workdir", options.workdir);
+  if (Object.prototype.hasOwnProperty.call(options, "serviceTier") && options.serviceTier !== undefined) {
+    target.searchParams.set("serviceTier", options.serviceTier || "standard");
+  }
   return target.href;
 }
 
@@ -664,6 +671,7 @@ const bridgeSessionTokensStorageKey = "codexPhoneBridgeSessionTokens:v1";
 const bridgeViewStateStorageKey = "codexPhoneBridgeViewState:v1";
 const threadInboxFilterStorageKey = "codexPhoneThreadInboxFilter:v1";
 const taskTemplateStorageKey = "codexPhoneLastTaskTemplate:v1";
+const serviceTierStorageKey = "codexPhoneServiceTier:v1";
 const terminalHistoryLimit = 300;
 const terminalSurfaceKinds = new Set(["command", "error", "approval", "file"]);
 const threadColorPalette = [
@@ -719,7 +727,7 @@ let lastResumeRefreshAt = 0;
 let lastWsMessageAt = 0;
 let selectedThreadRefreshActive = false;
 let activeProvider = "codex";
-let threadProvider = normalizeProviderName(params.get("provider") || (selectedThread.startsWith("claude:") ? "claude" : ""));
+let threadProvider = initialProviderParam || normalizeProviderName(selectedThread.startsWith("claude:") ? "claude" : "");
 let threadProviderExplicit = Boolean(threadProvider);
 const selectedThreadByProvider = new Map();
 if (selectedThread && threadProvider) selectedThreadByProvider.set(threadProvider, selectedThread);
@@ -746,6 +754,7 @@ let swipeFeedbackTimer = null;
 let selectedModel = localStorage.getItem("codexPhoneModel") || "";
 let selectedModelLabel = localStorage.getItem("codexPhoneModelLabel") || "5.5";
 let selectedReasoning = localStorage.getItem("codexPhoneReasoning") || "M";
+let selectedServiceTier = localStorage.getItem(serviceTierStorageKey) || "";
 let settingsRenderSeq = 0;
 let artifactItems = [];
 let activeArtifactPath = "";
@@ -1173,6 +1182,13 @@ const reasoningAliases = new Map([
   ["EXTRA-HIGH", "XH"],
   ["非常に高", "XH"],
 ]);
+const serviceTierAliases = new Map([
+  ["", ""],
+  ["STANDARD", ""],
+  ["NORMAL", ""],
+  ["FLEX", ""],
+  ["FAST", "fast"],
+]);
 const inlineModelChoices = {
   codex: ["gpt-5.5", "gpt-5.4"],
   claude: ["sonnet", "opus", "haiku"],
@@ -1183,8 +1199,15 @@ function normalizeReasoning(value) {
   return reasoningAliases.get(key) || reasoningAliases.get(key.toUpperCase()) || "M";
 }
 
+function normalizeServiceTier(value) {
+  const key = String(value || "").trim();
+  return serviceTierAliases.get(key) ?? serviceTierAliases.get(key.toUpperCase()) ?? "";
+}
+
 selectedReasoning = normalizeReasoning(selectedReasoning);
 localStorage.setItem("codexPhoneReasoning", selectedReasoning);
+selectedServiceTier = normalizeServiceTier(selectedServiceTier);
+localStorage.setItem(serviceTierStorageKey, selectedServiceTier);
 
 function labelForModel(model) {
   const label = String(model || "").replace(/^GPT-/, "").replace(/^gpt-/, "");
@@ -1210,6 +1233,10 @@ function setSelectedModel(model, { persist = true } = {}) {
 }
 
 function providerSupportsReasoning() {
+  return activeProvider === "codex";
+}
+
+function providerSupportsServiceTier() {
   return activeProvider === "codex";
 }
 
@@ -1239,15 +1266,27 @@ function setActiveProvider(provider) {
 
 function updateModelButton() {
   const showReasoning = providerSupportsReasoning();
-  modelButton.textContent = showReasoning ? `${selectedModelLabel}-${selectedReasoning}` : selectedModelLabel;
+  const showServiceTier = providerSupportsServiceTier();
+  const serviceTierSuffix = showServiceTier && selectedServiceTier === "fast" ? " ⚡" : "";
+  modelButton.textContent = showReasoning ? `${selectedModelLabel}-${selectedReasoning}${serviceTierSuffix}` : selectedModelLabel;
   thinkingButton.hidden = !showReasoning;
   modelMenu.classList.toggle("no-reasoning", !showReasoning);
   renderInlineModelChoices();
   for (const row of modelMenu.querySelectorAll(".model-menu-label, [data-reasoning]")) {
     row.hidden = !showReasoning;
   }
-  const separator = modelMenu.querySelector(".model-menu-separator");
-  if (separator) separator.hidden = !showReasoning;
+  for (const row of modelMenu.querySelectorAll("[data-service-tier-toggle], [data-service-tier-separator]")) {
+    row.hidden = !showServiceTier;
+  }
+  for (const row of modelMenu.querySelectorAll("[data-reasoning-separator]")) {
+    row.hidden = !showReasoning;
+  }
+  const serviceTierToggle = modelMenu.querySelector("[data-service-tier-toggle]");
+  if (serviceTierToggle) {
+    const fastMode = selectedServiceTier === "fast";
+    serviceTierToggle.classList.toggle("active", fastMode);
+    serviceTierToggle.setAttribute("aria-pressed", String(fastMode));
+  }
   for (const row of modelMenu.querySelectorAll("[data-reasoning]")) {
     const active = row.dataset.reasoning === selectedReasoning;
     row.classList.toggle("active", active);
@@ -1366,6 +1405,16 @@ function selectReasoning(value) {
   updateModelButton();
   closeModelMenu();
   addStatus(`インテリジェンスを ${selectedReasoning} に設定しました。`);
+}
+
+function selectServiceTier(value) {
+  if (!providerSupportsServiceTier()) return;
+  selectedServiceTier = normalizeServiceTier(value);
+  localStorage.setItem(serviceTierStorageKey, selectedServiceTier);
+  updateModelButton();
+  updateTerminalHeader();
+  closeModelMenu();
+  addStatus(selectedServiceTier === "fast" ? "速度を Fast に切り替えました。次の送信から反映します。" : "速度を Standard に切り替えました。次の送信から反映します。");
 }
 
 function selectModel(model) {
@@ -3353,15 +3402,30 @@ function renderGlobalApprovalBanner() {
 
 async function fetchJsonForBridge(entry, path, options = {}) {
   const bridgeToken = effectiveBridgeToken(entry);
-  if (!bridgeToken) throw new Error("接続キーがありません");
-  const response = await fetchWithTimeout(urlWithBridgeToken(path, entry), {
-    ...options,
-    headers: authHeadersForBridge(entry, {
-      ...(options.headers || {}),
-      ...(options.body ? { "content-type": "application/json" } : {}),
-    }),
-  });
-  const result = await response.json().catch(() => ({ error: `${response.status} ${response.statusText}` }));
+  const fallbackToken = entry?.id && entry.id !== homeBridgeId && token && token !== bridgeToken ? token : "";
+  const firstToken = bridgeToken || fallbackToken;
+  if (!firstToken) throw new Error("接続キーがありません");
+  const fetchWithToken = async (tokenValue) => {
+    const response = await fetchWithTimeout(urlWithBridgeToken(path, entry), {
+      ...options,
+      headers: authHeadersForBridge(entry, {
+        ...(options.headers || {}),
+        ...(options.body ? { "content-type": "application/json" } : {}),
+      }, tokenValue),
+    });
+    const result = await response.json().catch(() => ({ error: `${response.status} ${response.statusText}` }));
+    return { response, result };
+  };
+
+  let { response, result } = await fetchWithToken(firstToken);
+  if (response.status === 401 && fallbackToken && firstToken !== fallbackToken) {
+    ({ response, result } = await fetchWithToken(fallbackToken));
+    if (response.ok) {
+      const updated = setBridgeToken(entry, fallbackToken, entry.rememberToken !== false);
+      bridgeRegistry = { ...bridgeRegistry, bridges: (bridgeRegistry.bridges || []).map((bridge) => (bridge.id === entry.id ? updated : bridge)) };
+      persistBridgeRegistry();
+    }
+  }
   if (!response.ok) throw new Error(result.error || `${response.status} ${response.statusText}`);
   return result;
 }
@@ -3442,9 +3506,9 @@ function applyActiveBridgeState(bridgeId) {
   const view = bridgeViewState[bridgeId] || {};
   threadCache = Array.isArray(state.threadCache) ? state.threadCache : [];
   selectedThread = state.selectedThread || view.selectedThread || "";
-  activeProvider = normalizeProviderName(state.activeProvider || state.info?.provider || view.provider || "codex") || "codex";
-  threadProvider = normalizeProviderName(state.threadProvider || view.provider || activeProvider) || activeProvider;
-  threadProviderExplicit = Boolean(state.threadProviderExplicit || view.provider);
+  activeProvider = normalizeProviderName(initialProviderParam || state.activeProvider || state.info?.provider || view.provider || "codex") || "codex";
+  threadProvider = normalizeProviderName(initialProviderParam || state.threadProvider || view.provider || activeProvider) || activeProvider;
+  threadProviderExplicit = Boolean(initialProviderParam || state.threadProviderExplicit || view.provider);
   pendingApproval = state.pendingApproval || null;
   artifactItems = Array.isArray(state.artifactItems) ? state.artifactItems : [];
   Object.assign(currentWorkspace, state.currentWorkspace || {});
@@ -5533,6 +5597,18 @@ function renderTokenMissingState() {
   }
 }
 
+function renderInvalidTokenState() {
+  setReady(false);
+  setRunState("error", "接続キーエラー");
+  meta.textContent = "接続キーが無効です";
+  if (!lastDisplayedErrorSignature.includes("invalid-token")) {
+    const body = addEntry("error", "保存済みの接続キーが現在のbridgeと一致しません。PC側の起動URLから接続キーを入れ直してください。");
+    renderTokenRecoveryForm(body);
+    lastDisplayedErrorSignature = "invalid-token";
+    lastDisplayedErrorAt = Date.now();
+  }
+}
+
 function scheduleReconnect(reason = "reconnect", delay = 900) {
   if (!canReconnect() || reconnectTimer) return;
   reconnectTimer = window.setTimeout(() => {
@@ -5541,6 +5617,26 @@ function scheduleReconnect(reason = "reconnect", delay = 900) {
     addStatus(`接続を復旧します: ${reason}`);
     connect({ preserveHistory: true });
   }, delay);
+}
+
+function scheduleReconnectAfterAuthCheck(reason, bridge, bridgeToken) {
+  if (!bridgeToken) {
+    renderTokenMissingState();
+    return;
+  }
+  fetchWithTimeout(
+    urlWithBridgeToken("/api/session", bridge),
+    { headers: authHeadersForBridge(bridge, {}, bridgeToken) },
+    2500,
+  )
+    .then((response) => {
+      if (response.status === 401) {
+        renderInvalidTokenState();
+        return;
+      }
+      scheduleReconnect(reason);
+    })
+    .catch(() => scheduleReconnect(reason));
 }
 
 function recoverFromPageResume(reason = "resume") {
@@ -5622,7 +5718,11 @@ function connect({ preserveHistory = false, freshThread = false, workdir = "" } 
     setWorkspaceMeta({ repoName: projectForThread({ cwd: targetWorkdir }), workspaceLocation: targetWorkdir, gitBranch: "" });
   }
   ws = new WebSocket(
-    wsUrlForBridge(bridge, provider, selectedThread, { fresh: freshThread && !selectedThread, workdir: targetWorkdir }),
+    wsUrlForBridge(bridge, provider, selectedThread, {
+      fresh: freshThread && !selectedThread,
+      workdir: targetWorkdir,
+      serviceTier: provider === "codex" ? selectedServiceTier || "standard" : undefined,
+    }),
     wsProtocolsForBridge(bridge),
   );
   const socket = ws;
@@ -5793,7 +5893,7 @@ function connect({ preserveHistory = false, freshThread = false, workdir = "" } 
     releasePendingSubmission("接続が切れたため送信できませんでした。");
     meta.textContent = "切断";
     setRunState("disconnected");
-    if (!shouldSuppressReconnect) scheduleReconnect("WebSocket切断");
+    if (!shouldSuppressReconnect) scheduleReconnectAfterAuthCheck("WebSocket切断", bridge, bridgeToken);
   });
 
   socket.addEventListener("error", () => {
@@ -5812,7 +5912,7 @@ function connect({ preserveHistory = false, freshThread = false, workdir = "" } 
     updateInterruptButton();
     setRunState("disconnected", "接続エラー");
     releasePendingSubmission("接続エラーで送信できませんでした。");
-    if (!suppressedSocketReconnects.has(socket)) scheduleReconnect("WebSocketエラー");
+    if (!suppressedSocketReconnects.has(socket)) scheduleReconnectAfterAuthCheck("WebSocketエラー", bridge, bridgeToken);
   });
 }
 
@@ -5853,6 +5953,7 @@ composer.addEventListener("submit", (event) => {
         attachments: attachmentsToSend,
         options: {
           model: selectedModel || undefined,
+          serviceTier: currentThreadProvider() === "codex" ? selectedServiceTier || null : undefined,
           approvalPolicy: accessMode.approvalPolicy,
           sandboxMode: accessMode.sandboxMode,
         },
@@ -6168,6 +6269,11 @@ thinkingButton.addEventListener("click", toggleModelMenu);
 modelButton.addEventListener("click", toggleModelMenu);
 voiceButton.addEventListener("click", startVoiceInput);
 modelMenu.addEventListener("click", (event) => {
+  const serviceTierToggle = event.target.closest("[data-service-tier-toggle]");
+  if (serviceTierToggle) {
+    selectServiceTier(selectedServiceTier === "fast" ? "" : "fast");
+    return;
+  }
   const reasoningRow = event.target.closest("[data-reasoning]");
   if (reasoningRow) {
     selectReasoning(reasoningRow.dataset.reasoning);

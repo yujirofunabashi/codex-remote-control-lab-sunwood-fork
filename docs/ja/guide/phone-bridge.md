@@ -66,7 +66,7 @@ PHONE_NOTIFY_EVENTS=1 npm run phone
 PHONE_NOTIFY_EVENT_DEDUPE_MS=60000 npm run phone
 ```
 
-複数ポート運用では、各 `PHONE_UI_PORT` を固定 workspace slot として扱い、`PHONE_WORKDIR` で slot の worktree を指定します。Codex / Claude は browser UI から切り替えられ、`PHONE_AGENT_PROVIDER` は再起動後に最初に開く既定 provider だけを決めます。
+複数ポート運用では、各 `PHONE_UI_PORT` を固定 workspace slot として扱い、`PHONE_WORKDIR` で slot の worktree を指定します。`CODEX_APP_SERVER_PORT` を指定しない場合、各 slot の Codex app-server は `PHONE_UI_PORT - 1` を使います。たとえば `45224 -> 45223` になり、`45214 -> 45213` の既定 app-server を複数 slot が誤って共有しません。Codex / Claude は browser UI から切り替えられ、`PHONE_AGENT_PROVIDER` は再起動後に最初に開く既定 provider だけを決めます。
 
 Bridge Fleet / Worktree Switchboard を使うと、その複数 slot を 1 つの browser tab で管理できます。bridge を別 port で起動し、1 つ目の bridge を開いてから、bridge/worktree pill で残りの protected startup URL または base URL と token を貼り付けます。保存する host profile は base URL と metadata を token store から分けます。active bridge は既存の chat、terminal、thread、artifact、model、approval UI をそのまま駆動し、inactive bridge は token-protected API で稼働状態、error、terminal tail、approval request を監視します。
 
@@ -105,7 +105,7 @@ background の thread 一覧 polling は、同じ error の連続表示を抑え
 - chat / terminal のどちらでも見える approval card
 - 勝手に送信せず入力欄へ prompt template を挿入する quick action chip
 - model、plugin、config、auth、automation の確認
-- Codex model 表示は `5.5-L/M/H/XH` 形式。`L/M/H/XH` は Low / Medium / High / Extra High
+- Codex model 表示は Standard では `5.5-L/M/H/XH`、Fast mode では `5.5-XH ⚡` のように省略表示します。dropdown では Fast mode を1行トグルにし、reasoning は Low / Medium / High / Extra High のフルネームで表示します
 - 次 turn 向けの承認・sandbox mode 切り替え
 - repository artifact preview
 - chat と artifact の Markdown rendering

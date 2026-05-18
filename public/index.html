@@ -347,19 +347,24 @@
                   </button>
                 </div>
               </div>
-              <div id="modelMenu" class="model-menu hidden" role="menu" aria-label="モデルと思考の深さ">
+              <div id="modelMenu" class="model-menu hidden" role="menu" aria-label="モデル、速度、思考の深さ">
                 <section class="rate-limit-card" aria-live="polite">
                   <div class="rate-limit-title">残りのレート制限</div>
                   <div class="rate-limit-list" id="rateLimitList">
                     <span class="rate-limit-empty">未取得</span>
                   </div>
                 </section>
+                <button type="button" class="model-menu-row model-menu-toggle-row" data-service-tier-toggle title="高速・高クレジット消費" aria-label="Fast mode" aria-pressed="false">
+                  <span class="model-menu-toggle-copy">Fast mode <span aria-hidden="true">⚡</span></span>
+                  <span class="model-menu-switch" aria-hidden="true"></span>
+                </button>
+                <div class="model-menu-separator" data-service-tier-separator></div>
                 <div class="model-menu-label">思考の深さ</div>
-                <button type="button" class="model-menu-row" data-reasoning="L" title="軽め" aria-label="軽め">L</button>
-                <button type="button" class="model-menu-row" data-reasoning="M" title="標準" aria-label="標準">M<span class="checkmark">✓</span></button>
-                <button type="button" class="model-menu-row" data-reasoning="H" title="深め" aria-label="深め">H</button>
-                <button type="button" class="model-menu-row" data-reasoning="XH" title="最大" aria-label="最大">XH</button>
-                <div class="model-menu-separator"></div>
+                <button type="button" class="model-menu-row" data-reasoning="L" title="軽め" aria-label="Low">Low</button>
+                <button type="button" class="model-menu-row" data-reasoning="M" title="標準" aria-label="Medium">Medium<span class="checkmark">✓</span></button>
+                <button type="button" class="model-menu-row" data-reasoning="H" title="深め" aria-label="High">High</button>
+                <button type="button" class="model-menu-row" data-reasoning="XH" title="最大" aria-label="Extra High">Extra High</button>
+                <div class="model-menu-separator" data-reasoning-separator></div>
                 <button type="button" class="model-menu-row submenu-row" data-model-choice="gpt-5.5">GPT-5.5<span class="chevron">›</span></button>
                 <button type="button" class="model-menu-row submenu-row" data-model-choice="gpt-5.4">GPT-5.4<span class="chevron">›</span></button>
                 <button type="button" class="model-menu-row submenu-row" id="moreModelsButton">その他のモデル<span class="chevron">›</span></button>

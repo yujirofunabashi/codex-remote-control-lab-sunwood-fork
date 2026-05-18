@@ -2,6 +2,7 @@ const fs = require("fs");
 const net = require("net");
 const path = require("path");
 const { spawn } = require("child_process");
+const { defaultCodexAppServerPort } = require("./phone-slot-settings");
 
 const root = path.resolve(__dirname, "..");
 const defaultConfigPath = path.join(root, ".phone-fleet.local.json");
@@ -31,7 +32,7 @@ function normalizeFleetConfig(raw = {}) {
     bridges: bridges.map((entry, index) => {
       const id = assertSafeId(entry.id || `bridge-${index + 1}`, `bridges[${index}].id`);
       const phonePort = positivePort(entry.phonePort || entry.uiPort || entry.port, `bridges[${index}].phonePort`);
-      const appServerPort = positivePort(entry.appServerPort || phonePort - 1, `bridges[${index}].appServerPort`);
+      const appServerPort = positivePort(entry.appServerPort || defaultCodexAppServerPort(phonePort), `bridges[${index}].appServerPort`);
       if (seen.has(phonePort) || seen.has(appServerPort)) throw new Error(`duplicate port around bridge ${id}`);
       seen.add(phonePort);
       seen.add(appServerPort);
