@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { bridgeEnvForEntry, normalizeFleetConfig } = require("./start-fleet");
+const { bridgeEnvForEntry, normalizeFleetConfig, shouldRespawnBridgeExit } = require("./start-fleet");
 
 test("fleet config normalizes bridge ports and workdir", () => {
   const config = normalizeFleetConfig({
@@ -64,6 +64,16 @@ test("bridgeEnvForEntry passes only scoped bridge settings", () => {
   assert.equal(env.CODEX_APP_SERVER_PORT, "45213");
   assert.equal(env.PHONE_BRIDGE_ID, "work-a");
   assert.equal(env.PHONE_WORKDIR, "/tmp/work-a");
+  assert.equal(env.PHONE_WORKDIR_45214, "/tmp/work-a");
+  assert.equal(env.CODEX_WORKDIR_45214, "/tmp/work-a");
   assert.equal(env.CODEX_MODEL, "gpt-5.5");
+  assert.equal(env.CODEX_MODEL_45214, "gpt-5.5");
   assert.equal(env.PHONE_TOKEN, undefined);
+});
+
+test("fleet respawns a bridge after an in-app restart request", () => {
+  assert.equal(shouldRespawnBridgeExit(42, null, false), true);
+  assert.equal(shouldRespawnBridgeExit(42, "SIGTERM", false), false);
+  assert.equal(shouldRespawnBridgeExit(1, null, false), false);
+  assert.equal(shouldRespawnBridgeExit(42, null, true), false);
 });
