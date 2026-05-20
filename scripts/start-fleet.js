@@ -6,6 +6,7 @@ const { defaultCodexAppServerPort } = require("./phone-slot-settings");
 
 const root = path.resolve(__dirname, "..");
 const defaultConfigPath = path.join(root, ".phone-fleet.local.json");
+const bridgeRestartExitCode = 42;
 
 function readJsonFile(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
@@ -52,6 +53,13 @@ function normalizeFleetConfig(raw = {}) {
 }
 
 function bridgeEnvForEntry(entry, baseEnv = process.env) {
+  const portSuffix = `_${entry.phonePort}`;
+  const scopedModel = entry.model
+    ? {
+        [`PHONE_MODEL${portSuffix}`]: entry.model,
+        [`CODEX_MODEL${portSuffix}`]: entry.model,
+      }
+    : {};
   return {
     ...baseEnv,
     PHONE_UI_PORT: String(entry.phonePort),
@@ -62,8 +70,15 @@ function bridgeEnvForEntry(entry, baseEnv = process.env) {
     PHONE_BRIDGE_COLOR: entry.color,
     PHONE_WORKDIR: entry.workdir,
     CODEX_WORKDIR: entry.workdir,
+    [`PHONE_WORKDIR${portSuffix}`]: entry.workdir,
+    [`CODEX_WORKDIR${portSuffix}`]: entry.workdir,
     ...(entry.model ? { PHONE_MODEL: entry.model, CODEX_MODEL: entry.model } : {}),
+    ...scopedModel,
   };
+}
+
+function shouldRespawnBridgeExit(code, signal, stopping = false) {
+  return !stopping && !signal && code === bridgeRestartExitCode;
 }
 
 function canListen(port) {
@@ -93,9 +108,11 @@ async function main() {
   const config = normalizeFleetConfig(readJsonFile(configPath));
   await assertPortsAvailable(config);
 
-  const children = [];
+  const children = new Map();
+  let stopping = false;
   const stop = () => {
-    for (const child of children) {
+    stopping = true;
+    for (const child of children.values()) {
       if (!child.killed) child.kill("SIGTERM");
     }
   };
@@ -109,19 +126,27 @@ async function main() {
   });
 
   console.log("Phone bridge fleet starting.");
-  for (const bridge of config.bridges) {
+  const startBridge = (bridge) => {
     const child = spawn("npm", ["run", "phone"], {
       cwd: root,
       env: bridgeEnvForEntry(bridge),
       stdio: ["ignore", "pipe", "pipe"],
     });
-    children.push(child);
+    children.set(bridge.id, child);
     const prefix = `[${bridge.id}:${bridge.phonePort}]`;
     child.stdout.on("data", (chunk) => process.stdout.write(`${prefix} ${chunk}`));
     child.stderr.on("data", (chunk) => process.stderr.write(`${prefix} ${chunk}`));
     child.on("exit", (code, signal) => {
+      if (children.get(bridge.id) === child) children.delete(bridge.id);
       console.error(`${prefix} exited code=${code} signal=${signal || ""}`);
+      if (shouldRespawnBridgeExit(code, signal, stopping)) {
+        console.error(`${prefix} restart requested; respawning.`);
+        setTimeout(() => startBridge(bridge), 500);
+      }
     });
+  };
+  for (const bridge of config.bridges) {
+    startBridge(bridge);
   }
 
   const first = config.bridges[0];
@@ -136,4 +161,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { bridgeEnvForEntry, normalizeFleetConfig };
+module.exports = { bridgeEnvForEntry, normalizeFleetConfig, shouldRespawnBridgeExit };
