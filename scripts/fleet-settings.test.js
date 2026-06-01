@@ -25,7 +25,7 @@ test("fleet settings update persists the current port entry", () => {
         {
           bridges: [
             { id: "slot-a", phonePort: 45214, workdir: path.join(dir, "old-a"), provider: "codex", model: "gpt-5.4" },
-            { id: "slot-b", phonePort: 45224, workdir: path.join(dir, "old-b"), provider: "claude", model: "opus" },
+            { id: "slot-b", phonePort: 45224, workdir: path.join(dir, "old-b"), provider: "codex", model: "gpt-5.4" },
           ],
         },
         null,

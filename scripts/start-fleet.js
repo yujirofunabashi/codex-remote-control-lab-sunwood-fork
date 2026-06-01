@@ -27,8 +27,8 @@ function positivePort(value, field) {
 function normalizeProvider(value, field = "provider") {
   const provider = String(value || "").trim().toLowerCase();
   if (!provider) return "";
-  if (provider === "codex" || provider === "claude") return provider;
-  throw new Error(`${field} must be codex or claude`);
+  if (provider === "codex") return provider;
+  throw new Error(`${field} must be codex`);
 }
 
 function normalizeFleetConfig(raw = {}) {

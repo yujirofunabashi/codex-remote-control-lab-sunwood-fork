@@ -53,7 +53,7 @@ test("fleet config rejects unsupported providers", () => {
       normalizeFleetConfig({
         bridges: [{ id: "work-c", workdir: "/tmp/work-c", phonePort: 45234, provider: "gemini" }],
       }),
-    /provider must be codex or claude/,
+    /provider must be codex/,
   );
 });
 
