@@ -92,6 +92,7 @@ Optional fleet launcher:
     {
       "id": "work-a",
       "label": "Work A",
+      "provider": "codex",
       "workdir": "/Users/admin/Prj/work-a",
       "phonePort": 45214,
       "appServerPort": 45213
@@ -103,6 +104,8 @@ Optional fleet launcher:
 ```bash
 npm run phone:fleet
 ```
+
+Set `provider` to `codex` or `claude` when a fleet slot should stay pinned after restart. The launcher passes the provider as both shared and port-scoped `PHONE_AGENT_PROVIDER` values for that bridge process.
 
 The repository ignores `.phone-fleet.local.json` and `.phone-bridges.local.json`. Keep those local because they can contain private worktree paths and registry details.
 
