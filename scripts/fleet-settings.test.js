@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 
-const { readFleetConfigBridgeSettings, updateFleetConfigBridgeSettings } = require("./start-phone");
+const { launchSettingsFromFleetOrEnv, readFleetConfigBridgeSettings, updateFleetConfigBridgeSettings } = require("./start-phone");
 
 function withTempDir(fn) {
   const dir = fs.mkdtempSync(path.join(path.resolve(__dirname, ".."), ".tmp-fleet-settings-"));
@@ -66,6 +66,41 @@ test("fleet settings read returns the current bridge settings", () => {
       model: "gpt-5.5",
       workdir,
     });
+  });
+});
+
+test("launch settings prefer fleet config over stale launch env", () => {
+  withTempDir((dir) => {
+    const oldWorkdir = path.join(dir, "old-workdir");
+    const newWorkdir = path.join(dir, "new-workdir");
+    fs.mkdirSync(oldWorkdir);
+    fs.mkdirSync(newWorkdir);
+    const configPath = path.join(dir, "fleet.json");
+    fs.writeFileSync(
+      configPath,
+      `${JSON.stringify({
+        bridges: [{ id: "slot-b", phonePort: 45224, workdir: newWorkdir, provider: "codex", model: "gpt-5.5" }],
+      })}\n`,
+    );
+    const env = {
+      PHONE_WORKDIR: oldWorkdir,
+      PHONE_WORKDIR_45224: oldWorkdir,
+      CODEX_MODEL: "gpt-5.4",
+      CODEX_MODEL_45224: "gpt-5.4",
+    };
+
+    const result = launchSettingsFromFleetOrEnv(env, {
+      filePath: configPath,
+      port: 45224,
+      bridgeId: "slot-b",
+      provider: "codex",
+      fallbackWorkdir: dir,
+      fallbackModel: "gpt-5.4",
+      launchEnvKeys: new Set(Object.keys(env)),
+    });
+
+    assert.equal(result.workdir, newWorkdir);
+    assert.equal(result.model, "gpt-5.5");
   });
 });
 

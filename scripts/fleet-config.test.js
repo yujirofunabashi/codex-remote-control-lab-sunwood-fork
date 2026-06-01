@@ -1,7 +1,18 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 
-const { bridgeEnvForEntry, normalizeFleetConfig, shouldRespawnBridgeExit } = require("./start-fleet");
+const { bridgeEnvForEntry, latestBridgeConfig, normalizeFleetConfig, shouldRespawnBridgeExit } = require("./start-fleet");
+
+function withTempDir(fn) {
+  const dir = fs.mkdtempSync(path.join(path.resolve(__dirname, ".."), ".tmp-fleet-config-"));
+  try {
+    return fn(dir);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
 
 test("fleet config normalizes bridge ports and workdir", () => {
   const config = normalizeFleetConfig({
@@ -87,6 +98,31 @@ test("bridgeEnvForEntry passes only scoped bridge settings", () => {
   assert.equal(env.CODEX_MODEL, "gpt-5.5");
   assert.equal(env.CODEX_MODEL_45214, "gpt-5.5");
   assert.equal(env.PHONE_TOKEN, undefined);
+});
+
+test("fleet restart reloads the latest bridge config", () => {
+  withTempDir((dir) => {
+    const configPath = path.join(dir, "fleet.json");
+    const oldWorkdir = path.join(dir, "old-workdir");
+    const newWorkdir = path.join(dir, "new-workdir");
+    fs.mkdirSync(oldWorkdir);
+    fs.mkdirSync(newWorkdir);
+    const previous = normalizeFleetConfig({
+      bridges: [{ id: "slot-b", phonePort: 45224, appServerPort: 45223, workdir: oldWorkdir, model: "gpt-5.4" }],
+    }).bridges[0];
+
+    fs.writeFileSync(
+      configPath,
+      `${JSON.stringify({
+        bridges: [{ id: "slot-b", phonePort: 45224, appServerPort: 45223, workdir: newWorkdir, model: "gpt-5.5" }],
+      })}\n`,
+    );
+
+    const latest = latestBridgeConfig(configPath, previous);
+
+    assert.equal(latest.workdir, newWorkdir);
+    assert.equal(latest.model, "gpt-5.5");
+  });
 });
 
 test("fleet respawns a bridge after an in-app restart request", () => {

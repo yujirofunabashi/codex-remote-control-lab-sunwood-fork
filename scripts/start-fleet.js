@@ -61,6 +61,21 @@ function normalizeFleetConfig(raw = {}) {
   };
 }
 
+function matchingBridgeEntry(config, previousBridge = {}) {
+  const previousId = String(previousBridge.id || "").trim();
+  const previousPort = Number(previousBridge.phonePort);
+  return (
+    config.bridges.find((entry) => previousId && entry.id === previousId) ||
+    config.bridges.find((entry) => Number.isInteger(previousPort) && entry.phonePort === previousPort) ||
+    null
+  );
+}
+
+function latestBridgeConfig(configPath, previousBridge = {}) {
+  const config = normalizeFleetConfig(readJsonFile(configPath));
+  return matchingBridgeEntry(config, previousBridge);
+}
+
 function bridgeEnvForEntry(entry, baseEnv = process.env, options = {}) {
   const portSuffix = `_${entry.phonePort}`;
   const fleetEnv = options.configPath
@@ -163,8 +178,20 @@ async function main() {
       if (children.get(bridge.id) === child) children.delete(bridge.id);
       console.error(`${prefix} exited code=${code} signal=${signal || ""}`);
       if (shouldRespawnBridgeExit(code, signal, stopping)) {
-        console.error(`${prefix} restart requested; respawning.`);
-        setTimeout(() => startBridge(bridge), 500);
+        let nextBridge;
+        try {
+          nextBridge = latestBridgeConfig(configPath, bridge);
+        } catch (error) {
+          console.error(`${prefix} restart requested, but fleet config reload failed: ${error.message}`);
+          return;
+        }
+        if (!nextBridge) {
+          console.error(`${prefix} restart requested, but this bridge is no longer present in the fleet config.`);
+          return;
+        }
+        const changed = nextBridge.workdir !== bridge.workdir || nextBridge.model !== bridge.model || nextBridge.phonePort !== bridge.phonePort;
+        console.error(`${prefix} restart requested; respawning${changed ? " with updated fleet config" : ""}.`);
+        setTimeout(() => startBridge(nextBridge), 500);
       }
     });
   };
@@ -184,4 +211,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { bridgeEnvForEntry, normalizeFleetConfig, shouldRespawnBridgeExit };
+module.exports = { bridgeEnvForEntry, latestBridgeConfig, matchingBridgeEntry, normalizeFleetConfig, shouldRespawnBridgeExit };

@@ -296,6 +296,16 @@ const uiPort = Number(process.env.PHONE_UI_PORT || 45214);
 const uiHost = process.env.PHONE_UI_HOST || "0.0.0.0";
 const agentProvider = "codex";
 const isCodexProvider = true;
+const launchSettings = launchSettingsFromFleetOrEnv(process.env, {
+  filePath: fleetConfigPath,
+  port: uiPort,
+  bridgeId: process.env.PHONE_FLEET_BRIDGE_ID || process.env.PHONE_BRIDGE_ID || "",
+  provider: agentProvider,
+  fallbackWorkdir: root,
+  fallbackModel: defaultModelForProvider(agentProvider),
+  launchEnvKeys,
+});
+const initialFleetSettings = launchSettings.fleetSettings;
 const phoneAppId = appIdSlug(process.env.PHONE_APP_ID, `${agentProvider}-${uiPort}`);
 const phoneAppName = process.env.PHONE_APP_NAME || `${defaultAppNameForProvider(agentProvider)} ${uiPort}`;
 const phoneAppShortName = process.env.PHONE_APP_SHORT_NAME || `${defaultAppShortNameForProvider(agentProvider)} ${uiPort}`;
@@ -308,9 +318,9 @@ const codexPort = Number(
 const codexSocketPath = process.env.CODEX_APP_SERVER_SOCK || "";
 const codexUrl = process.env.CODEX_APP_SERVER_URL || (codexSocketPath ? "ws://codex-app-server/rpc" : `ws://127.0.0.1:${codexPort}`);
 const shouldStartCodexServer = !process.env.CODEX_APP_SERVER_URL && !codexSocketPath;
-const workdir = workdirFromEnv(process.env, agentProvider, root, { launchEnvKeys });
+const workdir = launchSettings.workdir;
 const providerModels = {
-  codex: modelFromEnv(process.env, "codex", defaultModelForProvider("codex"), { launchEnvKeys }),
+  codex: launchSettings.model,
 };
 const model = providerModels[agentProvider] || defaultModelForProvider(agentProvider);
 const historySyncEnabled = historySyncEnabledFromEnv(process.env, { launchEnvKeys });
@@ -505,7 +515,7 @@ function historySyncEnabledForProvider(provider) {
 
 function modelFromEnv(env, provider, fallback = defaultModelForProvider(provider), options = {}) {
   const providerKey = modelEnvKeyForProvider(provider);
-  return slotSettingValue(env, "PHONE_MODEL", uiPort, {
+  return slotSettingValue(env, "PHONE_MODEL", options.uiPort || uiPort, {
     launchEnvKeys: options.launchEnvKeys,
     fallbackKeys: [providerKey, "CODEX_MODEL"],
     fallback,
@@ -513,7 +523,7 @@ function modelFromEnv(env, provider, fallback = defaultModelForProvider(provider
 }
 
 function workdirFromEnv(env, provider, fallback = workdir, options = {}) {
-  return slotSettingValue(env, "PHONE_WORKDIR", uiPort, {
+  return slotSettingValue(env, "PHONE_WORKDIR", options.uiPort || uiPort, {
     launchEnvKeys: options.launchEnvKeys,
     fallbackKeys: [workdirEnvKeyForProvider(provider), "CODEX_WORKDIR"],
     fallback,
@@ -522,10 +532,22 @@ function workdirFromEnv(env, provider, fallback = workdir, options = {}) {
 
 function historySyncEnabledFromEnv(env, options = {}) {
   return isHistorySyncEnabled({
-    CODEX_HISTORY_SYNC: slotSettingValue(env, "CODEX_HISTORY_SYNC", uiPort, {
+    CODEX_HISTORY_SYNC: slotSettingValue(env, "CODEX_HISTORY_SYNC", options.uiPort || uiPort, {
       launchEnvKeys: options.launchEnvKeys,
     }),
   });
+}
+
+function launchSettingsFromFleetOrEnv(
+  env,
+  { filePath = "", port = uiPort, bridgeId = "", provider = "codex", fallbackWorkdir = root, fallbackModel = defaultModelForProvider(provider), launchEnvKeys } = {},
+) {
+  const fleetSettings = readFleetConfigBridgeSettings(filePath, { port, bridgeId });
+  return {
+    fleetSettings,
+    workdir: fleetSettings.workdir || workdirFromEnv(env, provider, fallbackWorkdir, { launchEnvKeys, uiPort: port }),
+    model: fleetSettings.model || modelFromEnv(env, provider, fallbackModel, { launchEnvKeys, uiPort: port }),
+  };
 }
 
 function settingPinned(baseKey, fallbackKeys = []) {
@@ -3626,6 +3648,7 @@ if (require.main === module) {
 
 module.exports = {
   executeTerminalCommand,
+  launchSettingsFromFleetOrEnv,
   manifestHrefForRequest,
   manifestPayloadForRequest,
   maskTokenValue,
