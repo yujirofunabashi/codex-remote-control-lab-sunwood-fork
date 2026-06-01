@@ -61,8 +61,14 @@ function normalizeFleetConfig(raw = {}) {
   };
 }
 
-function bridgeEnvForEntry(entry, baseEnv = process.env) {
+function bridgeEnvForEntry(entry, baseEnv = process.env, options = {}) {
   const portSuffix = `_${entry.phonePort}`;
+  const fleetEnv = options.configPath
+    ? {
+        PHONE_FLEET_CONFIG_PATH: path.resolve(options.configPath),
+        PHONE_FLEET_BRIDGE_ID: entry.id,
+      }
+    : {};
   const scopedProvider = entry.provider
     ? {
         PHONE_AGENT_PROVIDER: entry.provider,
@@ -83,6 +89,7 @@ function bridgeEnvForEntry(entry, baseEnv = process.env) {
     PHONE_BRIDGE_LABEL: entry.label,
     PHONE_BRIDGE_GROUP: entry.group,
     PHONE_BRIDGE_COLOR: entry.color,
+    ...fleetEnv,
     PHONE_WORKDIR: entry.workdir,
     CODEX_WORKDIR: entry.workdir,
     ...scopedProvider,
@@ -145,7 +152,7 @@ async function main() {
   const startBridge = (bridge) => {
     const child = spawn("npm", ["run", "phone"], {
       cwd: root,
-      env: bridgeEnvForEntry(bridge),
+      env: bridgeEnvForEntry(bridge, process.env, { configPath }),
       stdio: ["ignore", "pipe", "pipe"],
     });
     children.set(bridge.id, child);

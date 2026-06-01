@@ -71,11 +71,14 @@ test("bridgeEnvForEntry passes only scoped bridge settings", () => {
       color: "#2f6f2f",
     },
     { PATH: "/bin" },
+    { configPath: "/tmp/fleet.json" },
   );
 
   assert.equal(env.PHONE_UI_PORT, "45214");
   assert.equal(env.CODEX_APP_SERVER_PORT, "45213");
   assert.equal(env.PHONE_BRIDGE_ID, "work-a");
+  assert.equal(env.PHONE_FLEET_CONFIG_PATH, "/tmp/fleet.json");
+  assert.equal(env.PHONE_FLEET_BRIDGE_ID, "work-a");
   assert.equal(env.PHONE_AGENT_PROVIDER, "codex");
   assert.equal(env.PHONE_AGENT_PROVIDER_45214, "codex");
   assert.equal(env.PHONE_WORKDIR, "/tmp/work-a");

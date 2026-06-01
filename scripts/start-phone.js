@@ -366,6 +366,7 @@ function persistClaudeRateLimitMessage(message) {
 const codexBin = path.join(root, "node_modules", ".bin", "codex");
 const claudeBin = process.env.CLAUDE_BIN || "claude";
 const envPath = path.join(root, ".env");
+const fleetConfigPath = process.env.PHONE_FLEET_CONFIG_PATH ? path.resolve(process.env.PHONE_FLEET_CONFIG_PATH) : "";
 const claudeProjectsRoot = path.join(os.homedir(), ".claude", "projects");
 const uiPort = Number(process.env.PHONE_UI_PORT || 45214);
 const uiHost = process.env.PHONE_UI_HOST || "0.0.0.0";
@@ -749,6 +750,57 @@ function writeEnvValues(updates) {
   }
 }
 
+function fleetBridgeMatches(entry = {}, targetPort = uiPort, bridgeId = "") {
+  const entryPort = Number(entry.phonePort || entry.uiPort || entry.port);
+  if (Number.isInteger(entryPort) && entryPort === Number(targetPort)) return true;
+  return Boolean(bridgeId && String(entry.id || "").trim() === String(bridgeId).trim());
+}
+
+function readFleetConfigBridgeSettings(filePath, { port = uiPort, bridgeId = "" } = {}) {
+  if (!filePath || !fs.existsSync(filePath)) return {};
+  let config;
+  try {
+    config = JSON.parse(fs.readFileSync(filePath, "utf8"));
+  } catch {
+    return {};
+  }
+  const bridge = Array.isArray(config.bridges) ? config.bridges.find((entry) => fleetBridgeMatches(entry, port, bridgeId)) : null;
+  if (!bridge) return {};
+  return {
+    provider: bridge.provider ? normalizeProvider(bridge.provider) : "",
+    model: bridge.model ? String(bridge.model).trim() : "",
+    workdir: bridge.workdir ? path.resolve(String(bridge.workdir)) : "",
+  };
+}
+
+function updateFleetConfigBridgeSettings(filePath, { port = uiPort, bridgeId = "", provider, model, workdir } = {}) {
+  if (!filePath || !fs.existsSync(filePath)) return { updated: false, reason: "fleet config not found" };
+  const config = JSON.parse(fs.readFileSync(filePath, "utf8"));
+  if (!Array.isArray(config.bridges)) throw new Error("Fleet config bridges must be an array");
+  const nextProvider = provider !== undefined ? normalizeProvider(provider) : undefined;
+  const nextModel = model !== undefined ? validateModel(model) : undefined;
+  const nextWorkdir = workdir !== undefined ? validateWorkdir(workdir) : undefined;
+  let updated = false;
+  const bridges = config.bridges.map((entry) => {
+    if (!fleetBridgeMatches(entry, port, bridgeId)) return entry;
+    updated = true;
+    return {
+      ...entry,
+      ...(nextProvider !== undefined ? { provider: nextProvider } : {}),
+      ...(nextModel !== undefined ? { model: nextModel } : {}),
+      ...(nextWorkdir !== undefined ? { workdir: nextWorkdir } : {}),
+    };
+  });
+  if (!updated) return { updated: false, reason: "bridge entry not found" };
+  fs.writeFileSync(filePath, `${JSON.stringify({ ...config, bridges }, null, 2)}\n`, { mode: 0o600 });
+  try {
+    fs.chmodSync(filePath, 0o600);
+  } catch {
+    // Best effort: the bridge still works if the filesystem refuses chmod.
+  }
+  return { updated: true };
+}
+
 function isUnderHome(target) {
   const home = path.resolve(os.homedir());
   const resolved = path.resolve(target);
@@ -884,11 +936,16 @@ function workspaceOptions() {
 
 function localSettingsPayload() {
   const envValues = parseEnvValues(envPath);
+  const fleetSettings = readFleetConfigBridgeSettings(fleetConfigPath, {
+    port: uiPort,
+    bridgeId: process.env.PHONE_FLEET_BRIDGE_ID || process.env.PHONE_BRIDGE_ID || phoneBridgeId,
+  });
   const savedProvider = normalizeProvider(
-    slotSettingValue(envValues, "PHONE_AGENT_PROVIDER", uiPort, {
-      fallbackKeys: ["AGENT_PROVIDER", "PHONE_AGENT_PROVIDER_DEFAULT"],
-      fallback: agentProvider,
-    }),
+    fleetSettings.provider ||
+      slotSettingValue(envValues, "PHONE_AGENT_PROVIDER", uiPort, {
+        fallbackKeys: ["AGENT_PROVIDER", "PHONE_AGENT_PROVIDER_DEFAULT"],
+        fallback: agentProvider,
+      }),
   );
   const providerPinned = settingPinned("PHONE_AGENT_PROVIDER", ["AGENT_PROVIDER", "PHONE_AGENT_PROVIDER_DEFAULT"]);
   const settingsProvider = providerPinned ? agentProvider : savedProvider;
@@ -899,8 +956,8 @@ function localSettingsPayload() {
   const savedHistorySyncEnabled = settingsProvider === "codex" ? historySyncEnabledFromEnv(envValues) : false;
   const savedPort = Number(envValues.PHONE_UI_PORT || uiPort);
   const savedHost = envValues.PHONE_UI_HOST || uiHost;
-  const savedModel = modelFromEnv(envValues, settingsProvider, settingsProvider === agentProvider ? model : defaultModelForProvider(settingsProvider));
-  const savedWorkdir = workdirFromEnv(envValues, settingsProvider, workdir);
+  const savedModel = fleetSettings.model || modelFromEnv(envValues, settingsProvider, settingsProvider === agentProvider ? model : defaultModelForProvider(settingsProvider));
+  const savedWorkdir = fleetSettings.workdir || workdirFromEnv(envValues, settingsProvider, workdir);
   const settingsModel = modelPinned && settingsProvider === agentProvider ? model : savedModel;
   const settingsWorkdir = savedWorkdir;
   const settingsHistorySyncEnabled = historyPinned && settingsProvider === agentProvider ? historySyncEnabledForProvider(settingsProvider) : savedHistorySyncEnabled;
@@ -3854,17 +3911,34 @@ async function main() {
         try {
           const body = await readJsonBody(req);
           const updates = {};
+          const fleetUpdates = {};
           const requestedProvider = Object.prototype.hasOwnProperty.call(body, "provider") ? normalizeProvider(body.provider) : agentProvider;
-          if (Object.prototype.hasOwnProperty.call(body, "provider")) updates[slotEnvKey("PHONE_AGENT_PROVIDER", uiPort)] = requestedProvider;
-          if (Object.prototype.hasOwnProperty.call(body, "model")) {
-            updates[slotEnvKey(modelEnvKeyForProvider(requestedProvider), uiPort)] = validateModel(body.model);
+          if (Object.prototype.hasOwnProperty.call(body, "provider")) {
+            updates[slotEnvKey("PHONE_AGENT_PROVIDER", uiPort)] = requestedProvider;
+            fleetUpdates.provider = requestedProvider;
           }
-          if (Object.prototype.hasOwnProperty.call(body, "workdir")) updates[slotEnvKey("PHONE_WORKDIR", uiPort)] = rememberWorkspace(body.workdir);
+          if (Object.prototype.hasOwnProperty.call(body, "model")) {
+            const nextModel = validateModel(body.model);
+            updates[slotEnvKey(modelEnvKeyForProvider(requestedProvider), uiPort)] = nextModel;
+            fleetUpdates.model = nextModel;
+          }
+          if (Object.prototype.hasOwnProperty.call(body, "workdir")) {
+            const nextWorkdir = rememberWorkspace(body.workdir);
+            updates[slotEnvKey("PHONE_WORKDIR", uiPort)] = nextWorkdir;
+            fleetUpdates.workdir = nextWorkdir;
+          }
           if (requestedProvider === "codex" && Object.prototype.hasOwnProperty.call(body, "historySyncEnabled")) {
             updates[slotEnvKey("CODEX_HISTORY_SYNC", uiPort)] = body.historySyncEnabled ? "1" : "0";
           }
           writeEnvValues(updates);
-          sendJson(res, 200, { ok: true, ...localSettingsPayload() });
+          const fleetUpdate = Object.keys(fleetUpdates).length
+            ? updateFleetConfigBridgeSettings(fleetConfigPath, {
+                port: uiPort,
+                bridgeId: process.env.PHONE_FLEET_BRIDGE_ID || process.env.PHONE_BRIDGE_ID || phoneBridgeId,
+                ...fleetUpdates,
+              })
+            : { updated: false, reason: "no fleet settings changed" };
+          sendJson(res, 200, { ok: true, fleetUpdate, ...localSettingsPayload() });
         } catch (error) {
           sendJson(res, 400, { error: error.message });
         }
@@ -4220,9 +4294,11 @@ module.exports = {
   manifestPayloadForRequest,
   maskTokenValue,
   mergeThreadListData,
+  readFleetConfigBridgeSettings,
   requestTokenFromHeaders,
   safeProxyBasePath,
   threadRecordForBridge,
   threadListTimestamp,
   tokenMetadata,
+  updateFleetConfigBridgeSettings,
 };
