@@ -105,7 +105,7 @@ Optional fleet launcher:
 npm run phone:fleet
 ```
 
-Set `provider` to `codex` or `claude` when a fleet slot should stay pinned after restart. The launcher passes the provider as both shared and port-scoped `PHONE_AGENT_PROVIDER` values for that bridge process.
+Set `provider` to `codex` or `claude` when a fleet slot should stay pinned after restart. The launcher passes the provider as both shared and port-scoped `PHONE_AGENT_PROVIDER` values for that bridge process. When the bridge was started by the fleet launcher, browser UI settings also update the matching fleet entry for workdir, model, and provider so those choices survive the next fleet restart.
 
 The repository ignores `.phone-fleet.local.json` and `.phone-bridges.local.json`. Keep those local because they can contain private worktree paths and registry details.
 
