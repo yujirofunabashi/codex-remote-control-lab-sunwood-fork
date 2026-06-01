@@ -12,6 +12,7 @@ test("fleet config normalizes bridge ports and workdir", () => {
         workdir: "/tmp/work-a",
         phonePort: 45214,
         appServerPort: 45213,
+        provider: "codex",
         model: "gpt-5.5",
         color: "#2f6f2f",
       },
@@ -21,6 +22,7 @@ test("fleet config normalizes bridge ports and workdir", () => {
   assert.equal(config.bridges[0].id, "work-a");
   assert.equal(config.bridges[0].phonePort, 45214);
   assert.equal(config.bridges[0].appServerPort, 45213);
+  assert.equal(config.bridges[0].provider, "codex");
 });
 
 test("fleet config defaults each app-server port from its phone slot", () => {
@@ -45,12 +47,23 @@ test("fleet config rejects duplicate ports", () => {
   );
 });
 
+test("fleet config rejects unsupported providers", () => {
+  assert.throws(
+    () =>
+      normalizeFleetConfig({
+        bridges: [{ id: "work-c", workdir: "/tmp/work-c", phonePort: 45234, provider: "gemini" }],
+      }),
+    /provider must be codex or claude/,
+  );
+});
+
 test("bridgeEnvForEntry passes only scoped bridge settings", () => {
   const env = bridgeEnvForEntry(
     {
       id: "work-a",
       label: "Work A",
       group: "client",
+      provider: "codex",
       workdir: "/tmp/work-a",
       phonePort: 45214,
       appServerPort: 45213,
@@ -63,6 +76,8 @@ test("bridgeEnvForEntry passes only scoped bridge settings", () => {
   assert.equal(env.PHONE_UI_PORT, "45214");
   assert.equal(env.CODEX_APP_SERVER_PORT, "45213");
   assert.equal(env.PHONE_BRIDGE_ID, "work-a");
+  assert.equal(env.PHONE_AGENT_PROVIDER, "codex");
+  assert.equal(env.PHONE_AGENT_PROVIDER_45214, "codex");
   assert.equal(env.PHONE_WORKDIR, "/tmp/work-a");
   assert.equal(env.PHONE_WORKDIR_45214, "/tmp/work-a");
   assert.equal(env.CODEX_WORKDIR_45214, "/tmp/work-a");

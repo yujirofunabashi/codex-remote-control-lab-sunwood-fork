@@ -24,6 +24,13 @@ function positivePort(value, field) {
   return port;
 }
 
+function normalizeProvider(value, field = "provider") {
+  const provider = String(value || "").trim().toLowerCase();
+  if (!provider) return "";
+  if (provider === "codex" || provider === "claude") return provider;
+  throw new Error(`${field} must be codex or claude`);
+}
+
 function normalizeFleetConfig(raw = {}) {
   const bridges = Array.isArray(raw.bridges) ? raw.bridges : [];
   if (!bridges.length) throw new Error("bridges must contain at least one bridge");
@@ -38,10 +45,12 @@ function normalizeFleetConfig(raw = {}) {
       seen.add(phonePort);
       seen.add(appServerPort);
       const workdir = path.resolve(String(entry.workdir || root));
+      const provider = normalizeProvider(entry.provider, `bridges[${index}].provider`);
       return {
         id,
         label: String(entry.label || id).trim(),
         group: String(entry.group || "").trim(),
+        provider,
         workdir,
         phonePort,
         appServerPort,
@@ -54,6 +63,12 @@ function normalizeFleetConfig(raw = {}) {
 
 function bridgeEnvForEntry(entry, baseEnv = process.env) {
   const portSuffix = `_${entry.phonePort}`;
+  const scopedProvider = entry.provider
+    ? {
+        PHONE_AGENT_PROVIDER: entry.provider,
+        [`PHONE_AGENT_PROVIDER${portSuffix}`]: entry.provider,
+      }
+    : {};
   const scopedModel = entry.model
     ? {
         [`PHONE_MODEL${portSuffix}`]: entry.model,
@@ -70,6 +85,7 @@ function bridgeEnvForEntry(entry, baseEnv = process.env) {
     PHONE_BRIDGE_COLOR: entry.color,
     PHONE_WORKDIR: entry.workdir,
     CODEX_WORKDIR: entry.workdir,
+    ...scopedProvider,
     [`PHONE_WORKDIR${portSuffix}`]: entry.workdir,
     [`CODEX_WORKDIR${portSuffix}`]: entry.workdir,
     ...(entry.model ? { PHONE_MODEL: entry.model, CODEX_MODEL: entry.model } : {}),
