@@ -84,6 +84,15 @@ Optional fleet launcher:
       "workdir": "/Users/admin/Prj/work-a",
       "phonePort": 45214,
       "appServerPort": 45213
+    },
+    {
+      "id": "windows-codex",
+      "label": "Windows PC Codex",
+      "provider": "codex",
+      "workdir": "/Users/admin/Prj/local-control",
+      "phonePort": 45244,
+      "appServerUrl": "ws://127.0.0.1:45243",
+      "appServerCwd": "C:\\Users\\admin\\Prj\\work-a"
     }
   ]
 }
@@ -93,7 +102,7 @@ Optional fleet launcher:
 npm run phone:fleet
 ```
 
-The `provider` field may be omitted or set to `codex` for compatibility with older local configs. When the bridge was started by the fleet launcher, browser UI settings also update the matching fleet entry for workdir and model so those choices survive the next fleet restart.
+The `provider` field may be omitted or set to `codex` for compatibility with older local configs. Use `appServerUrl` when a slot should attach to an existing headless app-server instead of starting a local one. Use `appServerCwd` when that app-server runs on another OS and needs a different execution cwd than the local bridge `workdir`. When the bridge was started by the fleet launcher, browser UI settings also update the matching fleet entry for workdir and model so those choices survive the next fleet restart.
 
 The repository ignores `.phone-fleet.local.json` and `.phone-bridges.local.json`. Keep those local because they can contain private worktree paths and registry details.
 

@@ -319,6 +319,7 @@ const codexSocketPath = process.env.CODEX_APP_SERVER_SOCK || "";
 const codexUrl = process.env.CODEX_APP_SERVER_URL || (codexSocketPath ? "ws://codex-app-server/rpc" : `ws://127.0.0.1:${codexPort}`);
 const shouldStartCodexServer = !process.env.CODEX_APP_SERVER_URL && !codexSocketPath;
 const workdir = launchSettings.workdir;
+const appServerCwd = launchSettings.appServerCwd || workdir;
 const providerModels = {
   codex: launchSettings.model,
 };
@@ -427,6 +428,7 @@ function bridgeInfoPayload() {
     hostName: os.hostname(),
     workdir,
     cwd: workdir,
+    appServerCwd,
     repoRoot,
     branch: currentGitBranch() || null,
     head: gitOutput(["rev-parse", "--short", "HEAD"]) || null,
@@ -530,6 +532,17 @@ function workdirFromEnv(env, provider, fallback = workdir, options = {}) {
   });
 }
 
+function appServerCwdFromEnv(env, fallback = "", options = {}) {
+  const value = slotSettingValue(env, "CODEX_APP_SERVER_CWD", options.uiPort || uiPort, {
+    launchEnvKeys: options.launchEnvKeys,
+    fallbackKeys: ["CODEX_CWD"],
+    fallback,
+  });
+  const text = String(value || "").trim();
+  if (/[\r\n]/.test(text)) throw new Error("CODEX_APP_SERVER_CWD must be a single-line path");
+  return text;
+}
+
 function historySyncEnabledFromEnv(env, options = {}) {
   return isHistorySyncEnabled({
     CODEX_HISTORY_SYNC: slotSettingValue(env, "CODEX_HISTORY_SYNC", options.uiPort || uiPort, {
@@ -547,6 +560,7 @@ function launchSettingsFromFleetOrEnv(
     fleetSettings,
     workdir: fleetSettings.workdir || workdirFromEnv(env, provider, fallbackWorkdir, { launchEnvKeys, uiPort: port }),
     model: fleetSettings.model || modelFromEnv(env, provider, fallbackModel, { launchEnvKeys, uiPort: port }),
+    appServerCwd: fleetSettings.appServerCwd || appServerCwdFromEnv(env, "", { launchEnvKeys, uiPort: port }),
   };
 }
 
@@ -712,6 +726,7 @@ function readFleetConfigBridgeSettings(filePath, { port = uiPort, bridgeId = "" 
     provider: bridge.provider ? normalizeProvider(bridge.provider) : "",
     model: bridge.model ? String(bridge.model).trim() : "",
     workdir: bridge.workdir ? path.resolve(String(bridge.workdir)) : "",
+    appServerCwd: bridge.appServerCwd || bridge.codexCwd ? String(bridge.appServerCwd || bridge.codexCwd).trim() : "",
   };
 }
 
@@ -756,6 +771,31 @@ function validateWorkdir(input) {
   if (!path.isAbsolute(target) || !isUnderHome(target)) throw new Error("Workdir must be an absolute path under the home folder");
   if (!fs.existsSync(target) || !fs.statSync(target).isDirectory()) throw new Error("Workdir does not exist");
   return target;
+}
+
+function singleLinePathText(input) {
+  const text = String(input || "").trim();
+  if (/[\r\n]/.test(text)) throw new Error("Path must be a single line");
+  return text;
+}
+
+function localWorkdirOrEmpty(input) {
+  const text = singleLinePathText(input);
+  if (!text) return "";
+  try {
+    return validateWorkdir(text);
+  } catch {
+    return "";
+  }
+}
+
+function bridgeMatchesAnyWorkdir(bridge, targetWorkdir = "") {
+  const target = singleLinePathText(targetWorkdir);
+  if (!target) return true;
+  return (
+    bridgeMatchesWorkdir({ bridgeWorkdir: bridge?.workdir || "", targetWorkdir: target }) ||
+    bridgeMatchesWorkdir({ bridgeWorkdir: bridge?.appServerCwd || "", targetWorkdir: target })
+  );
 }
 
 function validateModel(input) {
@@ -1992,6 +2032,7 @@ class SharedBridge {
     this.model = modelForProvider(this.provider);
     this.requestedThreadId = requestedThreadId;
     this.workdir = options.workdir ? validateWorkdir(options.workdir) : workdir;
+    this.appServerCwd = options.appServerCwd || appServerCwd;
     this.serviceTier = Object.prototype.hasOwnProperty.call(options, "serviceTier") ? normalizeServiceTier(options.serviceTier) : null;
     this.baseBridgeKey = baseBridgeKey;
     this.bridgeKey = bridgeMapKey(this.provider, baseBridgeKey);
@@ -2040,6 +2081,7 @@ class SharedBridge {
       thread,
       model: this.model,
       workdir: this.workdir,
+      appServerCwd: this.appServerCwd,
       ...currentWorkspaceMeta(this.workdir),
       shared: true,
       clients: this.clients.size,
@@ -2185,7 +2227,7 @@ class SharedBridge {
     const id = this.request("thread/start", {
       model: this.model,
       serviceTier: this.serviceTier,
-      cwd: this.workdir,
+      cwd: this.appServerCwd,
       approvalPolicy: "on-request",
       sandbox: "workspace-write",
     });
@@ -2218,7 +2260,7 @@ class SharedBridge {
         threadId: this.requestedThreadId,
         model: this.model,
         serviceTier: this.serviceTier,
-        cwd: this.workdir,
+        cwd: this.appServerCwd,
         approvalPolicy: "on-request",
         sandbox: "workspace-write",
       });
@@ -2269,7 +2311,7 @@ class SharedBridge {
               model: this.model,
               threadId: this.threadId,
               message: error.text,
-              workdir: this.workdir,
+              workdir: this.appServerCwd,
             });
           }
           this.startNextQueuedTurn();
@@ -2366,7 +2408,7 @@ class SharedBridge {
           model: this.model,
           threadId: this.threadId,
           turnId: completedTurnId,
-          workdir: this.workdir,
+          workdir: this.appServerCwd,
         });
         this.syncHistory("turn completed");
         this.startNextQueuedTurn();
@@ -2392,7 +2434,7 @@ class SharedBridge {
           threadId: this.threadId,
           turnId: this.activeTurnId,
           message: msg.method,
-          workdir: this.workdir,
+          workdir: this.appServerCwd,
         });
         return;
       }
@@ -2414,7 +2456,7 @@ class SharedBridge {
           threadId: this.threadId,
           turnId: this.activeTurnId,
           message: error.text,
-          workdir: this.workdir,
+          workdir: this.appServerCwd,
         });
         return;
       }
@@ -2448,7 +2490,7 @@ class SharedBridge {
           threadId: this.threadId,
           turnId: this.activeTurnId,
           message: error.message,
-          workdir: this.workdir,
+          workdir: this.appServerCwd,
         });
       }
     });
@@ -2567,7 +2609,7 @@ class SharedBridge {
     lastHistorySync.enabled = enabled;
     runHistorySync({
       threadId: this.threadId,
-      workdir: this.workdir,
+      workdir: this.appServerCwd,
       request: appServerRequest,
       enabled,
     })
@@ -2657,21 +2699,32 @@ class SharedBridge {
 
 function getBridge(threadId, provider = agentProvider, connectionId = crypto.randomUUID(), options = {}) {
   const requestedProvider = normalizeProvider(provider);
-  const requestedWorkdir = options.workdir ? validateWorkdir(options.workdir) : "";
+  const rawRequestedWorkdir = options.workdir ? singleLinePathText(options.workdir) : "";
+  const requestedWorkdir = rawRequestedWorkdir ? localWorkdirOrEmpty(rawRequestedWorkdir) : "";
+  const requestedAppServerCwd = rawRequestedWorkdir && !requestedWorkdir ? rawRequestedWorkdir : "";
   const requestedServiceTier = Object.prototype.hasOwnProperty.call(options, "serviceTier") ? normalizeServiceTier(options.serviceTier) : null;
-  const bridgeOptions = { ...options, ...(requestedWorkdir ? { workdir: requestedWorkdir } : {}), serviceTier: requestedServiceTier };
+  const { workdir: _requestedWorkdirOption, ...remainingOptions } = options;
+  const bridgeOptions = {
+    ...remainingOptions,
+    ...(rawRequestedWorkdir ? { cwd: rawRequestedWorkdir } : {}),
+    ...(requestedWorkdir ? { workdir: requestedWorkdir } : {}),
+    ...(requestedAppServerCwd ? { appServerCwd: requestedAppServerCwd } : {}),
+    serviceTier: requestedServiceTier,
+  };
   const bridgeHasActiveWork = (bridge) => Boolean(typeof bridge?.hasActiveWork === "function" && bridge.hasActiveWork());
   const bridgeNeedsReplacement = (bridge) =>
     shouldReplaceBridgeForWorkdir({
-      bridgeWorkdir: bridge?.workdir || workdir,
-      targetWorkdir: requestedWorkdir,
+      bridgeWorkdir: requestedAppServerCwd ? bridge?.appServerCwd || "" : bridge?.workdir || workdir,
+      targetWorkdir: requestedAppServerCwd || requestedWorkdir,
       active: bridgeHasActiveWork(bridge),
     });
   const bridgeMatchesRequestWorkdir = (bridge) =>
-    bridgeMatchesWorkdir({
-      bridgeWorkdir: bridge?.workdir || workdir,
-      targetWorkdir: requestedWorkdir,
-    });
+    requestedAppServerCwd
+      ? bridgeMatchesWorkdir({ bridgeWorkdir: bridge?.appServerCwd || "", targetWorkdir: requestedAppServerCwd })
+      : bridgeMatchesWorkdir({
+          bridgeWorkdir: bridge?.workdir || workdir,
+          targetWorkdir: requestedWorkdir,
+        });
 
   if (!threadId && !bridgeOptions.fresh) {
     for (const [key, bridge] of bridges.entries()) {
@@ -2754,6 +2807,7 @@ function bridgeSummaries() {
       ready: bridge.ready,
       provider: bridge.provider || agentProvider,
       workdir: bridge.workdir || workdir,
+      appServerCwd: bridge.appServerCwd || bridge.workdir || workdir,
       ...meta,
       run: typeof bridge.runPayload === "function" ? bridge.runPayload() : null,
       pendingApproval: bridge.pendingApproval || null,
@@ -2966,6 +3020,7 @@ async function healthPayload(phoneToken, requestedProvider = agentProvider) {
     },
     activeClients: activeClientCount(),
     workdir,
+    appServerCwd,
     model: modelForProvider(requestedProvider),
     token: tokenMetadata(phoneToken),
     notification: {
@@ -3048,9 +3103,9 @@ function threadRecordForBridge(bridge = {}) {
     name: title,
     displayTitle: title,
     preview,
-    cwd: bridge.workdir || workdir,
+    cwd: bridge.appServerCwd || bridge.workdir || workdir,
     bridgeWorkdir: bridge.workdir || workdir,
-    lastExecutionCwd: bridge.workdir || workdir,
+    lastExecutionCwd: bridge.appServerCwd || bridge.workdir || workdir,
     contextSource: "live-bridge",
     provider: bridge.provider || agentProvider,
     updatedAt,
@@ -3111,12 +3166,12 @@ async function codexThreadListPayload(requestedProvider) {
 
 function findBridgeByThreadId(threadId, provider = "", options = {}) {
   const requestedProvider = provider ? normalizeProvider(provider) : "";
-  const targetWorkdir = options.workdir ? validateWorkdir(options.workdir) : "";
+  const targetWorkdir = options.workdir ? singleLinePathText(options.workdir) : "";
   return Array.from(bridges.values()).find((bridge) => {
     const matchesThread = bridge.threadId === threadId || bridge.requestedThreadId === threadId || bridge.baseBridgeKey === threadId || bridge.bridgeKey === threadId;
     if (!matchesThread || (requestedProvider && bridge.provider !== requestedProvider)) return false;
     if (!targetWorkdir) return true;
-    return bridgeMatchesWorkdir({ bridgeWorkdir: bridge.workdir || workdir, targetWorkdir });
+    return bridgeMatchesAnyWorkdir(bridge, targetWorkdir);
   });
 }
 
@@ -3170,6 +3225,7 @@ async function main() {
         providers: ["codex"],
         model,
         workdir,
+        appServerCwd,
         app: { id: phoneAppId, name: phoneAppName, shortName: phoneAppShortName },
         codexUrl,
         codexSocketPath: codexSocketPath || null,
@@ -3219,7 +3275,7 @@ async function main() {
       const requestedProvider = queryProvider(url, res);
       if (!requestedProvider) return;
       try {
-        const result = await appServerRequest("plugin/list", { cwds: [workdir] });
+        const result = await appServerRequest("plugin/list", { cwds: [appServerCwd] });
         sendJson(res, 200, result);
       } catch (error) {
         sendJson(res, 500, { error: error.message });
@@ -3241,7 +3297,7 @@ async function main() {
       if (!requestedProvider) return;
       try {
         const [config, auth] = await Promise.allSettled([
-          appServerRequest("config/read", { includeLayers: false, cwd: workdir }),
+          appServerRequest("config/read", { includeLayers: false, cwd: appServerCwd }),
           appServerRequest("getAuthStatus", {}),
         ]);
         sendJson(res, 200, {
@@ -3389,6 +3445,7 @@ async function main() {
         provider: requestedProvider,
         defaultProvider: agentProvider,
         workdir,
+        appServerCwd,
         ...currentWorkspaceMeta(),
         model: modelForProvider(requestedProvider),
         app: { id: phoneAppId, name: phoneAppName, shortName: phoneAppShortName },
@@ -3452,7 +3509,7 @@ async function main() {
       try {
         const result = await runHistorySync({
           threadId,
-          workdir,
+          workdir: appServerCwd,
           request: appServerRequest,
           enabled: historySyncEnabledForProvider(requestedProvider),
         });
@@ -3472,7 +3529,9 @@ async function main() {
         return;
       }
       try {
-        const targetWorkdir = url.searchParams.get("workdir") ? validateWorkdir(url.searchParams.get("workdir")) : workdir;
+        const requestedWorkdir = url.searchParams.get("workdir") ? singleLinePathText(url.searchParams.get("workdir")) : "";
+        const targetWorkdir = requestedWorkdir || workdir;
+        const targetAppServerCwd = requestedWorkdir || appServerCwd;
         const snapshot = await readThreadSnapshot({
           threadId,
           liveBridge:
@@ -3480,7 +3539,7 @@ async function main() {
             findLiveBridge(bridges, threadId, { workdir: targetWorkdir }),
           request: appServerRequest,
           model: modelForProvider(requestedProvider),
-          workdir: targetWorkdir,
+          workdir: targetAppServerCwd,
           historyFromThread,
         });
         sendJson(res, 200, { provider: requestedProvider, activeProvider: requestedProvider, ...snapshot });

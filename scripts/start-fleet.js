@@ -24,6 +24,26 @@ function positivePort(value, field) {
   return port;
 }
 
+function normalizeAppServerUrl(value, field = "appServerUrl") {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  let url;
+  try {
+    url = new URL(text);
+  } catch {
+    throw new Error(`${field} must be a valid WebSocket URL`);
+  }
+  if (url.protocol !== "ws:" && url.protocol !== "wss:") throw new Error(`${field} must use ws:// or wss://`);
+  return url.toString();
+}
+
+function normalizeAppServerCwd(value, field = "appServerCwd") {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if (/[\r\n]/.test(text)) throw new Error(`${field} must be a single-line path`);
+  return text;
+}
+
 function normalizeProvider(value, field = "provider") {
   const provider = String(value || "").trim().toLowerCase();
   if (!provider) return "";
@@ -40,10 +60,14 @@ function normalizeFleetConfig(raw = {}) {
     bridges: bridges.map((entry, index) => {
       const id = assertSafeId(entry.id || `bridge-${index + 1}`, `bridges[${index}].id`);
       const phonePort = positivePort(entry.phonePort || entry.uiPort || entry.port, `bridges[${index}].phonePort`);
-      const appServerPort = positivePort(entry.appServerPort || defaultCodexAppServerPort(phonePort), `bridges[${index}].appServerPort`);
-      if (seen.has(phonePort) || seen.has(appServerPort)) throw new Error(`duplicate port around bridge ${id}`);
+      const appServerUrl = normalizeAppServerUrl(entry.appServerUrl || entry.codexAppServerUrl, `bridges[${index}].appServerUrl`);
+      const appServerCwd = normalizeAppServerCwd(entry.appServerCwd || entry.codexCwd, `bridges[${index}].appServerCwd`);
+      const appServerPort = appServerUrl
+        ? null
+        : positivePort(entry.appServerPort || defaultCodexAppServerPort(phonePort), `bridges[${index}].appServerPort`);
+      if (seen.has(phonePort) || (appServerPort && seen.has(appServerPort))) throw new Error(`duplicate port around bridge ${id}`);
       seen.add(phonePort);
-      seen.add(appServerPort);
+      if (appServerPort) seen.add(appServerPort);
       const workdir = path.resolve(String(entry.workdir || root));
       const provider = normalizeProvider(entry.provider, `bridges[${index}].provider`);
       return {
@@ -54,6 +78,8 @@ function normalizeFleetConfig(raw = {}) {
         workdir,
         phonePort,
         appServerPort,
+        appServerUrl,
+        appServerCwd,
         model: String(entry.model || "").trim(),
         color: String(entry.color || "").trim(),
       };
@@ -96,14 +122,23 @@ function bridgeEnvForEntry(entry, baseEnv = process.env, options = {}) {
         [`CODEX_MODEL${portSuffix}`]: entry.model,
       }
     : {};
+  const appServerEnv = entry.appServerUrl
+    ? {
+        CODEX_APP_SERVER_URL: entry.appServerUrl,
+        CODEX_APP_SERVER_SOCK: "",
+      }
+    : {
+        CODEX_APP_SERVER_PORT: String(entry.appServerPort),
+      };
+  if (entry.appServerCwd) appServerEnv.CODEX_APP_SERVER_CWD = entry.appServerCwd;
   return {
     ...baseEnv,
     PHONE_UI_PORT: String(entry.phonePort),
-    CODEX_APP_SERVER_PORT: String(entry.appServerPort),
     PHONE_BRIDGE_ID: entry.id,
     PHONE_BRIDGE_LABEL: entry.label,
     PHONE_BRIDGE_GROUP: entry.group,
     PHONE_BRIDGE_COLOR: entry.color,
+    ...appServerEnv,
     ...fleetEnv,
     PHONE_WORKDIR: entry.workdir,
     CODEX_WORKDIR: entry.workdir,
@@ -132,7 +167,7 @@ function canListen(port) {
 
 async function assertPortsAvailable(config) {
   for (const bridge of config.bridges) {
-    for (const port of [bridge.phonePort, bridge.appServerPort]) {
+    for (const port of [bridge.phonePort, bridge.appServerPort].filter(Boolean)) {
       if (!(await canListen(port))) throw new Error(`port ${port} is already in use`);
     }
   }

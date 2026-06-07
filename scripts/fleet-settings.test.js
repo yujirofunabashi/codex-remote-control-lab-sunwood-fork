@@ -57,7 +57,7 @@ test("fleet settings read returns the current bridge settings", () => {
     fs.writeFileSync(
       configPath,
       `${JSON.stringify({
-        bridges: [{ id: "slot-a", phonePort: 45214, workdir, provider: "codex", model: "gpt-5.5" }],
+        bridges: [{ id: "slot-a", phonePort: 45214, workdir, provider: "codex", model: "gpt-5.5", appServerCwd: "C:\\Users\\admin\\workspace" }],
       })}\n`,
     );
 
@@ -65,6 +65,7 @@ test("fleet settings read returns the current bridge settings", () => {
       provider: "codex",
       model: "gpt-5.5",
       workdir,
+      appServerCwd: "C:\\Users\\admin\\workspace",
     });
   });
 });
@@ -87,6 +88,7 @@ test("launch settings prefer fleet config over stale launch env", () => {
       PHONE_WORKDIR_45224: oldWorkdir,
       CODEX_MODEL: "gpt-5.4",
       CODEX_MODEL_45224: "gpt-5.4",
+      CODEX_APP_SERVER_CWD_45224: "C:\\Users\\admin\\stale",
     };
 
     const result = launchSettingsFromFleetOrEnv(env, {
@@ -101,6 +103,37 @@ test("launch settings prefer fleet config over stale launch env", () => {
 
     assert.equal(result.workdir, newWorkdir);
     assert.equal(result.model, "gpt-5.5");
+    assert.equal(result.appServerCwd, "C:\\Users\\admin\\stale");
+  });
+});
+
+test("launch settings read app-server cwd from fleet config before env", () => {
+  withTempDir((dir) => {
+    const workdir = path.join(dir, "workspace");
+    fs.mkdirSync(workdir);
+    const configPath = path.join(dir, "fleet.json");
+    fs.writeFileSync(
+      configPath,
+      `${JSON.stringify({
+        bridges: [{ id: "slot-c", phonePort: 45244, workdir, provider: "codex", model: "gpt-5.5", appServerCwd: "C:\\Users\\admin\\workspace" }],
+      })}\n`,
+    );
+
+    const env = {
+      CODEX_APP_SERVER_CWD_45244: "C:\\Users\\admin\\env",
+    };
+
+    const result = launchSettingsFromFleetOrEnv(env, {
+      filePath: configPath,
+      port: 45244,
+      bridgeId: "slot-c",
+      provider: "codex",
+      fallbackWorkdir: dir,
+      fallbackModel: "gpt-5.4",
+      launchEnvKeys: new Set(Object.keys(env)),
+    });
+
+    assert.equal(result.appServerCwd, "C:\\Users\\admin\\workspace");
   });
 });
 

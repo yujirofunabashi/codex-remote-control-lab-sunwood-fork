@@ -45,6 +45,35 @@ test("fleet config defaults each app-server port from its phone slot", () => {
   assert.equal(config.bridges[0].appServerPort, 45223);
 });
 
+test("fleet config can attach a bridge to an existing app-server URL", () => {
+  const config = normalizeFleetConfig({
+    bridges: [
+      {
+        id: "windows-codex",
+        workdir: "/tmp/work-c",
+        phonePort: 45244,
+        appServerUrl: "ws://127.0.0.1:45243",
+        appServerCwd: "C:\\Users\\admin\\workspace",
+      },
+    ],
+  });
+
+  assert.equal(config.bridges[0].phonePort, 45244);
+  assert.equal(config.bridges[0].appServerPort, null);
+  assert.equal(config.bridges[0].appServerUrl, "ws://127.0.0.1:45243/");
+  assert.equal(config.bridges[0].appServerCwd, "C:\\Users\\admin\\workspace");
+});
+
+test("fleet config rejects unsupported app-server URL protocols", () => {
+  assert.throws(
+    () =>
+      normalizeFleetConfig({
+        bridges: [{ id: "work-c", workdir: "/tmp/work-c", phonePort: 45244, appServerUrl: "http://127.0.0.1:45243" }],
+      }),
+    /appServerUrl must use ws:\/\/ or wss:\/\//,
+  );
+});
+
 test("fleet config rejects duplicate ports", () => {
   assert.throws(
     () =>
@@ -98,6 +127,31 @@ test("bridgeEnvForEntry passes only scoped bridge settings", () => {
   assert.equal(env.CODEX_MODEL, "gpt-5.5");
   assert.equal(env.CODEX_MODEL_45214, "gpt-5.5");
   assert.equal(env.PHONE_TOKEN, undefined);
+});
+
+test("bridgeEnvForEntry passes app-server URL without a managed app-server port", () => {
+  const env = bridgeEnvForEntry(
+    {
+      id: "windows-codex",
+      label: "Windows Codex",
+      group: "remote",
+      provider: "codex",
+      workdir: "/tmp/windows-codex",
+      phonePort: 45244,
+      appServerPort: null,
+      appServerUrl: "ws://127.0.0.1:45243/",
+      appServerCwd: "C:\\Users\\admin\\workspace",
+      model: "gpt-5.5",
+      color: "",
+    },
+    { PATH: "/bin", CODEX_APP_SERVER_SOCK: "/tmp/old.sock" },
+  );
+
+  assert.equal(env.PHONE_UI_PORT, "45244");
+  assert.equal(env.CODEX_APP_SERVER_URL, "ws://127.0.0.1:45243/");
+  assert.equal(env.CODEX_APP_SERVER_SOCK, "");
+  assert.equal(env.CODEX_APP_SERVER_PORT, undefined);
+  assert.equal(env.CODEX_APP_SERVER_CWD, "C:\\Users\\admin\\workspace");
 });
 
 test("fleet restart reloads the latest bridge config", () => {

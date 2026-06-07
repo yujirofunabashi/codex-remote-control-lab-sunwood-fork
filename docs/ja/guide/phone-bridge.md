@@ -72,7 +72,7 @@ Bridge Fleet / Worktree Switchboard を使うと、その複数 slot を 1 つ�
 
 各 bridge は fleet metadata 用に token-protected `GET /api/bridge/info` を公開します。返すのは label、group、port、cwd、repo root、branch、short HEAD、dirty summary、model、capabilities です。この endpoint は UI の auth header / cookie 経由で token を要求し、phone token、app-server secret、webhook URL、任意 shell 実行口は返しません。
 
-まとめて起動したい場合は local 専用の `.phone-fleet.local.json` を作り、`npm run phone:fleet` を実行します。fleet launcher から起動した bridge では、browser UI から保存した workdir / model も対応する fleet entry へ反映され、次回の fleet 再起動後も維持されます。`provider` field は省略するか、古い local config 互換として `codex` だけ指定できます。`.phone-fleet.local.json` と `.phone-bridges.local.json` は Git に入れないでください。private な worktree path や registry 情報を含み得ます。
+まとめて起動したい場合は local 専用の `.phone-fleet.local.json` を作り、`npm run phone:fleet` を実行します。fleet launcher から起動した bridge では、browser UI から保存した workdir / model も対応する fleet entry へ反映され、次回の fleet 再起動後も維持されます。`provider` field は省略するか、古い local config 互換として `codex` だけ指定できます。既存の headless app-server に接続する slot は `appServerUrl` を使います。app-server が Windows など別 OS 上で動き、bridge の local `workdir` と Codex 実行 cwd が異なる場合は `appServerCwd` に app-server 側の cwd を指定します。`.phone-fleet.local.json` と `.phone-bridges.local.json` は Git に入れないでください。private な worktree path や registry 情報を含み得ます。
 
 起動通知は任意です。`PHONE_NTFY_TOPIC` を設定すると ready URL を ntfy topic へ投稿します。`PHONE_PUSHOVER_TOKEN` と `PHONE_PUSHOVER_USER` を設定すると同じ URL を Pushover へ送ります。`PHONE_DISCORD_WEBHOOK_URL` を設定すると Discord へ投稿します。`npm run phone` は local `.env` を読んでから環境変数を参照します。`PHONE_NTFY_SERVER` は既定で `https://ntfy.sh`、HTTPS 必須です。通知 request は `PHONE_NOTIFY_TIMEOUT_MS` で timeout し、既定は 5000 ms です。LAN IPv4 URL がある場合、起動通知は互換性のため token 付き bridge URL を含み得るため、private/protected topic、account、channel で使い、通知用 credential は Git に入れないでください。
 
