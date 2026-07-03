@@ -3,7 +3,9 @@ function isHistorySyncEnabled(env = process.env) {
   return !["0", "false", "off", "no"].includes(value);
 }
 
-function historySyncRequests(threadId, workdir, limit = 30) {
+const defaultHistorySyncLimit = 200;
+
+function historySyncRequests(threadId, workdir, limit = defaultHistorySyncLimit) {
   if (!threadId) return [];
   return [
     {
@@ -27,7 +29,7 @@ function historySyncRequests(threadId, workdir, limit = 30) {
   ];
 }
 
-async function runHistorySync({ threadId, workdir, request, enabled = true, limit = 30 }) {
+async function runHistorySync({ threadId, workdir, request, enabled = true, limit = defaultHistorySyncLimit }) {
   if (!enabled || !threadId) return { ok: true, skipped: true, results: [] };
   const results = [];
   for (const item of historySyncRequests(threadId, workdir, limit)) {
@@ -38,6 +40,7 @@ async function runHistorySync({ threadId, workdir, request, enabled = true, limi
 }
 
 module.exports = {
+  defaultHistorySyncLimit,
   historySyncRequests,
   isHistorySyncEnabled,
   runHistorySync,

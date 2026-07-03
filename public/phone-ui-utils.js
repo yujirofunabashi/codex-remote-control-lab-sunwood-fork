@@ -554,6 +554,18 @@
     return list.slice(0, max);
   }
 
+  function projectThreadWindow(threads = [], options = {}) {
+    const list = Array.isArray(threads) ? threads : [];
+    const limit = Math.max(0, Number(options.limit ?? 5));
+    const expanded = Boolean(options.expanded);
+    const visible = expanded ? list : list.slice(0, limit);
+    return {
+      visible,
+      hiddenCount: Math.max(0, list.length - visible.length),
+      expanded,
+    };
+  }
+
   function prioritizeSelectedThread(threads = [], selectedThreadId = "", limit = 6) {
     const list = Array.isArray(threads) ? threads : [];
     const max = Math.max(0, Number(limit || 0));
@@ -612,6 +624,7 @@
     deriveThreadStatus,
     sortThreadsForInbox,
     limitThreadList,
+    projectThreadWindow,
     prioritizeSelectedThread,
     threadStatusFromKey,
   };

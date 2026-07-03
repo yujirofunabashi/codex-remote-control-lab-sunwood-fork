@@ -678,6 +678,7 @@ const activeBridgeStorageKey = "codexPhoneActiveBridgeId:v1";
 const bridgeSessionTokensStorageKey = "codexPhoneBridgeSessionTokens:v1";
 const bridgeViewStateStorageKey = "codexPhoneBridgeViewState:v1";
 const threadInboxFilterStorageKey = "codexPhoneThreadInboxFilter:v1";
+const expandedThreadProjectsStorageKey = "codexPhoneExpandedThreadProjects:v1";
 const taskTemplateStorageKey = "codexPhoneLastTaskTemplate:v1";
 const serviceTierStorageKey = "codexPhoneServiceTier:v1";
 const terminalHistoryLimit = 300;
@@ -703,6 +704,7 @@ let bridgeRegistry = readJsonStorage(bridgeRegistryStorageKey, { version: 1, bri
 let bridgeLocalTokens = readJsonStorage(bridgeLocalTokensStorageKey, {});
 let bridgeViewState = readJsonStorage(bridgeViewStateStorageKey, {});
 let threadInboxFilter = localStorage.getItem(threadInboxFilterStorageKey) || "attention";
+let expandedThreadProjects = readJsonStorage(expandedThreadProjectsStorageKey, {});
 let quickActionState = uiUtils.safeJsonParse
   ? uiUtils.safeJsonParse(localStorage.getItem(quickActionsStorageKey), {}, { objectOnly: true })
   : {};
@@ -722,6 +724,7 @@ let liveOutputGroup = "";
 let statusGroup = null;
 let reconnectTimer = null;
 let threadCache = [];
+const projectInitialThreadLimit = 5;
 let liveTurnActive = false;
 let connectionReady = false;
 let pendingSubmission = null;
@@ -1463,9 +1466,23 @@ function updateSelectedThreadHeading(fallback = "新しいチャット") {
 }
 
 function projectForThread(thread) {
-  const cwd = String(thread.cwd || "").replace(/\/+$/, "");
+  const cwd = String(thread.cwd || "").replace(/[\\/]+$/, "");
   if (!cwd) return "No project";
-  return cwd.split("/").filter(Boolean).pop() || cwd;
+  return cwd.split(/[\\/]/).filter(Boolean).pop() || cwd;
+}
+
+function projectExpansionKey(project) {
+  return `${currentThreadProvider()}:${threadInboxFilter}:${String(project || "No project")}`;
+}
+
+function isProjectExpanded(project) {
+  return Boolean(expandedThreadProjects[projectExpansionKey(project)]);
+}
+
+function setProjectExpanded(project, expanded = true) {
+  const key = projectExpansionKey(project);
+  expandedThreadProjects = { ...expandedThreadProjects, [key]: Boolean(expanded) };
+  writeJsonStorage(expandedThreadProjectsStorageKey, expandedThreadProjects);
 }
 
 function projectWorkdirForThreads(threads = []) {
@@ -2940,6 +2957,16 @@ function limitedVisibleThreads(threads, limit = 6) {
   return list.slice(0, max);
 }
 
+function visibleThreadsForProject(project, threads) {
+  if (uiUtils.projectThreadWindow) {
+    return uiUtils.projectThreadWindow(threads, {
+      limit: projectInitialThreadLimit,
+      expanded: isProjectExpanded(project),
+    }).visible;
+  }
+  return isProjectExpanded(project) ? threads : limitedVisibleThreads(threads, projectInitialThreadLimit);
+}
+
 function visibleThreadsInListOrder() {
   const threads = [];
   const baseKey = currentThreadWorkspaceKey();
@@ -2948,9 +2975,9 @@ function visibleThreadsInListOrder() {
     const current = currentThreadListRecord();
     if (current && isSameCurrentWorkspaceThread(current, baseKey)) threads.push(current);
   }
-  for (const groupThreads of groups.values()) {
+  for (const [project, groupThreads] of groups) {
     const scopedThreads = groupThreads.filter((thread) => isSameCurrentWorkspaceThread(thread, baseKey));
-    threads.push(...limitedVisibleThreads(scopedThreads, 6));
+    threads.push(...visibleThreadsForProject(project, scopedThreads));
   }
   return threads;
 }
@@ -2958,9 +2985,9 @@ function visibleThreadsInListOrder() {
 function selectedThreadVisibleInGroups(groups) {
   if (!selectedThread) return false;
   const baseKey = currentThreadWorkspaceKey();
-  for (const groupThreads of groups.values()) {
+  for (const [project, groupThreads] of groups) {
     const scopedThreads = groupThreads.filter((thread) => isSameCurrentWorkspaceThread(thread, baseKey));
-    if (limitedVisibleThreads(scopedThreads, 6).some((thread) => thread.id === selectedThread)) return true;
+    if (visibleThreadsForProject(project, scopedThreads).some((thread) => thread.id === selectedThread)) return true;
   }
   return false;
 }
@@ -3027,15 +3054,21 @@ function renderThreadList() {
     }
     group.appendChild(heading);
 
-    const visibleThreads = limitedVisibleThreads(threads, 6);
+    const visibleThreads = visibleThreadsForProject(project, threads);
     for (const thread of visibleThreads) {
       group.appendChild(createThreadListItem(thread));
     }
 
     if (threads.length > visibleThreads.length) {
-      const more = document.createElement("div");
+      const hiddenCount = threads.length - visibleThreads.length;
+      const more = document.createElement("button");
+      more.type = "button";
       more.className = "project-more";
-      more.textContent = "もっと表示する";
+      more.textContent = `もっと表示 (${hiddenCount}件)`;
+      more.addEventListener("click", () => {
+        setProjectExpanded(project, true);
+        renderThreadList();
+      });
       group.appendChild(more);
     } else if (!visibleThreads.length) {
       const empty = document.createElement("div");
@@ -3252,10 +3285,10 @@ function activeBridgeExecutionMeta() {
   }
   const info = state.info || {};
   const status = state.status || {};
-  const workdir = usableWorkspaceLocation(info.cwd || info.workdir || status.workdir || entry.workdir || "");
+  const workdir = usableWorkspaceLocation(info.agentCwd || info.appServerCwd || status.appServerCwd || status.workdir || info.cwd || info.workdir || entry.workdir || "");
   return {
     source: "bridge",
-    repoName: (info.repoRoot || workdir || "").split(/[\\/]/).filter(Boolean).pop() || "",
+    repoName: (info.agentCwd || info.appServerCwd ? workdir : info.repoRoot || workdir || "").split(/[\\/]/).filter(Boolean).pop() || "",
     workspaceLocation: workdir,
     gitBranch: info.branch || info.gitBranch || status.gitBranch || "",
     updatedAt: state.lastEventAt || 0,
@@ -3359,9 +3392,10 @@ function bridgeHeaderMetaText(entry, state = getBridgeState(entry.id)) {
 }
 
 function workspaceMetaFromBridgeInfo(info = {}) {
-  const cwd = usableWorkspaceLocation(info.cwd || info.workdir || "");
+  const agentCwd = usableWorkspaceLocation(info.agentCwd || info.appServerCwd || "");
+  const cwd = agentCwd || usableWorkspaceLocation(info.cwd || info.workdir || "");
   return {
-    repoName: (info.repoRoot || cwd || "").split(/[\\/]/).filter(Boolean).pop() || "",
+    repoName: (agentCwd ? cwd : info.repoRoot || cwd || "").split(/[\\/]/).filter(Boolean).pop() || "",
     workspaceLocation: cwd,
     gitBranch: info.branch || info.gitBranch || "",
   };
@@ -5179,7 +5213,8 @@ async function showSettings() {
     addPanelRow("認証", result.auth?.authMethod || "unknown");
     addPanelRow("既定モデル", config.model || selectedModel || "unknown");
     addPanelRow("許可範囲", accessMode.label);
-    addPanelRow("作業場所", localResult.value?.active?.workdir || "");
+    addPanelRow("Agent cwd", localResult.value?.active?.appServerCwd || localResult.value?.active?.workdir || "");
+    addPanelRow("Bridge folder", localResult.value?.active?.bridgeWorkdir || localResult.value?.active?.workdir || "");
     if (result.errors?.length) addPanelRow("補足エラー", result.errors.join(" / "));
   } catch (error) {
     if (renderSeq !== settingsRenderSeq) return;
@@ -5208,10 +5243,13 @@ function renderLocalSettings(payload) {
 
   const modelLabel = document.createElement("div");
   modelLabel.className = "local-settings-current";
+  const activeAgentCwd = active.appServerCwd || active.workdir || "";
+  const activeBridgeWorkdir = active.bridgeWorkdir || active.workdir || "";
   modelLabel.innerHTML = `
     <span>現在</span>
     <strong>${escapeHtml(`Codex / ${active.model || "unknown"}`)}</strong>
-    <code>${escapeHtml(shortenPath(active.workdir || ""))}</code>
+    <code>Agent: ${escapeHtml(shortenPath(activeAgentCwd))}</code>
+    <code>Bridge: ${escapeHtml(shortenPath(activeBridgeWorkdir))}</code>
   `;
   group.appendChild(modelLabel);
 
@@ -5245,6 +5283,14 @@ function renderLocalSettings(payload) {
   const workspaceSelect = document.createElement("select");
   workspaceSelect.className = "settings-select";
   renderWorkspaceOptions(workspaceSelect, workspaceItems, settings.workdir || active.workdir || "");
+
+  const appServerCwdInput = document.createElement("input");
+  appServerCwdInput.className = "settings-input";
+  appServerCwdInput.type = "text";
+  appServerCwdInput.inputMode = "text";
+  appServerCwdInput.autocomplete = "off";
+  appServerCwdInput.placeholder = activeAgentCwd.includes("\\") ? "C:\\Users\\USER\\..." : "/Users/minijiro/WORK_LOCAL/...";
+  appServerCwdInput.value = settings.appServerCwd || activeAgentCwd || "";
 
   const manualInput = document.createElement("input");
   manualInput.className = "settings-input";
@@ -5283,8 +5329,9 @@ function renderLocalSettings(payload) {
   form.className = "settings-form";
   form.append(
     settingField("モデル", modelSelect),
-    settingField("作業場所", workspaceSelect),
-    settingField("候補にないフォルダを追加", manualRow),
+    settingField("Bridgeフォルダ", workspaceSelect),
+    settingField("Agent実行場所", appServerCwdInput),
+    settingField("Bridge候補にないフォルダを追加", manualRow),
     historyLabel,
     status,
   );
@@ -5335,11 +5382,13 @@ function renderLocalSettings(payload) {
         provider: currentProvider,
         model: modelSelect.value,
         workdir: workspaceSelect.value,
+        appServerCwd: appServerCwdInput.value.trim() || workspaceSelect.value,
         historySyncEnabled: historyInput.checked,
       });
       setSelectedModel(modelSelect.value);
       workspaceItems = result.options?.workspaces || workspaceItems;
       renderWorkspaceOptions(workspaceSelect, workspaceItems, result.settings?.workdir || workspaceSelect.value);
+      appServerCwdInput.value = result.settings?.appServerCwd || appServerCwdInput.value.trim() || workspaceSelect.value;
       switchThreadProvider(currentProvider);
       setSettingsStatus(status, result.restartRequired ? "保存しました。作業場所やモデルは再起動で既定に反映します。" : "保存しました。", result.restartRequired ? "warning" : "");
       addStatus("起動設定を保存しました。");

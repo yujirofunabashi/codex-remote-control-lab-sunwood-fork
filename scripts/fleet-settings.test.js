@@ -38,6 +38,7 @@ test("fleet settings update persists the current port entry", () => {
       provider: "codex",
       model: "gpt-5.5",
       workdir,
+      appServerCwd: "C:\\Users\\USER\\workspace",
     });
     const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
 
@@ -46,6 +47,7 @@ test("fleet settings update persists the current port entry", () => {
     assert.equal(config.bridges[1].provider, "codex");
     assert.equal(config.bridges[1].model, "gpt-5.5");
     assert.equal(config.bridges[1].workdir, workdir);
+    assert.equal(config.bridges[1].appServerCwd, "C:\\Users\\USER\\workspace");
   });
 });
 

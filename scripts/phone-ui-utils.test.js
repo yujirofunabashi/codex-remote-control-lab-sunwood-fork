@@ -18,6 +18,7 @@ const {
   normalizeTerminalEntry,
   parseBridgeUrl,
   prioritizeSelectedThread,
+  projectThreadWindow,
   pwaManifestTokenIssues,
   redactSensitiveText,
   removeBridgeFromRegistry,
@@ -109,6 +110,20 @@ test("limitThreadList keeps the drawer list stable across thread selection", () 
   );
   assert.deepEqual(limitThreadList(threads, 0), []);
   assert.deepEqual(limitThreadList(null, 6), []);
+});
+
+test("projectThreadWindow shows five per project until expanded", () => {
+  const threads = Array.from({ length: 8 }, (_, index) => ({ id: `t${index + 1}` }));
+  const collapsed = projectThreadWindow(threads);
+  assert.deepEqual(
+    collapsed.visible.map((thread) => thread.id),
+    ["t1", "t2", "t3", "t4", "t5"],
+  );
+  assert.equal(collapsed.hiddenCount, 3);
+
+  const expanded = projectThreadWindow(threads, { expanded: true });
+  assert.equal(expanded.visible.length, 8);
+  assert.equal(expanded.hiddenCount, 0);
 });
 
 test("compactWorkspacePath middle-truncates long mobile paths", () => {

@@ -32,8 +32,15 @@ const mime = new Map([
 ]);
 
 const activeThread = { id: "thread-mobile-compact", name: "Mobile terminal compact polish", cwd: root, updatedAt: Date.now() };
+const crowdedProjectThreads = Array.from({ length: 32 }, (_, index) => ({
+  id: `thread-codex-extra-${index + 1}`,
+  name: `Codex remote follow-up ${index + 1}`,
+  cwd: root,
+  updatedAt: Date.now() - (index + 1) * 60_000,
+}));
 const threads = [
   activeThread,
+  ...crowdedProjectThreads,
   { id: "thread-artifacts", name: "Artifact preview polish", cwd: artifactRepo, updatedAt: Date.now() - 3600_000 },
   { id: "thread-drawer", name: "Drawer and composer tuning", cwd: drawerRepo, updatedAt: Date.now() - 86_400_000 },
 ];
@@ -497,6 +504,48 @@ async function run() {
       "repo markers are scoped by repo",
       repoMarkerState.length >= 3 && repoMarkerColors.size >= 3,
       JSON.stringify(repoMarkerState),
+    );
+    const groupedThreadLimitState = await page.evaluate(() => {
+      const groups = Array.from(document.querySelectorAll(".project-group:not(.current-thread-group)")).map((group) => ({
+        project: group.querySelector(".project-name")?.textContent?.trim() || "",
+        threads: Array.from(group.querySelectorAll(".thread-item")).map((item) => item.textContent || ""),
+        more: group.querySelector(".project-more")?.textContent?.trim() || "",
+      }));
+      return groups;
+    });
+    const codexProject = groupedThreadLimitState.find((group) => group.project === "codex-remote-control-lab");
+    const artifactProject = groupedThreadLimitState.find((group) => group.project === "artifact-workspace");
+    const drawerProject = groupedThreadLimitState.find((group) => group.project === "drawer-workspace");
+    check(
+      "recent chats show at most five per project before expansion",
+      codexProject?.threads.length === 5 && /もっと表示/.test(codexProject.more),
+      JSON.stringify(groupedThreadLimitState),
+    );
+    check(
+      "crowded project does not hide other projects",
+      Boolean(artifactProject && drawerProject),
+      JSON.stringify(groupedThreadLimitState),
+    );
+    await page.evaluate(() => {
+      const group = Array.from(document.querySelectorAll(".project-group:not(.current-thread-group)")).find(
+        (candidate) => candidate.querySelector(".project-name")?.textContent?.trim() === "codex-remote-control-lab",
+      );
+      group?.querySelector(".project-more")?.click();
+    });
+    await page.waitForTimeout(100);
+    const expandedProjectState = await page.evaluate(() => {
+      const group = Array.from(document.querySelectorAll(".project-group:not(.current-thread-group)")).find(
+        (candidate) => candidate.querySelector(".project-name")?.textContent?.trim() === "codex-remote-control-lab",
+      );
+      return {
+        threads: group ? group.querySelectorAll(".thread-item").length : 0,
+        more: group?.querySelector(".project-more")?.textContent?.trim() || "",
+      };
+    });
+    check(
+      "project more button expands that project",
+      expandedProjectState.threads > 5 && !expandedProjectState.more,
+      JSON.stringify(expandedProjectState),
     );
     if (wantShots) {
       fs.mkdirSync(shotsDir, { recursive: true });

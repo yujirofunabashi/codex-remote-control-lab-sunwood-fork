@@ -345,6 +345,7 @@ let codexStartPromise = null;
 let lastBridgeEventAt = 0;
 let lastHistorySync = { enabled: historySyncEnabled, lastSuccessAt: null, lastFailureAt: null, lastError: "" };
 const historyLimit = 80;
+const threadListLimit = positiveNumber(process.env.PHONE_THREAD_LIST_LIMIT, 200);
 const idleBridgeTtlMs = Number(process.env.PHONE_IDLE_BRIDGE_TTL_MS || 60 * 60 * 1000);
 const longRunningNotifyMs = positiveNumber(process.env.PHONE_NOTIFY_LONG_RUNNING_MS, 10 * 60 * 1000);
 const imageExtensions = new Map([
@@ -427,7 +428,9 @@ function bridgeInfoPayload() {
     uiPort,
     hostName: os.hostname(),
     workdir,
+    bridgeWorkdir: workdir,
     cwd: workdir,
+    agentCwd: appServerCwd,
     appServerCwd,
     repoRoot,
     branch: currentGitBranch() || null,
@@ -453,7 +456,19 @@ function bridgeInfoPayload() {
 }
 
 function displayPath(value) {
-  return String(value || "").split(path.sep).join("/");
+  return String(value || "").replace(/\\/g, "/").split(path.sep).join("/");
+}
+
+function basenameFromAnyPath(value) {
+  return String(value || "").split(/[\\/]/).filter(Boolean).pop() || "";
+}
+
+function canInspectLocalDirectory(cwd) {
+  try {
+    return Boolean(cwd && path.isAbsolute(cwd) && fs.existsSync(cwd) && fs.statSync(cwd).isDirectory());
+  } catch {
+    return false;
+  }
 }
 
 const workspaceMetaCacheTtlMs = 5000;
@@ -461,8 +476,15 @@ let workspaceMetaCache = null;
 let workspaceMetaCacheAt = 0;
 
 function readWorkspaceMeta(cwd = workdir) {
+  if (!canInspectLocalDirectory(cwd)) {
+    return {
+      gitBranch: "",
+      repoName: basenameFromAnyPath(cwd),
+      workspaceLocation: displayPath(cwd),
+    };
+  }
   const gitRoot = gitOutputFromCwd(cwd, ["rev-parse", "--show-toplevel"]);
-  const repoName = path.basename(gitRoot || cwd);
+  const repoName = basenameFromAnyPath(gitRoot || cwd);
   const relative = gitRoot ? displayPath(path.relative(gitRoot, cwd)) : "";
   return {
     gitBranch: currentGitBranch(cwd),
@@ -730,13 +752,14 @@ function readFleetConfigBridgeSettings(filePath, { port = uiPort, bridgeId = "" 
   };
 }
 
-function updateFleetConfigBridgeSettings(filePath, { port = uiPort, bridgeId = "", provider, model, workdir } = {}) {
+function updateFleetConfigBridgeSettings(filePath, { port = uiPort, bridgeId = "", provider, model, workdir, appServerCwd } = {}) {
   if (!filePath || !fs.existsSync(filePath)) return { updated: false, reason: "fleet config not found" };
   const config = JSON.parse(fs.readFileSync(filePath, "utf8"));
   if (!Array.isArray(config.bridges)) throw new Error("Fleet config bridges must be an array");
   const nextProvider = provider !== undefined ? normalizeProvider(provider) : undefined;
   const nextModel = model !== undefined ? validateModel(model) : undefined;
   const nextWorkdir = workdir !== undefined ? validateWorkdir(workdir) : undefined;
+  const nextAppServerCwd = appServerCwd !== undefined ? singleLinePathText(appServerCwd) : undefined;
   let updated = false;
   const bridges = config.bridges.map((entry) => {
     if (!fleetBridgeMatches(entry, port, bridgeId)) return entry;
@@ -746,6 +769,7 @@ function updateFleetConfigBridgeSettings(filePath, { port = uiPort, bridgeId = "
       ...(nextProvider !== undefined ? { provider: nextProvider } : {}),
       ...(nextModel !== undefined ? { model: nextModel } : {}),
       ...(nextWorkdir !== undefined ? { workdir: nextWorkdir } : {}),
+      ...(nextAppServerCwd !== undefined ? { appServerCwd: nextAppServerCwd } : {}),
     };
   });
   if (!updated) return { updated: false, reason: "bridge entry not found" };
@@ -925,6 +949,7 @@ function localSettingsPayload() {
   const settingsProvider = agentProvider;
   const modelPinned = settingPinned("PHONE_MODEL", [modelEnvKeyForProvider(settingsProvider), "CODEX_MODEL"]);
   const historyPinned = settingPinned(historySyncEnvKeyForProvider(settingsProvider));
+  const appServerCwdPinned = settingPinned("CODEX_APP_SERVER_CWD");
   const portPinned = hasLaunchEnv("PHONE_UI_PORT");
   const hostPinned = hasLaunchEnv("PHONE_UI_HOST");
   const savedHistorySyncEnabled = historySyncEnabledFromEnv(envValues);
@@ -932,8 +957,11 @@ function localSettingsPayload() {
   const savedHost = envValues.PHONE_UI_HOST || uiHost;
   const savedModel = fleetSettings.model || modelFromEnv(envValues, settingsProvider, model);
   const savedWorkdir = fleetSettings.workdir || workdirFromEnv(envValues, settingsProvider, workdir);
+  const savedAppServerCwd = fleetSettings.appServerCwd || appServerCwdFromEnv(envValues, "", { launchEnvKeys, uiPort });
+  const effectiveSavedAppServerCwd = savedAppServerCwd || savedWorkdir;
   const settingsModel = modelPinned ? model : savedModel;
   const settingsWorkdir = savedWorkdir;
+  const settingsAppServerCwd = appServerCwdPinned ? appServerCwd : effectiveSavedAppServerCwd;
   const settingsHistorySyncEnabled = historyPinned ? historySyncEnabledForProvider(settingsProvider) : savedHistorySyncEnabled;
   const settingsPort = portPinned ? uiPort : savedPort;
   const settingsHost = hostPinned ? uiHost : savedHost;
@@ -942,6 +970,7 @@ function localSettingsPayload() {
       provider: settingsProvider,
       model: settingsModel,
       workdir: settingsWorkdir,
+      appServerCwd: settingsAppServerCwd,
       historySyncEnabled: settingsHistorySyncEnabled,
       uiPort: settingsPort,
       uiHost: settingsHost,
@@ -950,6 +979,8 @@ function localSettingsPayload() {
       provider: agentProvider,
       model,
       workdir,
+      bridgeWorkdir: workdir,
+      appServerCwd,
       historySyncEnabled: historySyncEnabledForProvider(agentProvider),
       uiPort,
       uiHost,
@@ -968,6 +999,7 @@ function localSettingsPayload() {
     restartRequired:
       (!modelPinned && savedModel !== model) ||
       savedWorkdir !== workdir ||
+      (!appServerCwdPinned && effectiveSavedAppServerCwd !== appServerCwd) ||
       (!historyPinned && savedHistorySyncEnabled !== historySyncEnabled),
     networkRestartRequired: (!portPinned && savedPort !== uiPort) || (!hostPinned && savedHost !== uiHost),
   };
@@ -2074,15 +2106,17 @@ class SharedBridge {
 
   readyPayload() {
     const thread = threadRecordForBridge(this);
+    const agentMeta = currentWorkspaceMeta(this.appServerCwd || this.workdir);
     return {
       provider: this.provider,
       threadId: this.threadId,
       threadTitle: thread?.displayTitle || thread?.name || "",
       thread,
       model: this.model,
-      workdir: this.workdir,
+      workdir: this.appServerCwd || this.workdir,
+      bridgeWorkdir: this.workdir,
       appServerCwd: this.appServerCwd,
-      ...currentWorkspaceMeta(this.workdir),
+      ...agentMeta,
       shared: true,
       clients: this.clients.size,
       history: this.history,
@@ -2092,24 +2126,25 @@ class SharedBridge {
   }
 
   runPayload() {
+    const agentMeta = currentWorkspaceMeta(this.appServerCwd || this.workdir);
     if (this.activeTurnId) {
-      if (this.runState?.state === "interrupting") return { ...this.runState, ...currentWorkspaceMeta(this.workdir) };
+      if (this.runState?.state === "interrupting") return { ...this.runState, ...agentMeta };
       return {
         state: this.streamingStarted ? "streaming" : "running",
         label: this.streamingStarted ? "回答生成中" : "Agent 処理中",
         turnId: this.activeTurnId,
         updatedAt: Date.now(),
-        ...currentWorkspaceMeta(this.workdir),
+        ...agentMeta,
       };
     }
     return {
       ...(this.runState || { state: "ready", label: "未実行・送信できます", turnId: null, updatedAt: Date.now() }),
-      ...currentWorkspaceMeta(this.workdir),
+      ...agentMeta,
     };
   }
 
   setBridgeRunState(state, label, turnId = this.activeTurnId || null) {
-    const next = { state, label, turnId, updatedAt: Date.now(), ...currentWorkspaceMeta(this.workdir) };
+    const next = { state, label, turnId, updatedAt: Date.now(), ...currentWorkspaceMeta(this.appServerCwd || this.workdir) };
     const previous = this.runState || {};
     if (state !== "approval") this.pendingApproval = null;
     this.runState = next;
@@ -2800,13 +2835,14 @@ async function bindBrowser(browser, phoneToken, threadId, provider = agentProvid
 
 function bridgeSummaries() {
   return Array.from(bridges.values()).map((bridge) => {
-    const meta = currentWorkspaceMeta(bridge.workdir || workdir);
+    const meta = currentWorkspaceMeta(bridge.appServerCwd || bridge.workdir || workdir);
     return {
       threadId: bridge.threadId,
       clients: bridge.clients.size,
       ready: bridge.ready,
       provider: bridge.provider || agentProvider,
-      workdir: bridge.workdir || workdir,
+      workdir: bridge.appServerCwd || bridge.workdir || workdir,
+      bridgeWorkdir: bridge.workdir || workdir,
       appServerCwd: bridge.appServerCwd || bridge.workdir || workdir,
       ...meta,
       run: typeof bridge.runPayload === "function" ? bridge.runPayload() : null,
@@ -3153,7 +3189,7 @@ function mergeThreadListData(remoteThreads = [], localThreads = []) {
 
 async function codexThreadListPayload(requestedProvider) {
   const result = await appServerRequest("thread/list", {
-    limit: 30,
+    limit: threadListLimit,
     sortKey: "updated_at",
     sortDirection: "desc",
     archived: false,
@@ -3360,6 +3396,11 @@ async function main() {
             const nextWorkdir = rememberWorkspace(body.workdir);
             updates[slotEnvKey("PHONE_WORKDIR", uiPort)] = nextWorkdir;
             fleetUpdates.workdir = nextWorkdir;
+          }
+          if (Object.prototype.hasOwnProperty.call(body, "appServerCwd")) {
+            const nextAppServerCwd = singleLinePathText(body.appServerCwd);
+            updates[slotEnvKey("CODEX_APP_SERVER_CWD", uiPort)] = nextAppServerCwd;
+            fleetUpdates.appServerCwd = nextAppServerCwd;
           }
           if (requestedProvider === "codex" && Object.prototype.hasOwnProperty.call(body, "historySyncEnabled")) {
             updates[slotEnvKey("CODEX_HISTORY_SYNC", uiPort)] = body.historySyncEnabled ? "1" : "0";

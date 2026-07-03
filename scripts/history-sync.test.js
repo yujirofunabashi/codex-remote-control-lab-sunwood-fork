@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { historySyncRequests, isHistorySyncEnabled, runHistorySync } = require("./history-sync");
+const { defaultHistorySyncLimit, historySyncRequests, isHistorySyncEnabled, runHistorySync } = require("./history-sync");
 
 test("history sync is enabled by default", () => {
   assert.equal(isHistorySyncEnabled({}), true);
@@ -31,6 +31,12 @@ test("historySyncRequests warms thread body and scan-backed list metadata", () =
       },
     },
   ]);
+});
+
+test("historySyncRequests defaults to a project-safe larger list", () => {
+  const requests = historySyncRequests("thread-123", "/tmp/demo");
+  assert.equal(defaultHistorySyncLimit, 200);
+  assert.equal(requests[1].params.limit, 200);
 });
 
 test("runHistorySync calls requests in order", async () => {
