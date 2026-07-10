@@ -1,7 +1,7 @@
 const WebSocket = require("ws");
 
 const url = process.env.CODEX_WS_URL || "ws://127.0.0.1:45213";
-const model = process.env.CODEX_MODEL || "gpt-5.4";
+const model = process.env.CODEX_MODEL || "gpt-5.6-sol";
 const events = [];
 
 function record(direction, message) {

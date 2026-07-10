@@ -331,7 +331,16 @@ const rateLimitCacheTtlMs = positiveNumber(process.env.PHONE_RATE_LIMIT_CACHE_TT
 const rateLimitRefreshTimeoutMs = positiveNumber(process.env.PHONE_RATE_LIMIT_REFRESH_TIMEOUT_MS, 6000);
 const uploadDir = path.join(root, ".uploads");
 const maxUploadBytes = uploadLimitBytes();
-const codexModelOptions = ["gpt-5.5", "gpt-5.4", "gpt-5.3-codex", "gpt-5.3-codex-spark", "gpt-5.2"];
+const codexModelOptions = [
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
+  "gpt-5.5",
+  "gpt-5.4",
+  "gpt-5.3-codex",
+  "gpt-5.3-codex-spark",
+  "gpt-5.2",
+];
 const modelOptions = codexModelOptions;
 const bridges = new Map();
 const bridgeStartedAt = Date.now();
@@ -519,7 +528,7 @@ function historySyncEnvKeyForProvider(provider) {
 
 function defaultModelForProvider(provider) {
   normalizeProvider(provider);
-  return "gpt-5.4";
+  return "gpt-5.6-sol";
 }
 
 function modelOptionsForProvider(provider) {

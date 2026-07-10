@@ -53,7 +53,7 @@ In this mode, OCdex does not start a new app-server. It uses the app-server behi
 ```bash
 PHONE_UI_PORT=45214 npm run phone
 PHONE_WORKDIR=/Users/admin/Prj/some-project npm run phone
-CODEX_MODEL=gpt-5.4 npm run phone
+CODEX_MODEL=gpt-5.6-sol npm run phone
 CODEX_APP_SERVER_SOCK=/Users/admin/.codex/app-server-control/app-server-control.sock npm run phone
 CODEX_APP_SERVER_URL=ws://127.0.0.1:45213 npm run phone
 CODEX_HISTORY_SYNC=0 npm run phone
@@ -135,7 +135,7 @@ Background thread-list polling suppresses repeated identical errors. A transient
 - approval cards that stay visible from both chat and terminal views
 - quick action chips that insert prompt templates without auto-sending
 - model, plugin, config, auth, and automation lookups
-- Codex model badges stay abbreviated, such as `5.5-L/M/H/XH`; Fast mode adds a `⚡` suffix, and the dropdown exposes it as a one-row toggle above Low / Medium / High / Extra High reasoning
+- Codex model badges stay abbreviated, such as `5.6-sol-L/M/H/XH`; Fast mode adds a `⚡` suffix, and the dropdown exposes it as a one-row toggle above Low / Medium / High / Extra High reasoning
 - approval and sandbox mode controls for the next turn
 - repository artifact preview
 - Markdown rendering for chat and artifacts

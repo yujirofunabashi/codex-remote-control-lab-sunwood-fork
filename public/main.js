@@ -1203,7 +1203,7 @@ const serviceTierAliases = new Map([
   ["FAST", "fast"],
 ]);
 const inlineModelChoices = {
-  codex: ["gpt-5.5", "gpt-5.4"],
+  codex: ["gpt-5.6-sol", "gpt-5.5"],
 };
 
 function normalizeReasoning(value) {

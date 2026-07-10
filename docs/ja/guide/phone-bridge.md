@@ -53,7 +53,7 @@ npm run phone
 ```bash
 PHONE_UI_PORT=45214 npm run phone
 PHONE_WORKDIR=/Users/admin/Prj/some-project npm run phone
-CODEX_MODEL=gpt-5.4 npm run phone
+CODEX_MODEL=gpt-5.6-sol npm run phone
 CODEX_APP_SERVER_SOCK=/Users/admin/.codex/app-server-control/app-server-control.sock npm run phone
 CODEX_APP_SERVER_URL=ws://127.0.0.1:45213 npm run phone
 CODEX_HISTORY_SYNC=0 npm run phone
@@ -103,7 +103,7 @@ background の thread 一覧 polling は、同じ error の連続表示を抑え
 - chat / terminal のどちらでも見える approval card
 - 勝手に送信せず入力欄へ prompt template を挿入する quick action chip
 - model、plugin、config、auth、automation の確認
-- Codex model 表示は Standard では `5.5-L/M/H/XH`、Fast mode では `5.5-XH ⚡` のように省略表示します。dropdown では Fast mode を1行トグルにし、reasoning は Low / Medium / High / Extra High のフルネームで表示します
+- Codex model 表示は Standard では `5.6-sol-L/M/H/XH`、Fast mode では `5.6-sol-XH ⚡` のように省略表示します。dropdown では Fast mode を1行トグルにし、reasoning は Low / Medium / High / Extra High のフルネームで表示します
 - 次 turn 向けの承認・sandbox mode 切り替え
 - repository artifact preview
 - chat と artifact の Markdown rendering
