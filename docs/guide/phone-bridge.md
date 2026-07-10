@@ -130,6 +130,7 @@ Background thread-list polling suppresses repeated identical errors. A transient
 - cockpit header with thread position, run state, per-thread accent color, compact cwd, and a mini thread switcher
 - guarded swipe navigation that avoids text inputs, terminal logs, artifact previews, approval cards, and horizontal scrollers
 - Codex / Terminal view switching with unread badges and preserved drafts/scroll position
+- streamed chat output follows the latest response only while the reader is already near the bottom, so reviewing earlier content is not interrupted
 - phone terminal mode reserved for manual command input/output, with the chat composer and chat status logs kept out of the terminal surface and a `user@host cwd %` prompt shown for the active workspace
 - terminal filter chips, client-side search, visible-output copy, auto-scroll pause, wrap/font controls, key-intent chips, and CSS focus mode
 - approval cards that stay visible from both chat and terminal views
@@ -141,6 +142,7 @@ Background thread-list polling suppresses repeated identical errors. A transient
 - Markdown rendering for chat and artifacts
 - browser image attachments passed to Codex as `localImage` inputs
 - simple, cyberpunk, and botanical color themes from the settings panel
+- focused utility panels that hide Review Center tabs outside Review Center, plus iPhone safe-area support through `viewport-fit=cover`
 - LAN sharing for a single bridge-managed thread
 
 The terminal key row does not expose unauthenticated raw shell execution. `$` inserts a safe Codex command-request template, and bridge access remains token protected while the Codex app-server stays bound to localhost.

@@ -30,6 +30,7 @@ const {
   shouldShowQuickBar,
   sortThreadsForInbox,
   isStandaloneDisplayMode,
+  isScrollNearBottom,
   threadDisplayTitle,
   threadTimestamp,
   terminalCompactState,
@@ -194,6 +195,8 @@ test("viewport, standalone, compact mode, and quickbar helpers are stable", () =
   assert.deepEqual(terminalCompactState({ mainViewMode: "terminal", width: 390, maxMode: true }).max, true);
   assert.equal(shouldShowQuickBar({ mainViewMode: "terminal", inputFocused: false, inputMode: "keys" }), true);
   assert.equal(shouldShowQuickBar({ mainViewMode: "chat", inputFocused: true, inputMode: "keys" }), false);
+  assert.equal(isScrollNearBottom({ scrollHeight: 1000, clientHeight: 500, scrollTop: 428 }), true);
+  assert.equal(isScrollNearBottom({ scrollHeight: 1000, clientHeight: 500, scrollTop: 300 }), false);
 });
 
 test("PWA helpers keep manifest and service worker opt-in safe", () => {

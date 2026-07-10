@@ -98,6 +98,7 @@ background の thread 一覧 polling は、同じ error の連続表示を抑え
 - thread 位置、稼働状態、thread 色、compact cwd、mini thread switcher をまとめた cockpit header
 - text input、terminal log、artifact preview、approval card、横スクロール領域では誤発火しない swipe navigation
 - unread badge と draft / scroll 復元つきの Codex / Terminal 切り替え
+- 読者が末尾付近にいる時だけ最新のstream出力を自動追従し、過去メッセージ確認中の表示位置を維持
 - 手動 command 入力と出力に専念する phone terminal。chat composer と chat status log は terminal 面に出さず、`user@host cwd %` 形式の現在地 prompt を表示
 - filter chip、client-side search、表示出力コピー、auto-scroll pause、wrap / font control、key-intent chip、CSS focus mode
 - chat / terminal のどちらでも見える approval card
@@ -109,6 +110,7 @@ background の thread 一覧 polling は、同じ error の連続表示を抑え
 - chat と artifact の Markdown rendering
 - browser 画像添付を `localImage` input として Codex に渡す
 - 設定 panel から simple / cyberpunk / botanical のカラーテーマを切り替え
+- Review Center 外では Review tab を隠す focused utility panel と、`viewport-fit=cover` による iPhone safe-area 対応
 - bridge-managed thread を LAN 内の複数端末で共有
 
 terminal の key row は、認証なしの raw shell 実行口ではありません。`$` は Codex への安全なコマンド実行依頼テンプレートを挿入するだけで、bridge access は引き続き token protected、Codex app-server は localhost bind のままです。

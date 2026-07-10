@@ -161,6 +161,14 @@
     );
   }
 
+  function isScrollNearBottom(metrics = {}, threshold = 72) {
+    const scrollHeight = Math.max(0, Number(metrics.scrollHeight || 0));
+    const clientHeight = Math.max(0, Number(metrics.clientHeight || 0));
+    const scrollTop = Math.max(0, Number(metrics.scrollTop || 0));
+    const limit = Math.max(0, Number(threshold || 0));
+    return scrollHeight - clientHeight - scrollTop <= limit;
+  }
+
   function canSuggestPwaInstall(options = {}) {
     return Boolean(
       options.mobile &&
@@ -594,6 +602,7 @@
     effectiveAppViewportHeight,
     terminalCompactState,
     shouldShowQuickBar,
+    isScrollNearBottom,
     canSuggestPwaInstall,
     serviceWorkerRegistrationAllowed,
     pwaManifestTokenIssues,

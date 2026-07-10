@@ -182,6 +182,20 @@ if (params.has("token") && window.history?.replaceState) {
   })();
   window.history.replaceState(null, "", nextUrl);
 }
+
+const logAutoScrollThresholdPx = 72;
+
+function shouldAutoScrollLog() {
+  if (!log) return false;
+  if (uiUtils.isScrollNearBottom) return uiUtils.isScrollNearBottom(log, logAutoScrollThresholdPx);
+  return log.scrollHeight - log.clientHeight - log.scrollTop <= logAutoScrollThresholdPx;
+}
+
+function scrollLogToBottomIfNeeded(shouldScroll = shouldAutoScrollLog()) {
+  if (!shouldScroll || !log) return;
+  log.scrollTop = log.scrollHeight;
+}
+
 if (preserveBookmarkEntryUrl && params.has("thread") && window.history?.replaceState) {
   const nextUrl = new URL(location.href);
   nextUrl.searchParams.delete("thread");
@@ -1960,6 +1974,7 @@ function updateStatusGroup(group) {
 }
 
 function addStatusGroupItem(text) {
+  const shouldStickToBottom = shouldAutoScrollLog();
   if (!statusGroup || statusGroup.items.length >= 12) {
     const el = document.createElement("article");
     el.className = "entry status status-group";
@@ -1991,7 +2006,7 @@ function addStatusGroupItem(text) {
   }
   statusGroup.items.push(text);
   updateStatusGroup(statusGroup);
-  log.scrollTop = log.scrollHeight;
+  scrollLogToBottomIfNeeded(shouldStickToBottom);
 }
 
 function addEntry(kind, text, images = [], options = {}) {
@@ -2000,6 +2015,7 @@ function addEntry(kind, text, images = [], options = {}) {
     return null;
   }
   if (kind === "user" && !String(text || "").trim() && !images.length) return null;
+  const shouldStickToBottom = shouldAutoScrollLog();
   statusGroup = null;
   const el = document.createElement("article");
   el.className = `entry ${kind}`;
@@ -2024,7 +2040,7 @@ function addEntry(kind, text, images = [], options = {}) {
 
   el.append(avatar, body, tools);
   log.appendChild(el);
-  log.scrollTop = log.scrollHeight;
+  scrollLogToBottomIfNeeded(shouldStickToBottom);
   return body;
 }
 
@@ -4645,6 +4661,7 @@ function closePromptModal({ apply = false } = {}) {
 
 function clearPanel(title, tabName = "artifacts") {
   showRightPanel();
+  artifactPanel.dataset.panelMode = "utility";
   setActivePanelTab(tabName);
   artifactTitle.textContent = title;
   artifactList.classList.remove("artifact-browser-list");
@@ -4895,6 +4912,7 @@ function renderReviewActions() {
 
 function showReviewCenter(tabName = activeReviewTab) {
   showRightPanel();
+  artifactPanel.dataset.panelMode = "review";
   setActivePanelTab(tabName === "artifacts" ? "artifacts" : "status");
   setActiveReviewTab(tabName);
   artifactTitle.textContent = "Review Center";
@@ -6164,6 +6182,7 @@ function connect({ preserveHistory = false, freshThread = false, workdir = "" } 
     }
     if (msg.type === "assistantDelta") {
       setRunState("streaming");
+      const shouldStickToBottom = shouldAutoScrollLog();
       if (mainViewMode !== "chat") {
         unreadChatCount += 1;
         updateUnreadBadges();
@@ -6175,7 +6194,7 @@ function connect({ preserveHistory = false, freshThread = false, workdir = "" } 
         });
       }
       setEntryText(assistantEntry, "assistant", `${assistantEntry.markdownSource || ""}${msg.text}`);
-      log.scrollTop = log.scrollHeight;
+      scrollLogToBottomIfNeeded(shouldStickToBottom);
       return;
     }
     if (msg.type === "approval") {

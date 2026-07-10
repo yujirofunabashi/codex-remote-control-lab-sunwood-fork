@@ -1,4 +1,4 @@
-const CACHE_NAME = "codex-phone-shell-v3";
+const CACHE_NAME = "codex-phone-shell-v4";
 const APP_SHELL = [
   "./",
   "./style.css",

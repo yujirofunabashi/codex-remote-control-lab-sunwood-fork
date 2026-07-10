@@ -207,6 +207,10 @@
   border-bottom: 1px solid var(--line);
 }
 
+.artifact-panel[data-panel-mode="utility"] .review-tabs {
+  display: none;
+}
+
 .review-tabs button {
   min-width: max-content;
   padding: 6px 9px;
