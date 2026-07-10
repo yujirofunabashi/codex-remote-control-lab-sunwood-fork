@@ -13,7 +13,7 @@ test("mobile viewport enables safe-area layout", () => {
   const html = read("public/index.html");
   const serviceWorker = read("public/service-worker.js");
   assert.match(html, /name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/);
-  assert.match(serviceWorker, /const CACHE_NAME = "codex-phone-shell-v4";/);
+  assert.match(serviceWorker, /const CACHE_NAME = "codex-phone-shell-v5";/);
 });
 
 test("utility panels hide Review Center tabs until Review Center is active", () => {

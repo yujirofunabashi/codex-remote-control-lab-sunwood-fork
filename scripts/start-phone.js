@@ -28,6 +28,27 @@ function normalizeServiceTier(input) {
   throw new Error(`Unsupported service tier: ${value}`);
 }
 
+const supportedReasoningEfforts = new Set(["low", "medium", "high", "xhigh", "max", "ultra"]);
+
+function normalizeReasoningEffort(input, { allowNull = false } = {}) {
+  if (input === undefined) return undefined;
+  if (input === null) return allowNull ? null : undefined;
+  const aliases = {
+    l: "low",
+    m: "medium",
+    h: "high",
+    xh: "xhigh",
+    "extra-high": "xhigh",
+    "extra high": "xhigh",
+    maximum: "max",
+  };
+  const value = String(input).trim().toLowerCase();
+  if (!value) return allowNull ? null : undefined;
+  const normalized = aliases[value] || value;
+  if (supportedReasoningEfforts.has(normalized)) return normalized;
+  throw new Error(`Unsupported reasoning effort: ${value}`);
+}
+
 function appIdSlug(input, fallback) {
   const value = String(input || fallback || "")
     .trim()
@@ -2075,11 +2096,13 @@ class SharedBridge {
     this.workdir = options.workdir ? validateWorkdir(options.workdir) : workdir;
     this.appServerCwd = options.appServerCwd || appServerCwd;
     this.serviceTier = Object.prototype.hasOwnProperty.call(options, "serviceTier") ? normalizeServiceTier(options.serviceTier) : null;
+    this.reasoningEffort = null;
     this.baseBridgeKey = baseBridgeKey;
     this.bridgeKey = bridgeMapKey(this.provider, baseBridgeKey);
     this.clients = new Set();
     this.nextId = 1;
     this.pending = new Map();
+    this.pendingTurnSettings = new Map();
     this.threadId = null;
     this.activeTurnId = null;
     this.createdAt = Date.now();
@@ -2122,6 +2145,7 @@ class SharedBridge {
       threadTitle: thread?.displayTitle || thread?.name || "",
       thread,
       model: this.model,
+      reasoningEffort: this.reasoningEffort,
       workdir: this.appServerCwd || this.workdir,
       bridgeWorkdir: this.workdir,
       appServerCwd: this.appServerCwd,
@@ -2245,6 +2269,7 @@ class SharedBridge {
       this.upstream.close();
     }
     for (const pending of this.pending.keys()) this.pending.delete(pending);
+    this.pendingTurnSettings.clear();
   }
 
   hasPendingTurnStart() {
@@ -2330,6 +2355,9 @@ class SharedBridge {
           return;
         }
         this.threadId = msg.result.thread.id;
+        this.model = msg.result.model || this.model;
+        const responseEffort = String(msg.result.reasoningEffort || "").trim().toLowerCase();
+        this.reasoningEffort = supportedReasoningEfforts.has(responseEffort) ? responseEffort : null;
         this.startupFailed = false;
         this.promoteBridgeKey();
         this.ready = true;
@@ -2344,6 +2372,8 @@ class SharedBridge {
 
       if (pendingMethod === "turn/start") {
         this.pending.delete(msg.id);
+        const requestedSettings = this.pendingTurnSettings.get(msg.id) || null;
+        this.pendingTurnSettings.delete(msg.id);
         if (msg.error) {
           this.interruptRequested = false;
           const error = compactCodexError(msg.error.message || JSON.stringify(msg.error));
@@ -2360,6 +2390,10 @@ class SharedBridge {
           }
           this.startNextQueuedTurn();
         } else {
+          if (requestedSettings) {
+            this.model = requestedSettings.model;
+            this.reasoningEffort = requestedSettings.reasoningEffort;
+          }
           this.activeTurnId = msg.result.turn.id;
           this.streamingStarted = false;
           this.turnStarted = false;
@@ -2703,6 +2737,12 @@ class SharedBridge {
       input,
     };
     params.model = options.model || this.model;
+    let requestedReasoningEffort = this.reasoningEffort;
+    if (Object.prototype.hasOwnProperty.call(options, "effort")) {
+      const effort = normalizeReasoningEffort(options.effort, { allowNull: true });
+      params.effort = effort;
+      requestedReasoningEffort = effort;
+    }
     if (Object.prototype.hasOwnProperty.call(options, "serviceTier")) params.serviceTier = normalizeServiceTier(options.serviceTier);
     if (options.approvalPolicy) params.approvalPolicy = options.approvalPolicy;
     if (options.sandboxMode) params.sandboxPolicy = sandboxPolicyForMode(options.sandboxMode);
@@ -2710,6 +2750,7 @@ class SharedBridge {
       ...params,
     });
     this.pending.set(id, "turn/start");
+    this.pendingTurnSettings.set(id, { model: params.model, reasoningEffort: requestedReasoningEffort });
     this.setBridgeRunState("running", "送信済み・開始待ち");
     const savedAttachments = [...savedImages, ...savedFiles];
     const displayText = savedAttachments.length ? `${text}\n\n添付: ${savedAttachments.map((file) => file.name).join(", ")}` : text;
@@ -3762,6 +3803,7 @@ module.exports = {
   manifestPayloadForRequest,
   maskTokenValue,
   mergeThreadListData,
+  normalizeReasoningEffort,
   readFleetConfigBridgeSettings,
   requestTokenFromHeaders,
   safeProxyBasePath,

@@ -780,6 +780,9 @@ let swipeFeedbackTimer = null;
 let selectedModel = localStorage.getItem("codexPhoneModel") || "";
 let selectedModelLabel = localStorage.getItem("codexPhoneModelLabel") || "5.5";
 let selectedReasoning = localStorage.getItem("codexPhoneReasoning") || "M";
+let modelCatalog = [];
+let modelCatalogRequestSeq = 0;
+let reasoningSelectionVersion = 0;
 let selectedServiceTier = localStorage.getItem(serviceTierStorageKey) || "";
 let settingsRenderSeq = 0;
 let artifactItems = [];
@@ -1208,6 +1211,9 @@ const reasoningAliases = new Map([
   ["EXTRA HIGH", "XH"],
   ["EXTRA-HIGH", "XH"],
   ["非常に高", "XH"],
+  ["MAX", "MAX"],
+  ["MAXIMUM", "MAX"],
+  ["ULTRA", "ULTRA"],
 ]);
 const serviceTierAliases = new Map([
   ["", ""],
@@ -1222,7 +1228,7 @@ const inlineModelChoices = {
 
 function normalizeReasoning(value) {
   const key = String(value || "").trim();
-  return reasoningAliases.get(key) || reasoningAliases.get(key.toUpperCase()) || "M";
+  return reasoningAliases.get(key) || reasoningAliases.get(key.toUpperCase()) || uiUtils.reasoningCodeForEffort?.(key, "M") || "M";
 }
 
 function normalizeServiceTier(value) {
@@ -1246,9 +1252,60 @@ function displayModelName(model) {
   return value ? value[0].toUpperCase() + value.slice(1) : "Model";
 }
 
-function setSelectedModel(model, { persist = true } = {}) {
+function reasoningBadge(value) {
+  const code = normalizeReasoning(value);
+  return code === "ULTRA" ? "ULT" : code;
+}
+
+function modelCatalogRecord(model = selectedModel) {
+  const target = String(model || "").toLowerCase();
+  return modelCatalog.find((candidate) => String(candidate?.model || candidate?.id || "").toLowerCase() === target) || null;
+}
+
+function supportedReasoningCodes(model = selectedModel) {
+  const record = modelCatalogRecord(model);
+  const fallback = ["L", "M", "H", "XH"];
+  return uiUtils.reasoningCodesForModel?.(record || {}, fallback) || fallback;
+}
+
+function effectiveReasoningCode() {
+  const supported = supportedReasoningCodes();
+  if (supported.includes(selectedReasoning)) return selectedReasoning;
+  return supported.includes("M") ? "M" : supported[0] || "M";
+}
+
+function alignReasoningToSelectedModel({ persist = true, preferDefault = false } = {}) {
+  const record = modelCatalogRecord();
+  if (!record) {
+    if (preferDefault) selectedReasoning = "M";
+    if (persist) localStorage.setItem("codexPhoneReasoning", selectedReasoning);
+    return selectedReasoning;
+  }
+  const next = uiUtils.preferredReasoningCodeForModel?.(record, preferDefault ? "" : selectedReasoning) || "M";
+  selectedReasoning = normalizeReasoning(next);
+  if (persist) localStorage.setItem("codexPhoneReasoning", selectedReasoning);
+  return selectedReasoning;
+}
+
+async function refreshModelCatalog(options = {}) {
+  const bridgeId = options.bridgeId || activeBridgeId;
+  const requestSeq = ++modelCatalogRequestSeq;
+  const selectionVersion = reasoningSelectionVersion;
+  const requestedModel = selectedModel;
+  const result = await apiGet(`/api/models?provider=${encodeURIComponent(currentThreadProvider())}`, { bridgeId });
+  if (requestSeq !== modelCatalogRequestSeq || (bridgeId && activeBridgeId && bridgeId !== activeBridgeId)) return modelCatalog;
+  modelCatalog = Array.isArray(result.data) ? result.data : [];
+  const preferDefault = Boolean(options.preferDefault) && selectionVersion === reasoningSelectionVersion && requestedModel === selectedModel;
+  alignReasoningToSelectedModel({ preferDefault });
+  updateModelButton();
+  return modelCatalog;
+}
+
+function setSelectedModel(model, { persist = true, syncReasoning = true } = {}) {
+  if (persist) reasoningSelectionVersion += 1;
   selectedModel = model || "";
   selectedModelLabel = labelForModel(selectedModel);
+  if (syncReasoning) alignReasoningToSelectedModel({ persist });
   if (persist) {
     localStorage.setItem("codexPhoneModel", selectedModel);
     localStorage.setItem("codexPhoneModelLabel", selectedModelLabel);
@@ -1292,12 +1349,15 @@ function setActiveProvider(provider) {
 function updateModelButton() {
   const showReasoning = providerSupportsReasoning();
   const showServiceTier = providerSupportsServiceTier();
+  const supportedCodes = new Set(supportedReasoningCodes());
+  const effectiveReasoning = effectiveReasoningCode();
   const serviceTierSuffix = showServiceTier && selectedServiceTier === "fast" ? " ⚡" : "";
-  modelButton.textContent = showReasoning ? `${selectedModelLabel}-${selectedReasoning}${serviceTierSuffix}` : selectedModelLabel;
+  modelButton.textContent = showReasoning ? `${selectedModelLabel}-${reasoningBadge(effectiveReasoning)}${serviceTierSuffix}` : selectedModelLabel;
+  modelButton.title = showReasoning ? `${displayModelName(selectedModel)} / ${effectiveReasoning}` : displayModelName(selectedModel);
   thinkingButton.hidden = !showReasoning;
   modelMenu.classList.toggle("no-reasoning", !showReasoning);
   renderInlineModelChoices();
-  for (const row of modelMenu.querySelectorAll(".model-menu-label, [data-reasoning]")) {
+  for (const row of modelMenu.querySelectorAll(".model-menu-label")) {
     row.hidden = !showReasoning;
   }
   for (const row of modelMenu.querySelectorAll("[data-service-tier-toggle], [data-service-tier-separator]")) {
@@ -1313,7 +1373,8 @@ function updateModelButton() {
     serviceTierToggle.setAttribute("aria-pressed", String(fastMode));
   }
   for (const row of modelMenu.querySelectorAll("[data-reasoning]")) {
-    const active = row.dataset.reasoning === selectedReasoning;
+    row.hidden = !showReasoning || !supportedCodes.has(normalizeReasoning(row.dataset.reasoning));
+    const active = row.dataset.reasoning === effectiveReasoning;
     row.classList.toggle("active", active);
     let mark = row.querySelector(".checkmark");
     if (active && !mark) {
@@ -1358,7 +1419,10 @@ function toggleModelMenu() {
   updateModelButton();
   const willOpen = modelMenu.classList.contains("hidden");
   modelMenu.classList.toggle("hidden");
-  if (willOpen) refreshRateLimits().catch(() => {});
+  if (willOpen) {
+    refreshRateLimits().catch(() => {});
+    refreshModelCatalog().catch(() => {});
+  }
 }
 
 function normalizeRateLimitWindows(rateLimits) {
@@ -1425,11 +1489,14 @@ async function refreshRateLimits() {
 
 function selectReasoning(value) {
   if (!providerSupportsReasoning()) return;
-  selectedReasoning = normalizeReasoning(value);
+  const next = normalizeReasoning(value);
+  if (!supportedReasoningCodes().includes(next)) return;
+  reasoningSelectionVersion += 1;
+  selectedReasoning = next;
   localStorage.setItem("codexPhoneReasoning", selectedReasoning);
   updateModelButton();
   closeModelMenu();
-  addStatus(`インテリジェンスを ${selectedReasoning} に設定しました。`);
+  addStatus(`思考の深さを ${selectedReasoning} に設定しました。次の送信から反映します。`);
 }
 
 function selectServiceTier(value) {
@@ -3800,6 +3867,8 @@ function captureActiveBridgeState() {
 function applyActiveBridgeState(bridgeId) {
   const state = getBridgeState(bridgeId);
   const view = bridgeViewState[bridgeId] || {};
+  modelCatalog = [];
+  modelCatalogRequestSeq += 1;
   threadCache = Array.isArray(state.threadCache) ? state.threadCache : [];
   selectedThread = state.selectedThread || view.selectedThread || "";
   activeProvider = normalizeProviderName(initialProviderParam || state.activeProvider || state.info?.provider || view.provider || "codex") || "codex";
@@ -3810,6 +3879,7 @@ function applyActiveBridgeState(bridgeId) {
   Object.assign(currentWorkspace, state.currentWorkspace || {});
   workspaceFollowsSelectedThread = Boolean(state.workspaceFollowsSelectedThread);
   token = effectiveBridgeToken(activeBridge()) || "";
+  updateModelButton();
   selectedThreadByProvider.clear();
   if (selectedThread && threadProvider) selectedThreadByProvider.set(threadProvider, selectedThread);
 }
@@ -5520,9 +5590,8 @@ async function showModels() {
   clearPanel("モデル", "models");
   addPanelRow("読み込み中...");
   try {
-    const result = await apiGet(`/api/models?provider=${encodeURIComponent(currentThreadProvider())}`);
+    const models = await refreshModelCatalog();
     artifactList.replaceChildren();
-    const models = result.data || [];
     for (const candidate of models.slice(0, 24)) {
       addPanelRow(candidate.displayName || candidate.model || candidate.id, candidate.defaultReasoningEffort || "", () => {
         setSelectedModel(candidate.model || candidate.id);
@@ -6112,7 +6181,15 @@ function connect({ preserveHistory = false, freshThread = false, workdir = "" } 
     if (msg.type === "ready") {
       setReady(true);
       setActiveProvider(msg.provider || "codex");
-      setSelectedModel(msg.model, { persist: false });
+      setSelectedModel(msg.model, { persist: false, syncReasoning: false });
+      const hasReadyReasoning = Object.prototype.hasOwnProperty.call(msg, "reasoningEffort");
+      const preferDefaultReasoning = hasReadyReasoning && msg.reasoningEffort === null;
+      if (hasReadyReasoning) {
+        selectedReasoning = msg.reasoningEffort === null ? "M" : normalizeReasoning(msg.reasoningEffort);
+        alignReasoningToSelectedModel({ preferDefault: preferDefaultReasoning });
+      }
+      updateModelButton();
+      refreshModelCatalog({ bridgeId, preferDefault: preferDefaultReasoning }).catch(() => {});
       const readyWorkspace = workspaceMetaFromRun({
         repoName: msg.repoName || msg.run?.repoName,
         workspaceLocation: msg.workspaceLocation || msg.run?.workspaceLocation,
@@ -6322,6 +6399,10 @@ composer.addEventListener("submit", (event) => {
         attachments: attachmentsToSend,
         options: {
           model: selectedModel || undefined,
+          effort:
+            currentThreadProvider() === "codex"
+              ? uiUtils.reasoningEffortForCode?.(effectiveReasoningCode(), "medium") || "medium"
+              : undefined,
           serviceTier: currentThreadProvider() === "codex" ? selectedServiceTier || null : undefined,
           approvalPolicy: accessMode.approvalPolicy,
           sandboxMode: accessMode.sandboxMode,

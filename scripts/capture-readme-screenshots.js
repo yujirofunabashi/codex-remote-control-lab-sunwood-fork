@@ -92,14 +92,22 @@ async function mockApi(page, origin) {
     if (url.pathname === "/api/artifacts") return route.fulfill({ json: { data: artifacts } });
     if (url.pathname === "/api/config") {
       return route.fulfill({
-        json: { auth: { authMethod: "token" }, config: { config: { model: "gpt-5.5", cwd: root } }, errors: [] },
+        json: { auth: { authMethod: "token" }, config: { config: { model: "gpt-5.6-sol", cwd: root } }, errors: [] },
       });
     }
     if (url.pathname === "/api/models") {
       return route.fulfill({
         json: {
           data: [
-            { model: "gpt-5.5", displayName: "GPT-5.5", defaultReasoningEffort: "medium" },
+            {
+              model: "gpt-5.6-sol",
+              displayName: "GPT-5.6 Sol",
+              defaultReasoningEffort: "low",
+              supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"].map((reasoningEffort) => ({
+                reasoningEffort,
+                description: reasoningEffort,
+              })),
+            },
             { model: "gpt-5.4", displayName: "GPT-5.4", defaultReasoningEffort: "medium" },
           ],
         },
@@ -168,7 +176,8 @@ async function mockWebSocket(page) {
     type: "ready",
     threadId: "thread-ocdex-v020",
     history,
-    model: "gpt-5.5",
+    model: "gpt-5.6-sol",
+    reasoningEffort: "medium",
     clients: 2,
     workdir: root,
   });

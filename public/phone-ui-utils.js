@@ -161,6 +161,54 @@
     );
   }
 
+  function reasoningCodeForEffort(value, fallback = "M") {
+    const key = String(value || "").trim().toLowerCase().replace(/[\s_-]+/g, "");
+    const codes = {
+      l: "L",
+      low: "L",
+      m: "M",
+      medium: "M",
+      h: "H",
+      high: "H",
+      xh: "XH",
+      xhigh: "XH",
+      extrahigh: "XH",
+      max: "MAX",
+      maximum: "MAX",
+      ultra: "ULTRA",
+    };
+    return codes[key] || fallback;
+  }
+
+  function reasoningEffortForCode(value, fallback = "medium") {
+    const efforts = {
+      L: "low",
+      M: "medium",
+      H: "high",
+      XH: "xhigh",
+      MAX: "max",
+      ULTRA: "ultra",
+    };
+    return efforts[reasoningCodeForEffort(value, "")] || fallback;
+  }
+
+  function reasoningCodesForModel(model = {}, fallback = ["L", "M", "H", "XH"]) {
+    const raw = Array.isArray(model?.supportedReasoningEfforts) ? model.supportedReasoningEfforts : [];
+    const codes = raw
+      .map((item) => reasoningCodeForEffort(item?.reasoningEffort ?? item, ""))
+      .filter((code, index, list) => code && list.indexOf(code) === index);
+    return codes.length ? codes : [...fallback];
+  }
+
+  function preferredReasoningCodeForModel(model = {}, selected = "M") {
+    const supported = reasoningCodesForModel(model);
+    const normalizedSelected = String(selected ?? "").trim() ? reasoningCodeForEffort(selected, "M") : "";
+    if (supported.includes(normalizedSelected)) return normalizedSelected;
+    const modelDefault = reasoningCodeForEffort(model?.defaultReasoningEffort, "");
+    if (modelDefault && supported.includes(modelDefault)) return modelDefault;
+    return supported[0] || "M";
+  }
+
   function isScrollNearBottom(metrics = {}, threshold = 72) {
     const scrollHeight = Math.max(0, Number(metrics.scrollHeight || 0));
     const clientHeight = Math.max(0, Number(metrics.clientHeight || 0));
@@ -602,6 +650,10 @@
     effectiveAppViewportHeight,
     terminalCompactState,
     shouldShowQuickBar,
+    reasoningCodeForEffort,
+    reasoningEffortForCode,
+    reasoningCodesForModel,
+    preferredReasoningCodeForModel,
     isScrollNearBottom,
     canSuggestPwaInstall,
     serviceWorkerRegistrationAllowed,

@@ -125,10 +125,24 @@ async function mockApi(page, origin) {
       return route.fulfill({ json: { path: url.searchParams.get("path") || "README.md", kind: "markdown", text: "# Smoke" } });
     }
     if (url.pathname === "/api/config") {
-      return route.fulfill({ json: { auth: { authMethod: "token" }, config: { config: { model: "gpt-5.5", cwd: activeRoot } }, errors: [] } });
+      return route.fulfill({ json: { auth: { authMethod: "token" }, config: { config: { model: "gpt-5.6-sol", cwd: activeRoot } }, errors: [] } });
     }
     if (url.pathname === "/api/models") {
-      return route.fulfill({ json: { data: [{ model: "gpt-5.5", displayName: "GPT-5.5", defaultReasoningEffort: "medium" }] } });
+      return route.fulfill({
+        json: {
+          data: [
+            {
+              model: "gpt-5.6-sol",
+              displayName: "GPT-5.6 Sol",
+              defaultReasoningEffort: "low",
+              supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"].map((reasoningEffort) => ({
+                reasoningEffort,
+                description: reasoningEffort,
+              })),
+            },
+          ],
+        },
+      });
     }
     if (url.pathname === "/api/status") {
       return route.fulfill({
@@ -167,6 +181,7 @@ async function mockApi(page, origin) {
 async function mockWebSocket(page) {
   await page.addInitScript((payload) => {
     window.__mockWebSocketUrls = [];
+    window.__mockWebSocketMessages = [];
     class MockWebSocket extends EventTarget {
       constructor(url) {
         super();
@@ -213,7 +228,13 @@ async function mockWebSocket(page) {
           }, 180);
         }, 80);
       }
-      send() {}
+      send(data) {
+        try {
+          window.__mockWebSocketMessages.push(JSON.parse(String(data)));
+        } catch {
+          window.__mockWebSocketMessages.push(String(data));
+        }
+      }
       close() {
         this.readyState = MockWebSocket.CLOSED;
         this.dispatchEvent(new CloseEvent("close"));
@@ -228,7 +249,8 @@ async function mockWebSocket(page) {
     type: "ready",
     threadId: "thread-mobile-compact",
     history,
-    model: "gpt-5.5",
+    model: "gpt-5.6-sol",
+    reasoningEffort: null,
     clients: 1,
     workdir: root,
     repoName: "codex-remote-control-lab",
@@ -792,6 +814,32 @@ async function run() {
     );
     if (wantShots) await page.screenshot({ path: path.join(shotsDir, "keyboard-open.png") });
     await page.evaluate(() => document.body.classList.remove("keyboard-open"));
+
+    await page.locator("#modelButton").click();
+    await page.waitForSelector('[data-reasoning="ULTRA"]:not([hidden])');
+    const advancedReasoningState = await page.evaluate(() => ({
+      maxVisible: !document.querySelector('[data-reasoning="MAX"]')?.hidden,
+      ultraVisible: !document.querySelector('[data-reasoning="ULTRA"]')?.hidden,
+      modelButton: document.querySelector("#modelButton")?.textContent || "",
+    }));
+    check("null ready effort resets to the model default", /-L(?:\s|$)/.test(advancedReasoningState.modelButton), JSON.stringify(advancedReasoningState));
+    check(
+      "Sol model exposes Max and Ultra reasoning controls",
+      advancedReasoningState.maxVisible && advancedReasoningState.ultraVisible,
+      JSON.stringify(advancedReasoningState),
+    );
+    await page.locator('[data-reasoning="ULTRA"]').click();
+    await page.locator("#prompt").fill("Ultra reasoning smoke");
+    await page.locator("#send").click();
+    await page.waitForFunction(() =>
+      (window.__mockWebSocketMessages || []).some((message) => message?.type === "prompt" && message?.text === "Ultra reasoning smoke"),
+    );
+    const ultraPrompt = await page.evaluate(() =>
+      [...(window.__mockWebSocketMessages || [])]
+        .reverse()
+        .find((message) => message?.type === "prompt" && message?.text === "Ultra reasoning smoke"),
+    );
+    check("Ultra selection is sent as turn effort", ultraPrompt?.options?.effort === "ultra", JSON.stringify(ultraPrompt));
 
     check("no console / page errors", consoleErrors.length === 0, consoleErrors.join(" | "));
 

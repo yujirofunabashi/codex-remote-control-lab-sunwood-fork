@@ -19,7 +19,11 @@ const {
   parseBridgeUrl,
   prioritizeSelectedThread,
   projectThreadWindow,
+  preferredReasoningCodeForModel,
   pwaManifestTokenIssues,
+  reasoningCodeForEffort,
+  reasoningCodesForModel,
+  reasoningEffortForCode,
   redactSensitiveText,
   removeBridgeFromRegistry,
   safeJsonParse,
@@ -197,6 +201,26 @@ test("viewport, standalone, compact mode, and quickbar helpers are stable", () =
   assert.equal(shouldShowQuickBar({ mainViewMode: "chat", inputFocused: true, inputMode: "keys" }), false);
   assert.equal(isScrollNearBottom({ scrollHeight: 1000, clientHeight: 500, scrollTop: 428 }), true);
   assert.equal(isScrollNearBottom({ scrollHeight: 1000, clientHeight: 500, scrollTop: 300 }), false);
+});
+
+test("reasoning helpers preserve model-specific Max and Ultra support", () => {
+  const sol = {
+    defaultReasoningEffort: "low",
+    supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"].map((reasoningEffort) => ({ reasoningEffort })),
+  };
+  const luna = {
+    defaultReasoningEffort: "medium",
+    supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"].map((reasoningEffort) => ({ reasoningEffort })),
+  };
+
+  assert.equal(reasoningCodeForEffort("ultra"), "ULTRA");
+  assert.equal(reasoningCodeForEffort("extra-high"), "XH");
+  assert.equal(reasoningEffortForCode("ULTRA"), "ultra");
+  assert.deepEqual(reasoningCodesForModel({}), ["L", "M", "H", "XH"]);
+  assert.deepEqual(reasoningCodesForModel(sol), ["L", "M", "H", "XH", "MAX", "ULTRA"]);
+  assert.equal(preferredReasoningCodeForModel(sol, "ULTRA"), "ULTRA");
+  assert.equal(preferredReasoningCodeForModel(sol, null), "L");
+  assert.equal(preferredReasoningCodeForModel(luna, "ULTRA"), "M");
 });
 
 test("PWA helpers keep manifest and service worker opt-in safe", () => {

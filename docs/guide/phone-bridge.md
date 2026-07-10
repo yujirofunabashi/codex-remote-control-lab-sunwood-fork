@@ -136,7 +136,7 @@ Background thread-list polling suppresses repeated identical errors. A transient
 - approval cards that stay visible from both chat and terminal views
 - quick action chips that insert prompt templates without auto-sending
 - model, plugin, config, auth, and automation lookups
-- Codex model badges stay abbreviated, such as `5.6-sol-L/M/H/XH`; Fast mode adds a `⚡` suffix, and the dropdown exposes it as a one-row toggle above Low / Medium / High / Extra High reasoning
+- Codex model badges stay abbreviated, such as `5.6-sol-L/M/H/XH/MAX/ULT`; Fast mode adds a `⚡` suffix, and the dropdown exposes it as a one-row toggle above Low / Medium / High / Extra High / Max / Ultra reasoning. Max and Ultra appear only when advertised by `model/list` in `supportedReasoningEfforts`; Ultra also includes automatic task delegation
 - approval and sandbox mode controls for the next turn
 - repository artifact preview
 - Markdown rendering for chat and artifacts
