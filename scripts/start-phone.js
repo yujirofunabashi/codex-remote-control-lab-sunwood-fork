@@ -10,6 +10,7 @@ const { bridgeKeyForRequest, bridgeMatchesWorkdir, shouldDisposeIdleBridge, shou
 const { isHistorySyncEnabled, runHistorySync } = require("./history-sync");
 const { bridgeUrls, notificationTargets, notifyBridgeUrls, notifyEvent, notifyTaskEvent, stripTokenFromUrl } = require("./phone-notify");
 const { defaultCodexAppServerPort, settingEnvKeysForSlot, slotEnvKey, slotSettingValue } = require("./phone-slot-settings");
+const { assertStorageCapacityIngress, storageCapacityErrorPayload } = require("./storage-capacity-gate");
 const { findLiveBridge, readThreadSnapshot } = require("./thread-read");
 
 const root = path.resolve(__dirname, "..");
@@ -1434,6 +1435,27 @@ function sendJson(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
+function browserOperationError(error, prefix) {
+  const capacityError = storageCapacityErrorPayload(error);
+  if (capacityError) {
+    return {
+      text: capacityError.error,
+      code: capacityError.code,
+      retryable: capacityError.retryable,
+    };
+  }
+  return { text: `${prefix}${error.message}` };
+}
+
+function sendOperationJsonError(res, error, status = 400) {
+  const capacityError = storageCapacityErrorPayload(error);
+  if (capacityError) {
+    sendJson(res, 503, capacityError);
+    return;
+  }
+  sendJson(res, status, { error: error.message });
+}
+
 function requireToken(url, phoneToken, res) {
   if (requestToken(url) === phoneToken) return true;
   sendJson(res, 401, { error: "invalid token" });
@@ -1733,6 +1755,7 @@ function saveDataUrlAttachment(attachment) {
   if (uploaded) return uploaded;
   const match = String(attachment.dataUrl || "").match(/^data:([^;]+);base64,(.+)$/);
   if (!match) return null;
+  assertStorageCapacityIngress(uiPort, "upload");
   const mime = match[1];
   const buffer = Buffer.from(match[2], "base64");
   if (buffer.length > maxUploadBytes) throw errorWithStatus(`Attachment is too large. Limit is ${Math.round(maxUploadBytes / 1024 / 1024)}MB.`, 413);
@@ -2656,6 +2679,12 @@ class SharedBridge {
       this.emit("error", { text: "Thread is not ready yet" });
       return;
     }
+    try {
+      assertStorageCapacityIngress(uiPort, "prompt");
+    } catch (error) {
+      this.emit("error", browserOperationError(error, "送信に失敗しました: "));
+      return;
+    }
     if (this.activeTurnId || this.hasPendingTurnStart()) {
       this.turnQueue.push({ text, attachments, options, clientMessageId });
       if (clientMessageId) this.emit("promptAccepted", { clientMessageId, queued: true });
@@ -2663,21 +2692,24 @@ class SharedBridge {
       return;
     }
     try {
-      this.startPrompt(text, attachments, options, clientMessageId);
+      this.startPrompt(text, attachments, options, clientMessageId, true);
     } catch (error) {
-      this.emit("error", { text: `送信に失敗しました: ${error.message}` });
+      this.emit("error", browserOperationError(error, "送信に失敗しました: "));
     }
   }
 
   startNextQueuedTurn() {
     if (!this.ready || this.activeTurnId || this.hasPendingTurnStart() || !this.turnQueue.length) return;
-    const next = this.turnQueue.shift();
-    this.emit("status", { text: `キューから送信中（残り${this.turnQueue.length}件）` });
     try {
-      this.startPrompt(next.text, next.attachments, next.options, next.clientMessageId);
+      // Recheck at the actual dispatch boundary. A prompt that was accepted
+      // while another turn ran cannot inherit that earlier capacity decision.
+      assertStorageCapacityIngress(uiPort, "prompt");
+      const next = this.turnQueue.shift();
+      this.emit("status", { text: `キューから送信中（残り${this.turnQueue.length}件）` });
+      this.startPrompt(next.text, next.attachments, next.options, next.clientMessageId, true);
     } catch (error) {
-      this.emit("error", { text: `送信に失敗しました: ${error.message}` });
-      this.startNextQueuedTurn();
+      this.emit("error", browserOperationError(error, "送信に失敗しました: "));
+      if (!storageCapacityErrorPayload(error)) this.startNextQueuedTurn();
     }
   }
 
@@ -2710,7 +2742,8 @@ class SharedBridge {
       });
   }
 
-  startPrompt(text, attachments = [], options = {}, clientMessageId = null) {
+  startPrompt(text, attachments = [], options = {}, clientMessageId = null, capacityChecked = false) {
+    if (!capacityChecked) assertStorageCapacityIngress(uiPort, "prompt");
     this.interruptRequested = false;
     this.turnStarted = false;
     const input = [{ type: "text", text, text_elements: [] }];
@@ -3485,13 +3518,17 @@ async function main() {
         return;
       }
       try {
+        // This must run before createUploadRecord() creates .uploads and before
+        // request bytes are piped to a local file.
+        assertStorageCapacityIngress(uiPort, "upload");
         const originalName = decodeURIComponent(String(req.headers["x-file-name"] || url.searchParams.get("name") || "upload"));
         const mime = String(req.headers["content-type"] || "application/octet-stream");
         const record = createUploadRecord(originalName, mime);
         const size = await writeUploadStream(req, record.preview.absolutePath);
         sendJson(res, 200, { ok: true, attachment: { ...record.preview, size } });
       } catch (error) {
-        sendJson(res, error.statusCode || 400, { error: error.message });
+        if (storageCapacityErrorPayload(error)) req.resume();
+        sendOperationJsonError(res, error, error.statusCode || 400);
       }
       return;
     }
@@ -3516,6 +3553,9 @@ async function main() {
       }
       try {
         const body = await readJsonBody(req);
+        // Parsing the bounded request is read-only; gate immediately before
+        // arbitrary command dispatch.
+        assertStorageCapacityIngress(uiPort, "terminal");
         const result = await executeTerminalCommand(body.command, {
           cwd: body.cwd || workdir,
           timeoutMs: body.timeoutMs,
@@ -3523,7 +3563,7 @@ async function main() {
         });
         sendJson(res, 200, result);
       } catch (error) {
-        sendJson(res, 400, { error: error.message });
+        sendOperationJsonError(res, error);
       }
       return;
     }
