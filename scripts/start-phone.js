@@ -1447,6 +1447,23 @@ function browserOperationError(error, prefix) {
   return { text: `${prefix}${error.message}` };
 }
 
+function sendBrowserCapacityError(browser, error) {
+  const capacityError = storageCapacityErrorPayload(error);
+  if (!capacityError) return false;
+  if (browser.readyState === WebSocket.OPEN) {
+    browser.send(
+      JSON.stringify({
+        type: "error",
+        text: capacityError.error,
+        code: capacityError.code,
+        retryable: capacityError.retryable,
+      }),
+    );
+    browser.close();
+  }
+  return true;
+}
+
 function sendOperationJsonError(res, error, status = 400) {
   const capacityError = storageCapacityErrorPayload(error);
   if (capacityError) {
@@ -2876,15 +2893,26 @@ function getBridge(threadId, provider = agentProvider, connectionId = crypto.ran
   return bridges.get(key);
 }
 
-async function bindBrowser(browser, phoneToken, threadId, provider = agentProvider, options = {}) {
+async function bindBrowser(browser, phoneToken, threadId, provider = agentProvider, options = {}, dependencies = {}) {
   const requestedProvider = normalizeProvider(provider);
+  const assertIngress = dependencies.assertStorageCapacityIngress || assertStorageCapacityIngress;
+  const ensureAppServer = dependencies.ensureCodexServerRunning || ensureCodexServerRunning;
+  const resolveBridge = dependencies.getBridge || getBridge;
+  try {
+    // A browser binding may start or resume a thread before the first prompt,
+    // so it is itself a prompt ingress boundary during capacity recovery.
+    assertIngress(uiPort, "prompt");
+  } catch (error) {
+    if (sendBrowserCapacityError(browser, error)) return;
+    throw error;
+  }
   browser.isAlive = true;
   browser.on("pong", () => {
     browser.isAlive = true;
   });
   if (shouldStartCodexServer) {
     try {
-      await ensureCodexServerRunning();
+      await ensureAppServer();
     } catch (error) {
       if (browser.readyState === WebSocket.OPEN) {
         browser.send(JSON.stringify({ type: "error", text: `Codex app-serverを起動できませんでした: ${error.message}` }));
@@ -2894,7 +2922,7 @@ async function bindBrowser(browser, phoneToken, threadId, provider = agentProvid
     }
   }
   if (browser.readyState !== WebSocket.OPEN) return;
-  const bridge = getBridge(threadId, requestedProvider, crypto.randomUUID(), options);
+  const bridge = resolveBridge(threadId, requestedProvider, crypto.randomUUID(), options);
   bridge.addClient(browser);
 
   browser.on("message", (data) => {
@@ -3837,6 +3865,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  bindBrowser,
   executeTerminalCommand,
   launchSettingsFromFleetOrEnv,
   manifestHrefForRequest,
