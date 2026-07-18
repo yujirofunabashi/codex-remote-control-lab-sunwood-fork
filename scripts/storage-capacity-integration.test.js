@@ -38,6 +38,12 @@ test("prompt ingress and queued dispatch both gate before dispatch or queue shif
   assertBefore(queued, 'assertStorageCapacityIngress(uiPort, "prompt")', "this.startPrompt(");
 });
 
+test("browser binding gates before app-server startup or bridge creation", () => {
+  const text = section("async function bindBrowser", "function bridgeSummaries");
+  assertBefore(text, 'assertIngress(uiPort, "prompt")', "await ensureAppServer()");
+  assertBefore(text, 'assertIngress(uiPort, "prompt")', "resolveBridge(threadId");
+});
+
 test("HTTP upload gates before upload record creation and stream write", () => {
   const text = section('    if (url.pathname === "/api/upload")', '    if (url.pathname === "/api/restart")');
   assertBefore(text, 'assertStorageCapacityIngress(uiPort, "upload")', "const record = createUploadRecord(");
