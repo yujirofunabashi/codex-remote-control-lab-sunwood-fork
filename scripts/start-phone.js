@@ -404,6 +404,9 @@ const codexUrl = process.env.CODEX_APP_SERVER_URL || (codexSocketPath ? "ws://co
 // A Claude-default bridge has no use for the Codex app-server, and starting one
 // anyway makes the bridge depend on the codex binary being present and runnable.
 const shouldStartCodexServer = isCodexProvider && !process.env.CODEX_APP_SERVER_URL && !codexSocketPath;
+// Set by the `phone:loop*` supervisor scripts. Exiting 42 only restarts the
+// bridge when something is watching for that code.
+const bridgeIsSupervised = /^(1|true|yes|on)$/i.test(process.env.PHONE_SUPERVISED || "");
 const workdir = launchSettings.workdir;
 const providerModels = {
   // The active provider takes the fleet-resolved model; the other still needs a
@@ -4363,6 +4366,18 @@ async function main() {
       if (!requireToken(url, phoneToken, res)) return;
       if (req.method !== "POST") {
         sendJson(res, 405, { error: "method not allowed" });
+        return;
+      }
+      // Restarting means exiting 42 and trusting a supervisor to bring the
+      // bridge back. Without one the process simply dies, and recovering needs
+      // physical access to the machine -- the worst possible outcome for a
+      // button pressed from a phone.
+      if (!bridgeIsSupervised) {
+        sendJson(res, 409, {
+          error:
+            "再起動できません。監視付きで起動していないため、停止すると復帰できなくなります。`npm run phone:loop:claude`（Codexは`npm run phone:loop`）で起動してください。",
+          code: "restart_unsupervised",
+        });
         return;
       }
       sendJson(res, 200, { ok: true, message: "Restarting phone bridge" });

@@ -11,6 +11,15 @@ npm ci
 npm run phone
 ```
 
+UI の再起動ボタンを使う場合は、監視付きの entry point で起動します。再起動は exit code 42 で終了して supervisor に再投入させる仕組みなので、supervisor がいないと停止したまま復帰できません。
+
+```bash
+npm run phone:loop          # Codex
+npm run phone:loop:claude   # Claude
+```
+
+監視なしで起動した bridge は、再起動要求を実行せずに理由を返します。手元に PC がない状態で bridge を落とさないためです。
+
 terminal には LAN IPv4 ごとの伏せ字 URL が表示されます。
 
 ```text
