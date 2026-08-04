@@ -90,6 +90,10 @@ const tokenPath = path.join(root, ".phone-token");
 const rateLimitCacheTtlMs = positiveNumber(process.env.PHONE_RATE_LIMIT_CACHE_TTL_MS, 5 * 60 * 1000);
 const rateLimitRefreshTimeoutMs = positiveNumber(process.env.PHONE_RATE_LIMIT_REFRESH_TIMEOUT_MS, 6000);
 const uploadDir = path.join(root, ".uploads");
+const approvalMcpScript = path.join(root, "scripts", "claude-approval-mcp.js");
+const approvalMcpServerName = "phone_approval";
+const approvalTimeoutMs = positiveNumber(process.env.PHONE_APPROVAL_TIMEOUT_MS, 5 * 60 * 1000);
+const approvalSocketPaths = new Set();
 const bridges = new Map();
 let notificationBridgeUrls = [];
 const historyLimit = 80;
@@ -1327,7 +1331,47 @@ function claudePermissionMode(options = {}) {
   if (options.permissionMode) return options.permissionMode;
   if (options.sandboxMode === "danger-full-access" || options.approvalPolicy === "never") return "bypassPermissions";
   if (options.sandboxMode === "read-only") return "plan";
+  // The UI's 確認モード asks for on-request approval, so keep the run in `default`
+  // where unmatched tools fall through to the permission prompt tool.
+  if (options.approvalPolicy === "on-request") return process.env.CLAUDE_PERMISSION_MODE || "default";
   return process.env.CLAUDE_PERMISSION_MODE || "acceptEdits";
+}
+
+// bypassPermissions approves everything before the prompt tool is consulted, so
+// there is nothing for the approval socket to do in that mode.
+function claudeModeCanPrompt(permissionMode) {
+  return permissionMode !== "bypassPermissions";
+}
+
+function approvalSocketPathFor(bridgeKey) {
+  const suffix = crypto.createHash("sha1").update(`${process.pid}:${bridgeKey}`).digest("hex").slice(0, 10);
+  return path.join(os.tmpdir(), `phone-approval-${process.pid}-${suffix}.sock`);
+}
+
+function removeApprovalSocket(socketPath) {
+  approvalSocketPaths.delete(socketPath);
+  try {
+    if (fs.existsSync(socketPath)) fs.unlinkSync(socketPath);
+  } catch {
+    // Best effort: a leftover socket file is harmless on the next run.
+  }
+}
+
+function approvalMcpConfig(socketPath) {
+  return JSON.stringify({
+    mcpServers: {
+      [approvalMcpServerName]: {
+        type: "stdio",
+        command: process.execPath,
+        args: [approvalMcpScript],
+        env: {
+          PHONE_APPROVAL_SOCKET: socketPath,
+          PHONE_APPROVAL_TIMEOUT_MS: String(approvalTimeoutMs),
+          PHONE_APPROVAL_SERVER_NAME: approvalMcpServerName,
+        },
+      },
+    },
+  });
 }
 
 function summarizeClaudeAttachmentPrompt(text, savedAttachments) {
@@ -1763,6 +1807,10 @@ class ClaudeBridge {
     this.turnQueue = [];
     this.activeProcess = null;
     this.streamingStarted = false;
+    this.approvalServer = null;
+    this.approvalSocketPath = null;
+    this.pendingApprovals = new Map();
+    this.nextApprovalId = 1;
   }
 
   addClient(browser) {
@@ -1813,6 +1861,114 @@ class ClaudeBridge {
     this.emit("ready", this.readyPayload());
   }
 
+  // Claude Code spawns the approval MCP server itself, so the bridge only has to
+  // listen on a Unix socket it can dial back on. No port is bound, which keeps
+  // concurrent bridges (and concurrent `npm run phone*` servers) from colliding.
+  ensureApprovalServer() {
+    if (this.approvalServer) return Promise.resolve(this.approvalSocketPath);
+    const socketPath = approvalSocketPathFor(this.bridgeKey);
+    return new Promise((resolve, reject) => {
+      try {
+        if (fs.existsSync(socketPath)) fs.unlinkSync(socketPath);
+      } catch {
+        // A stale socket we cannot remove means listen() will fail below.
+      }
+      const server = net.createServer((socket) => this.handleApprovalConnection(socket));
+      server.on("error", (error) => {
+        this.approvalServer = null;
+        this.approvalSocketPath = null;
+        reject(error);
+      });
+      server.listen(socketPath, () => {
+        this.approvalServer = server;
+        this.approvalSocketPath = socketPath;
+        approvalSocketPaths.add(socketPath);
+        resolve(socketPath);
+      });
+    });
+  }
+
+  handleApprovalConnection(socket) {
+    socket.setEncoding("utf8");
+    let buffer = "";
+    socket.on("error", () => socket.destroy());
+    socket.on("data", (chunk) => {
+      buffer += chunk;
+      const newline = buffer.indexOf("\n");
+      if (newline === -1) return;
+      let payload;
+      try {
+        payload = JSON.parse(buffer.slice(0, newline));
+      } catch {
+        socket.end(`${JSON.stringify({ decision: "decline", message: "承認要求を解釈できませんでした。" })}\n`);
+        return;
+      }
+      buffer = buffer.slice(newline + 1);
+      this.openApproval(payload, socket);
+    });
+  }
+
+  openApproval(payload, socket) {
+    const id = `claude-approval:${this.nextApprovalId++}`;
+    const request = {
+      id,
+      method: "claude/requestApproval",
+      params: {
+        toolName: payload.toolName || "unknown",
+        input: payload.input || {},
+        toolUseId: payload.toolUseId || null,
+      },
+    };
+
+    const settle = (decision, message) => {
+      if (!this.pendingApprovals.has(id)) return;
+      clearTimeout(timer);
+      this.pendingApprovals.delete(id);
+      if (!socket.destroyed) socket.end(`${JSON.stringify({ decision, message })}\n`);
+    };
+
+    const timer = setTimeout(() => {
+      settle("decline", "承認がタイムアウトしました。");
+      this.emit("status", { text: "承認がタイムアウトしたため拒否しました。" });
+    }, approvalTimeoutMs);
+
+    socket.on("close", () => {
+      if (!this.pendingApprovals.has(id)) return;
+      clearTimeout(timer);
+      this.pendingApprovals.delete(id);
+    });
+
+    this.pendingApprovals.set(id, settle);
+
+    if (!this.clients.size) {
+      settle("decline", "接続中のブラウザがないため拒否しました。");
+      this.emit("status", { text: "承認を求められましたが、接続中の端末がありません。" });
+      return;
+    }
+
+    this.emit("approval", { request });
+    notifyRunEvent("approval", {
+      threadId: this.threadId,
+      turnId: this.activeTurnId,
+      message: `${request.params.toolName} の承認待ちです`,
+    });
+  }
+
+  closeApprovalServer() {
+    for (const settle of Array.from(this.pendingApprovals.values())) {
+      settle("decline", "ブリッジが終了したため拒否しました。");
+    }
+    this.pendingApprovals.clear();
+    if (this.approvalServer) {
+      this.approvalServer.close();
+      this.approvalServer = null;
+    }
+    if (this.approvalSocketPath) {
+      removeApprovalSocket(this.approvalSocketPath);
+      this.approvalSocketPath = null;
+    }
+  }
+
   dispose() {
     this.turnQueue = [];
     this.activeTurnId = null;
@@ -1822,6 +1978,7 @@ class ClaudeBridge {
       this.activeProcess = null;
       if (!child.killed) child.kill("SIGTERM");
     }
+    this.closeApprovalServer();
   }
 
   prompt(text, attachments = [], options = {}) {
@@ -1841,6 +1998,23 @@ class ClaudeBridge {
   }
 
   startPrompt(text, attachments = [], options = {}) {
+    const permissionMode = claudePermissionMode(options);
+    if (!claudeModeCanPrompt(permissionMode)) {
+      this.spawnTurn(text, attachments, options, permissionMode, null);
+      return;
+    }
+    // Reserve the turn slot before awaiting so a second prompt still queues.
+    this.activeTurnId = `claude-turn:pending:${crypto.randomUUID()}`;
+    this.ensureApprovalServer()
+      .then((socketPath) => this.spawnTurn(text, attachments, options, permissionMode, socketPath))
+      .catch((error) => {
+        this.activeTurnId = null;
+        this.emit("status", { text: `承認ソケットを準備できなかったため承認なしで実行します: ${error.message}` });
+        this.spawnTurn(text, attachments, options, permissionMode, null);
+      });
+  }
+
+  spawnTurn(text, attachments = [], options = {}, permissionMode = "acceptEdits", approvalSocketPath = null) {
     const savedAttachments = [];
     const savedImages = [];
     for (const attachment of attachments || []) {
@@ -1870,8 +2044,16 @@ class ClaudeBridge {
       "--model",
       options.model || model,
       "--permission-mode",
-      claudePermissionMode(options),
+      permissionMode,
     ];
+    if (approvalSocketPath) {
+      args.push(
+        "--mcp-config",
+        approvalMcpConfig(approvalSocketPath),
+        "--permission-prompt-tool",
+        `mcp__${approvalMcpServerName}__approve`,
+      );
+    }
     if (this.claudeSessionId) args.push("--resume", this.claudeSessionId);
 
     const child = spawn(claudeBin, args, {
@@ -1976,8 +2158,16 @@ class ClaudeBridge {
     this.history = capHistory(this.history);
   }
 
-  approval() {
-    this.emit("status", { text: "Claude headless providerでは実行中の承認応答は未対応です。" });
+  approval(requestMsg, decision) {
+    const id = requestMsg?.id;
+    const settle = id ? this.pendingApprovals.get(id) : null;
+    if (!settle) {
+      this.emit("status", { text: "対象の承認リクエストは既に解決済みです。" });
+      return;
+    }
+    const accepted = decision === "accept";
+    settle(accepted ? "accept" : "decline", accepted ? undefined : "ブラウザから拒否されました。");
+    this.emit("status", { text: accepted ? "承認しました" : "拒否しました" });
   }
 }
 
@@ -2355,6 +2545,7 @@ async function main() {
 
   process.on("exit", () => {
     if (codex) codex.kill("SIGINT");
+    for (const socketPath of Array.from(approvalSocketPaths)) removeApprovalSocket(socketPath);
   });
 }
 
@@ -2365,6 +2556,10 @@ if (require.main === module) {
   });
 } else {
   module.exports = {
+    ClaudeBridge,
+    approvalMcpConfig,
+    claudeModeCanPrompt,
+    claudePermissionMode,
     decorateReviewFiles,
     discoverWorkspaceEntries,
     installedLocalSkillEntries,
