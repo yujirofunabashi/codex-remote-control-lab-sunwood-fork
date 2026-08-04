@@ -11,6 +11,15 @@ npm ci
 npm run phone
 ```
 
+To use the UI's restart button, start through a supervised entry point. Restarting exits with code 42 and relies on a supervisor to bring the bridge back, so without one the bridge stays down:
+
+```bash
+npm run phone:loop          # Codex
+npm run phone:loop:claude   # Claude
+```
+
+A bridge started without a supervisor refuses the restart request and says why, rather than stopping somewhere you cannot reach it.
+
 For the experimental Claude provider, run:
 
 ```bash
