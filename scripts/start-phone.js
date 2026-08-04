@@ -1851,6 +1851,8 @@ class ClaudeBridge {
     this.history = this.claudeSessionId ? claudeHistoryForSession(this.claudeSessionId) : [];
     this.turnQueue = [];
     this.activeProcess = null;
+    this.processKey = null;
+    this.turn = null;
     this.streamingStarted = false;
     this.approvalServer = null;
     this.approvalSocketPath = null;
@@ -2017,17 +2019,16 @@ class ClaudeBridge {
   dispose() {
     this.turnQueue = [];
     this.activeTurnId = null;
+    this.turn = null;
     this.streamingStarted = false;
-    if (this.activeProcess) {
-      const child = this.activeProcess;
-      this.activeProcess = null;
-      if (!child.killed) child.kill("SIGTERM");
-    }
+    this.stopClaudeProcess();
     this.closeApprovalServer();
   }
 
+  // The Claude process outlives a single turn now, so only an in-flight turn
+  // means busy. Gating on activeProcess here would queue every follow-up.
   prompt(text, attachments = [], options = {}) {
-    if (this.activeTurnId || this.activeProcess) {
+    if (this.activeTurnId) {
       this.turnQueue.push({ text, attachments, options });
       this.emit("status", { text: `キューに追加しました（${this.turnQueue.length}件待機）` });
       return;
@@ -2036,7 +2037,7 @@ class ClaudeBridge {
   }
 
   startNextQueuedTurn() {
-    if (this.activeTurnId || this.activeProcess || !this.turnQueue.length) return;
+    if (this.activeTurnId || !this.turnQueue.length) return;
     const next = this.turnQueue.shift();
     this.emit("status", { text: `キューから送信中（残り${this.turnQueue.length}件）` });
     this.startPrompt(next.text, next.attachments, next.options);
@@ -2075,13 +2076,49 @@ class ClaudeBridge {
       : text;
     const turnId = `claude-turn:${crypto.randomUUID()}`;
     this.activeTurnId = turnId;
+    this.turn = { id: turnId, assistantText: "" };
     this.streamingStarted = false;
     this.appendHistory({ type: "user", text: displayText, attachments: savedImages });
     this.emit("user", { text: displayText, attachments: savedImages });
     this.emit("turn", { status: "started", turnId });
 
+    let child;
+    try {
+      child = this.ensureClaudeProcess(options, permissionMode, approvalSocketPath);
+    } catch (error) {
+      this.finishTurn("error", `Claudeを起動できませんでした: ${error.message}`);
+      return;
+    }
+
+    const line = JSON.stringify({
+      type: "user",
+      message: { role: "user", content: [{ type: "text", text: promptText }] },
+      parent_tool_use_id: null,
+    });
+    try {
+      child.stdin.write(`${line}\n`);
+    } catch (error) {
+      this.finishTurn("error", `Claudeへの送信に失敗しました: ${error.message}`);
+    }
+  }
+
+  claudeProcessKey(options, permissionMode) {
+    return JSON.stringify({ model: options.model || model, permissionMode });
+  }
+
+  // One `claude` process is held open across turns, so a follow-up skips session
+  // startup entirely. Model and permission mode are fixed at spawn time, so a
+  // turn that changes either gets a fresh process rather than silently running
+  // under the previous settings.
+  ensureClaudeProcess(options, permissionMode, approvalSocketPath) {
+    const processKey = this.claudeProcessKey(options, permissionMode);
+    if (this.activeProcess && !this.activeProcess.killed && this.processKey === processKey) return this.activeProcess;
+    this.stopClaudeProcess();
+
     const args = [
       "-p",
+      "--input-format",
+      "stream-json",
       "--output-format",
       "stream-json",
       "--verbose",
@@ -2106,82 +2143,25 @@ class ClaudeBridge {
       env: process.env,
       stdio: ["pipe", "pipe", "pipe"],
     });
+    this.activeProcess = child;
+    this.processKey = processKey;
+    this.bindClaudeProcess(child);
+    return child;
+  }
+
+  bindClaudeProcess(child) {
+    let stdoutBuffer = "";
+    let stderrBuffer = "";
+
     child.stdin.on("error", (error) => {
       this.emit("status", { text: `Claude prompt input closed early: ${error.message}` });
     });
-    try {
-      child.stdin.end(promptText);
-    } catch (error) {
-      this.emit("status", { text: `Claude prompt input failed: ${error.message}` });
-    }
-    this.activeProcess = child;
-    let stdoutBuffer = "";
-    let stderrBuffer = "";
-    let assistantText = "";
-
-    const clearActiveProcess = () => {
-      if (this.activeProcess !== child && this.activeTurnId !== turnId) return false;
-      this.activeProcess = null;
-      this.activeTurnId = null;
-      this.streamingStarted = false;
-      return true;
-    };
-
-    const handleLine = (line) => {
-      if (!line.trim()) return;
-      let msg;
-      try {
-        msg = JSON.parse(line);
-      } catch {
-        this.emit("status", { text: line.slice(0, 500) });
-        return;
-      }
-      if (msg.session_id) {
-        this.claudeSessionId = msg.session_id;
-        this.promoteBridgeKey();
-      }
-      if (msg.type === "system" && msg.subtype === "init") {
-        this.emit("status", { text: `Claude session ready: ${msg.session_id || this.threadId}` });
-        return;
-      }
-      if (msg.type === "system" && msg.subtype === "api_retry") {
-        this.emit("status", { text: `Claude API retry ${msg.attempt}/${msg.max_retries}` });
-        return;
-      }
-      const delta = msg.type === "stream_event" && msg.event?.delta?.type === "text_delta" ? msg.event.delta.text : "";
-      if (delta) {
-        assistantText += delta;
-        this.emit("assistantDelta", { text: delta });
-        return;
-      }
-      if (msg.type === "assistant") {
-        for (const block of msg.message?.content || []) {
-          const text = summarizeClaudeToolUse(block);
-          if (text) this.emit("status", { text });
-        }
-        return;
-      }
-      if (msg.type === "user") {
-        for (const block of msg.message?.content || []) {
-          const text = summarizeClaudeToolResult(block);
-          if (text) this.emit("status", { text });
-        }
-        return;
-      }
-      if (msg.type === "result") {
-        if (!assistantText && msg.result) {
-          assistantText = String(msg.result);
-          this.emit("assistantDelta", { text: assistantText });
-        }
-      }
-    };
-
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
       stdoutBuffer += chunk;
       const lines = stdoutBuffer.split(/\r?\n/);
       stdoutBuffer = lines.pop() || "";
-      for (const line of lines) handleLine(line);
+      for (const line of lines) this.handleClaudeLine(line);
     });
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk) => {
@@ -2193,23 +2173,132 @@ class ClaudeBridge {
       }
     });
     child.on("error", (error) => {
-      if (!clearActiveProcess()) return;
-      this.emit("error", { text: `Claudeを起動できませんでした: ${error.message}` });
-      this.startNextQueuedTurn();
+      if (this.activeProcess === child) {
+        this.activeProcess = null;
+        this.processKey = null;
+      }
+      if (child.retiredByBridge) return;
+      this.finishTurn("error", `Claudeを起動できませんでした: ${error.message}`);
     });
     child.on("exit", (code, signal) => {
-      if (!clearActiveProcess()) return;
-      if (stdoutBuffer.trim()) handleLine(stdoutBuffer);
-      if (code === 0) {
-        if (assistantText.trim()) this.appendHistory({ type: "assistant", text: assistantText, outputGroup: turnId });
-        this.emit("turn", { status: "completed", turnId });
-      } else {
-        const reason = signal ? `signal=${signal}` : `code=${code}`;
-        const message = `Claude process exited (${reason})${stderrBuffer.trim() ? `: ${stderrBuffer.trim().slice(-1000)}` : ""}`;
-        this.emit("error", { text: message });
+      if (this.activeProcess === child) {
+        this.activeProcess = null;
+        this.processKey = null;
       }
-      this.startNextQueuedTurn();
+      if (stdoutBuffer.trim()) this.handleClaudeLine(stdoutBuffer);
+      if (child.retiredByBridge || !this.turn) return;
+      const reason = signal ? `signal=${signal}` : `code=${code}`;
+      const detail = stderrBuffer.trim() ? `: ${stderrBuffer.trim().slice(-1000)}` : "";
+      this.finishTurn("error", `Claude process exited (${reason})${detail}`);
     });
+  }
+
+  handleClaudeLine(line) {
+    if (!line.trim()) return;
+    let msg;
+    try {
+      msg = JSON.parse(line);
+    } catch {
+      this.emit("status", { text: line.slice(0, 500) });
+      return;
+    }
+    if (msg.session_id) {
+      this.claudeSessionId = msg.session_id;
+      this.promoteBridgeKey();
+    }
+    if (msg.type === "system" && msg.subtype === "init") {
+      this.emit("status", { text: `Claude session ready: ${msg.session_id || this.threadId}` });
+      return;
+    }
+    if (msg.type === "system" && msg.subtype === "api_retry") {
+      this.emit("status", { text: `Claude API retry ${msg.attempt}/${msg.max_retries}` });
+      return;
+    }
+    const delta = msg.type === "stream_event" && msg.event?.delta?.type === "text_delta" ? msg.event.delta.text : "";
+    if (delta) {
+      if (this.turn) this.turn.assistantText += delta;
+      this.emit("assistantDelta", { text: delta });
+      return;
+    }
+    if (msg.type === "assistant") {
+      for (const block of msg.message?.content || []) {
+        const text = summarizeClaudeToolUse(block);
+        if (text) this.emit("status", { text });
+      }
+      return;
+    }
+    if (msg.type === "user") {
+      for (const block of msg.message?.content || []) {
+        const text = summarizeClaudeToolResult(block);
+        if (text) this.emit("status", { text });
+      }
+      return;
+    }
+    if (msg.type === "result") {
+      if (this.turn && !this.turn.assistantText && msg.result) {
+        this.turn.assistantText = String(msg.result);
+        this.emit("assistantDelta", { text: this.turn.assistantText });
+      }
+      if (msg.is_error || (msg.subtype && msg.subtype !== "success")) {
+        this.finishTurn("error", `Claude turn failed (${msg.subtype || "error"})`);
+        return;
+      }
+      this.finishTurn("completed");
+    }
+  }
+
+  finishTurn(status, message) {
+    const turn = this.turn;
+    this.turn = null;
+    this.activeTurnId = null;
+    this.streamingStarted = false;
+    if (!turn) {
+      if (status === "error" && message) this.emit("error", { text: message });
+      this.startNextQueuedTurn();
+      return;
+    }
+    if (status === "completed") {
+      if (turn.assistantText.trim()) {
+        this.appendHistory({ type: "assistant", text: turn.assistantText, outputGroup: turn.id });
+      }
+      this.emit("turn", { status: "completed", turnId: turn.id });
+    } else {
+      this.emit("error", { text: message });
+      this.emit("turn", { status: "completed", turnId: turn.id });
+    }
+    this.startNextQueuedTurn();
+  }
+
+  // SIGTERM makes Claude Code abort the turn, tear down any running Bash tree,
+  // and persist the session, so the next turn resumes from the transcript.
+  stopClaudeProcess() {
+    const child = this.activeProcess;
+    if (!child) return;
+    child.retiredByBridge = true;
+    this.activeProcess = null;
+    this.processKey = null;
+    try {
+      child.stdin.end();
+    } catch {
+      // Already closed; the kill below still applies.
+    }
+    if (!child.killed) child.kill("SIGTERM");
+  }
+
+  interrupt() {
+    if (!this.turn && !this.activeProcess) {
+      this.emit("status", { text: "中断できる処理がありません。" });
+      return;
+    }
+    const dropped = this.turnQueue.length;
+    this.turnQueue = [];
+    this.emit("status", { text: dropped ? `中断しました（待機中${dropped}件も破棄）` : "中断しました" });
+    this.stopClaudeProcess();
+    for (const settle of Array.from(this.pendingApprovals.values())) {
+      settle("decline", "中断されたため拒否しました。");
+    }
+    this.pendingApprovals.clear();
+    if (this.turn) this.finishTurn("completed");
   }
 
   appendHistory(entry) {
