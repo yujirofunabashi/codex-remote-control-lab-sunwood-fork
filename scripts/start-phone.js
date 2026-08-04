@@ -149,11 +149,24 @@ function claudeStatusLineWindow(rateLimits, type) {
   });
 }
 
+// Claude Code's live rate_limit_event carries no utilization, only which window
+// is in play, when it resets, and how the account currently stands against it.
+// A percentage needs the statusLine payload; see docs/guide/phone-bridge.md.
+// Without one, the state belongs in the label — a window rendering nothing but
+// "--" reads as a broken display rather than a working one with less to say.
+function claudeEventWindowLabel(info, type) {
+  const base = claudeRateLimitLabel(type);
+  if (info.is_using_overage ?? info.isUsingOverage) return `${base}（追加利用中）`;
+  const status = String(info.status || "").trim().toLowerCase();
+  if (status && status !== "allowed") return `${base}（${status}）`;
+  return base;
+}
+
 function claudeEventWindow(info) {
   if (!info || typeof info !== "object") return null;
   const type = info.rate_limit_type || info.rateLimitType;
   return sanitizeRateLimitWindow({
-    label: claudeRateLimitLabel(type),
+    label: claudeEventWindowLabel(info, type),
     remainingPercent: remainingFromUtilization(info.utilization),
     resetsAt: formatRateLimitResetAt(info.resets_at ?? info.resetsAt),
   });
@@ -4708,6 +4721,7 @@ module.exports = {
   manifestPayloadForRequest,
   maskTokenValue,
   mergeThreadListData,
+  normalizeClaudeRateLimitPayload,
   readFleetConfigBridgeSettings,
   requestTokenFromHeaders,
   safeProxyBasePath,

@@ -132,6 +132,32 @@ Background thread-list polling suppresses repeated identical errors. A transient
 
 Claude mode is intentionally narrower than Codex mode. It has Claude Code session listing for the active workdir, but does not provide Codex app-server history sync, plugin lookup, or live tool approval callbacks. Use `CLAUDE_PERMISSION_MODE` or the UI permission mode to decide how much autonomy each spawned Claude run has.
 
+## Claude Rate Limits
+
+Two sources feed the Claude rate-limit card, and they carry different things:
+
+| Source | Provides | Setup |
+| --- | --- | --- |
+| `rate_limit_event` from the bridge's own turns | which window, when it resets, whether the account is on overage | none, automatic |
+| Claude Code's statusLine payload | **the remaining percentage** | see below |
+
+The live event carries no utilization field, so the bridge's own turns cannot produce a percentage. To get one, install the statusLine hook in the interactive Claude Code on that machine by adding this to `~/.claude/settings.json`:
+
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "node /path/to/codex-remote-control-lab/scripts/capture-claude-rate-limits.js"
+  }
+}
+```
+
+Replace the path with your clone's absolute path. Each interactive `claude` session then refreshes `.phone-rate-limits.claude.json`, which the bridge reads.
+
+statusLine is an interactive-UI feature and does not fire under `claude -p`, so percentages update when *you* use Claude in a terminal, not when the bridge runs a turn. The bridge marks a cache older than the TTL as stale.
+
+Override the location with `PHONE_CLAUDE_RATE_LIMIT_CACHE_PATH`. Only normalized display values are cached — no tokens and no raw API responses.
+
 ## UI Surface
 
 - recent thread list and thread resume

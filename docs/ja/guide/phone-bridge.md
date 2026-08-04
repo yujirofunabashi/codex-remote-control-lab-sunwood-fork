@@ -95,6 +95,32 @@ Claude の subscription limit は Anthropic API の rate-limit header とは別�
 
 background の thread 一覧 polling は、同じ error の連続表示を抑えます。app-server の短い再起動や token mismatch が起きても、同じ `/api/threads` failure が chat log に増え続けることは避けます。
 
+## Claude のレート制限表示
+
+Claude mode のレート制限は 2 つの経路から入ります。得られる情報が違います。
+
+| 経路 | 得られるもの | 設定 |
+| --- | --- | --- |
+| bridge の turn が出す `rate_limit_event` | どの枠か、リセット時刻、追加利用中かどうか | 不要（自動） |
+| Claude Code の statusLine payload | **残量パーセント** | 下記の設定が必要 |
+
+`rate_limit_event` に使用率のフィールドは含まれないため、bridge の turn だけではパーセントを出せません。パーセントを出すには、対話セッションの Claude Code に statusLine hook を設定します。`~/.claude/settings.json` に次を加えます。
+
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "node /path/to/codex-remote-control-lab/scripts/capture-claude-rate-limits.js"
+  }
+}
+```
+
+`/path/to/...` は clone の absolute path に置き換えてください。設定すると、その端末で `claude` を対話起動するたびに `.phone-rate-limits.claude.json` が更新され、bridge がそれを読みます。
+
+statusLine は対話セッションの機能なので、`claude -p`（bridge の turn）では発火しません。つまりパーセントは「あなたが端末で Claude を使ったとき」に更新されます。cache が古い場合、bridge は stale として扱います。
+
+書き込み先は `PHONE_CLAUDE_RATE_LIMIT_CACHE_PATH` で変更できます。cache に入るのは正規化した表示用の値だけで、token や raw API response は保存しません。
+
 ## UI でできること
 
 - 最近の thread 一覧と resume
