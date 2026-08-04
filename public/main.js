@@ -154,7 +154,7 @@ const params = new URLSearchParams(location.search);
 const initialToken = params.get("token") || "";
 const initialProviderParam = (() => {
   const value = String(params.get("provider") || "").trim().toLowerCase();
-  return value === "codex" ? value : "";
+  return value === "codex" || value === "claude" ? value : "";
 })();
 let storedToken = "";
 try {
@@ -735,7 +735,7 @@ let lastResumeRefreshAt = 0;
 let lastWsMessageAt = 0;
 let selectedThreadRefreshActive = false;
 let activeProvider = "codex";
-let threadProvider = initialProviderParam;
+let threadProvider = initialProviderParam || normalizeProviderName(selectedThread.startsWith("claude:") ? "claude" : "");
 let threadProviderExplicit = Boolean(threadProvider);
 let workspaceFollowsSelectedThread = Boolean(selectedThread);
 const selectedThreadByProvider = new Map();
@@ -1201,6 +1201,7 @@ const serviceTierAliases = new Map([
 ]);
 const inlineModelChoices = {
   codex: ["gpt-5.5", "gpt-5.4"],
+  claude: ["sonnet", "opus", "haiku"],
 };
 
 function normalizeReasoning(value) {
@@ -1226,6 +1227,7 @@ function labelForModel(model) {
 function displayModelName(model) {
   const value = String(model || "");
   if (/^gpt-/i.test(value)) return value.toUpperCase();
+  if (/^claude-/i.test(value)) return value.replace(/-/g, " ");
   return value ? value[0].toUpperCase() + value.slice(1) : "Model";
 }
 
@@ -1250,7 +1252,7 @@ function providerSupportsServiceTier() {
 
 function normalizeProviderName(provider) {
   const value = String(provider || "").trim().toLowerCase();
-  if (value === "codex") return value;
+  if (value === "codex" || value === "claude") return value;
   return "";
 }
 
@@ -1259,7 +1261,7 @@ function currentThreadProvider() {
 }
 
 function providerLabel(provider) {
-  return "Codex";
+  return provider === "claude" ? "Claude" : "Codex";
 }
 
 function setActiveProvider(provider) {
@@ -5201,8 +5203,7 @@ function renderLocalSettings(payload) {
   const active = payload.active || {};
   const settings = payload.settings || {};
   const options = payload.options || {};
-  const currentProvider = "codex";
-  const modelsByProvider = options.modelsByProvider || { codex: options.models || [] };
+  const modelsByProvider = options.modelsByProvider || { [active.provider || "codex"]: options.models || [] };
   const defaultModels = options.defaultModels || {};
   let workspaceItems = options.workspaces || [];
 
@@ -5210,7 +5211,7 @@ function renderLocalSettings(payload) {
   modelLabel.className = "local-settings-current";
   modelLabel.innerHTML = `
     <span>現在</span>
-    <strong>${escapeHtml(`Codex / ${active.model || "unknown"}`)}</strong>
+    <strong>${escapeHtml(`${active.provider || "codex"} / ${active.model || "unknown"}`)}</strong>
     <code>${escapeHtml(shortenPath(active.workdir || ""))}</code>
   `;
   group.appendChild(modelLabel);
@@ -5218,13 +5219,13 @@ function renderLocalSettings(payload) {
   const modelSelect = document.createElement("select");
   modelSelect.className = "settings-select";
 
-  function modelChoicesForProvider(provider = currentProvider) {
+  function modelChoicesForProvider(provider) {
     return modelsByProvider[provider] || options.models || [];
   }
 
-  function preferredModelForProvider(provider = currentProvider) {
-    if (settings.model) return settings.model;
-    if (active.model) return active.model;
+  function preferredModelForProvider(provider) {
+    if (settings.provider === provider && settings.model) return settings.model;
+    if (active.provider === provider && active.model) return active.model;
     return defaultModels[provider] || modelChoicesForProvider(provider)[0] || selectedModel || "";
   }
 
@@ -5240,7 +5241,17 @@ function renderLocalSettings(payload) {
     modelSelect.value = selectedValue || modelSelect.options[0]?.value || "";
   }
 
-  renderModelSelectForProvider(currentProvider);
+  const providerSelect = document.createElement("select");
+  providerSelect.className = "settings-select";
+  const providerValues = new Set([settings.provider, active.provider, ...(options.providers || ["codex", "claude"])].filter(Boolean));
+  for (const providerValue of providerValues) {
+    const option = document.createElement("option");
+    option.value = providerValue;
+    option.textContent = providerValue;
+    providerSelect.appendChild(option);
+  }
+  providerSelect.value = currentThreadProvider() || settings.provider || active.provider || "codex";
+  renderModelSelectForProvider(providerSelect.value);
 
   const workspaceSelect = document.createElement("select");
   workspaceSelect.className = "settings-select";
@@ -5270,8 +5281,9 @@ function renderLocalSettings(payload) {
   historyLabel.append(historyInput, document.createTextNode("履歴同期"));
 
   function updateProviderDependentControls() {
-    renderModelSelectForProvider(currentProvider);
-    historyInput.disabled = false;
+    const nextProvider = providerSelect.value || "codex";
+    renderModelSelectForProvider(nextProvider);
+    historyInput.disabled = nextProvider !== "codex";
     historyLabel.classList.toggle("disabled", historyInput.disabled);
   }
 
@@ -5282,6 +5294,7 @@ function renderLocalSettings(payload) {
   const form = document.createElement("form");
   form.className = "settings-form";
   form.append(
+    settingField("使用AI", providerSelect),
     settingField("モデル", modelSelect),
     settingField("作業場所", workspaceSelect),
     settingField("候補にないフォルダを追加", manualRow),
@@ -5301,6 +5314,12 @@ function renderLocalSettings(payload) {
   actions.append(saveButton, restartButton);
   form.appendChild(actions);
 
+  providerSelect.addEventListener("change", () => {
+    const nextProvider = providerSelect.value || "codex";
+    updateProviderDependentControls();
+    switchThreadProvider(nextProvider);
+    setSettingsStatus(status, "使用AIを切り替えました。保存するとこのポートの既定になります。");
+  });
   updateProviderDependentControls();
 
   addWorkspaceButton.addEventListener("click", async () => {
@@ -5332,7 +5351,7 @@ function renderLocalSettings(payload) {
     setSettingsStatus(status, "保存中...");
     try {
       const result = await apiPost("/api/local-settings", {
-        provider: currentProvider,
+        provider: providerSelect.value,
         model: modelSelect.value,
         workdir: workspaceSelect.value,
         historySyncEnabled: historyInput.checked,
@@ -5340,7 +5359,7 @@ function renderLocalSettings(payload) {
       setSelectedModel(modelSelect.value);
       workspaceItems = result.options?.workspaces || workspaceItems;
       renderWorkspaceOptions(workspaceSelect, workspaceItems, result.settings?.workdir || workspaceSelect.value);
-      switchThreadProvider(currentProvider);
+      switchThreadProvider(providerSelect.value);
       setSettingsStatus(status, result.restartRequired ? "保存しました。作業場所やモデルは再起動で既定に反映します。" : "保存しました。", result.restartRequired ? "warning" : "");
       addStatus("起動設定を保存しました。");
     } catch (error) {
