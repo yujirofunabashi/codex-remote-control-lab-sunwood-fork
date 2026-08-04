@@ -6632,3 +6632,51 @@ body[data-main-view="terminal"] .pwa-install-hint {
   max-height: 148px;
 }
 }
+
+.workspace-browser {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.workspace-browser-path {
+  font-size: 12px;
+  color: var(--muted, #6b6b76);
+  word-break: break-all;
+}
+
+.workspace-browser-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--border, rgba(120, 120, 140, 0.28));
+  border-radius: 10px;
+  padding: 6px;
+}
+
+.workspace-browser-row {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  padding: 10px 10px;
+  text-align: left;
+  width: 100%;
+  word-break: break-all;
+}
+
+.workspace-browser-row:hover,
+.workspace-browser-row:focus-visible {
+  background: var(--surface-hover, rgba(120, 120, 140, 0.14));
+}
+
+.workspace-browser-empty {
+  color: var(--muted, #6b6b76);
+  font-size: 12px;
+  padding: 10px;
+}

@@ -884,12 +884,15 @@ function validateModel(input) {
 }
 
 function readWorkspacePrefs() {
-  if (!fs.existsSync(workspacePrefsPath)) return { recent: [] };
+  if (!fs.existsSync(workspacePrefsPath)) return { recent: [], bookmarks: [] };
   try {
     const prefs = JSON.parse(fs.readFileSync(workspacePrefsPath, "utf8"));
-    return { recent: Array.isArray(prefs.recent) ? prefs.recent : [] };
+    return {
+      recent: Array.isArray(prefs.recent) ? prefs.recent : [],
+      bookmarks: Array.isArray(prefs.bookmarks) ? prefs.bookmarks : [],
+    };
   } catch {
-    return { recent: [] };
+    return { recent: [], bookmarks: [] };
   }
 }
 
@@ -908,8 +911,92 @@ function rememberWorkspace(workspacePath) {
   const recent = [target, ...prefs.recent.filter((item) => path.resolve(item) !== target)]
     .filter((item) => fs.existsSync(item) && fs.statSync(item).isDirectory())
     .slice(0, 12);
-  writeWorkspacePrefs({ recent });
+  writeWorkspacePrefs({ ...prefs, recent });
   return target;
+}
+
+// Recent is a rolling window of twelve, so a folder you return to every few
+// weeks falls out of it. A bookmark is the way to say "keep this one".
+function setWorkspaceBookmark(workspacePath, pinned) {
+  const target = validateWorkdir(workspacePath);
+  const prefs = readWorkspacePrefs();
+  const without = prefs.bookmarks.filter((item) => path.resolve(item) !== target);
+  const bookmarks = (pinned ? [target, ...without] : without)
+    .filter((item) => fs.existsSync(item) && fs.statSync(item).isDirectory())
+    .slice(0, 40);
+  writeWorkspacePrefs({ ...prefs, bookmarks });
+  return { path: target, pinned: bookmarks.some((item) => path.resolve(item) === target) };
+}
+
+function workspaceBookmarks() {
+  return readWorkspacePrefs().bookmarks.filter((item) => {
+    try {
+      return isUnderHome(item) && fs.statSync(item).isDirectory();
+    } catch {
+      return false;
+    }
+  });
+}
+
+// Walking the filesystem from a phone means this endpoint is reachable over the
+// LAN or a mesh VPN, so it stays inside the same boundary validateWorkdir
+// enforces: below the home folder, directories only, no symlink escape.
+function browseWorkspaceDirectories(input) {
+  const raw = String(input || "").trim();
+  const target = raw ? path.resolve(raw) : os.homedir();
+  if (!isUnderHome(target)) throw errorWithStatus("参照できるのはホームフォルダ配下だけです。", 400);
+
+  let stat;
+  try {
+    stat = fs.statSync(target);
+  } catch {
+    throw errorWithStatus("フォルダが見つかりません。", 404);
+  }
+  if (!stat.isDirectory()) throw errorWithStatus("フォルダではありません。", 400);
+
+  let entries = [];
+  try {
+    entries = fs.readdirSync(target, { withFileTypes: true });
+  } catch {
+    throw errorWithStatus("フォルダを読み取れません。", 403);
+  }
+
+  const pinned = new Set(workspaceBookmarks().map((item) => path.resolve(item)));
+  const children = [];
+  for (const entry of entries) {
+    if (entry.name.startsWith(".")) continue;
+    const childPath = path.join(target, entry.name);
+    let isDirectory = entry.isDirectory();
+    if (entry.isSymbolicLink()) {
+      // Resolve before trusting it: a link can point anywhere.
+      try {
+        const resolved = fs.realpathSync(childPath);
+        if (!isUnderHome(resolved) || !fs.statSync(resolved).isDirectory()) continue;
+        isDirectory = true;
+      } catch {
+        continue;
+      }
+    }
+    if (!isDirectory) continue;
+    children.push({
+      name: entry.name,
+      path: childPath,
+      isRepo: fs.existsSync(path.join(childPath, ".git")),
+      pinned: pinned.has(childPath),
+    });
+    if (children.length >= 200) break;
+  }
+  children.sort((a, b) => a.name.localeCompare(b.name, "ja"));
+
+  const home = path.resolve(os.homedir());
+  return {
+    path: target,
+    displayPath: displayPath(target),
+    parent: target === home ? null : path.dirname(target),
+    isRepo: fs.existsSync(path.join(target, ".git")),
+    pinned: pinned.has(target),
+    entries: children,
+  };
 }
 
 function workspaceOptionFor(workspacePath, group) {
@@ -976,6 +1063,7 @@ function workspaceOptions() {
   const devRoot = path.join(home, "WORK_LOCAL", "00_WORKSPACE", "開発");
   const miniRoot = path.join(home, "WORK_LOCAL", "00_MINI_WORKSPACE");
   const groups = [
+    { group: "ブックマーク", items: workspaceBookmarks(), preserveOrder: true },
     { group: "最近使ったフォルダ", items: readWorkspacePrefs().recent, preserveOrder: true },
     { group: "Gitリポ", items: [...collectGitWorkspaces(devRoot, 5), ...collectGitWorkspaces(miniRoot, 3)] },
     { group: "プロジェクト候補", items: [...collectProjectFolders(devRoot, 5), ...collectProjectFolders(miniRoot, 3)] },
@@ -4317,6 +4405,34 @@ async function main() {
       sendJson(res, 405, { error: "method not allowed" });
       return;
     }
+    if (url.pathname === "/api/workspaces/browse") {
+      if (!requireToken(url, phoneToken, res)) return;
+      if (req.method !== "GET") {
+        sendJson(res, 405, { error: "method not allowed" });
+        return;
+      }
+      try {
+        sendJson(res, 200, browseWorkspaceDirectories(url.searchParams.get("path")));
+      } catch (error) {
+        sendJson(res, error.statusCode || 400, { error: error.message });
+      }
+      return;
+    }
+    if (url.pathname === "/api/workspaces/bookmark") {
+      if (!requireToken(url, phoneToken, res)) return;
+      if (req.method !== "POST") {
+        sendJson(res, 405, { error: "method not allowed" });
+        return;
+      }
+      try {
+        const body = await readJsonBody(req);
+        const result = setWorkspaceBookmark(body.path || body.workdir, body.pinned !== false);
+        sendJson(res, 200, { ok: true, ...result, options: workspaceOptions() });
+      } catch (error) {
+        sendJson(res, error.statusCode || 400, { error: error.message });
+      }
+      return;
+    }
     if (url.pathname === "/api/local-settings") {
       if (!requireToken(url, phoneToken, res)) return;
       if (req.method === "GET") {
@@ -4728,6 +4844,9 @@ module.exports = {
   ClaudeBridge,
   approvalMcpConfig,
   bindBrowser,
+  browseWorkspaceDirectories,
+  setWorkspaceBookmark,
+  workspaceBookmarks,
   claudeEffortLevel,
   claudeModeCanPrompt,
   claudePermissionMode,

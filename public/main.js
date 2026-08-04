@@ -5317,6 +5317,98 @@ function renderLocalSettings(payload) {
   manualRow.className = "settings-inline-row";
   manualRow.append(manualInput, addWorkspaceButton);
 
+  // Typing an absolute path on a phone keyboard is the worst way to pick a
+  // folder, so the same choice is reachable by walking the tree instead.
+  const browser = document.createElement("div");
+  browser.className = "workspace-browser";
+  const browserPath = document.createElement("div");
+  browserPath.className = "workspace-browser-path";
+  const browserList = document.createElement("div");
+  browserList.className = "workspace-browser-list";
+  const browserBar = document.createElement("div");
+  browserBar.className = "settings-inline-row";
+  const browserUp = document.createElement("button");
+  browserUp.type = "button";
+  browserUp.className = "settings-inline-button";
+  browserUp.textContent = "↑ 上の階層";
+  const browserPick = document.createElement("button");
+  browserPick.type = "button";
+  browserPick.className = "settings-inline-button";
+  browserPick.textContent = "ここを選ぶ";
+  const browserPin = document.createElement("button");
+  browserPin.type = "button";
+  browserPin.className = "settings-inline-button";
+  browserBar.append(browserUp, browserPick, browserPin);
+  browser.append(browserPath, browserBar, browserList);
+
+  let browserCurrent = null;
+
+  function setBookmarkButton(pinned) {
+    browserPin.textContent = pinned ? "★ 解除" : "☆ ブックマーク";
+  }
+
+  async function openBrowserAt(targetPath) {
+    browserList.textContent = "読み込み中...";
+    try {
+      const result = await apiGet(`/api/workspaces/browse${targetPath ? `?path=${encodeURIComponent(targetPath)}` : ""}`);
+      browserCurrent = result;
+      browserPath.textContent = result.displayPath || result.path;
+      browserUp.disabled = !result.parent;
+      setBookmarkButton(result.pinned);
+      browserList.textContent = "";
+      if (!result.entries.length) {
+        const empty = document.createElement("div");
+        empty.className = "workspace-browser-empty";
+        empty.textContent = "このフォルダの下にフォルダはありません。";
+        browserList.appendChild(empty);
+        return;
+      }
+      for (const entry of result.entries) {
+        const row = document.createElement("button");
+        row.type = "button";
+        row.className = "workspace-browser-row";
+        row.textContent = `${entry.isRepo ? "◆ " : ""}${entry.pinned ? "★ " : ""}${entry.name}`;
+        row.addEventListener("click", () => openBrowserAt(entry.path));
+        browserList.appendChild(row);
+      }
+    } catch (error) {
+      browserList.textContent = "";
+      setSettingsStatus(status, error.message, "error");
+    }
+  }
+
+  browserUp.addEventListener("click", () => {
+    if (browserCurrent?.parent) openBrowserAt(browserCurrent.parent);
+  });
+
+  browserPick.addEventListener("click", async () => {
+    if (!browserCurrent) return;
+    try {
+      const result = await apiPost("/api/workspaces", { path: browserCurrent.path });
+      workspaceItems = result.options || workspaceItems;
+      renderWorkspaceOptions(workspaceSelect, workspaceItems, browserCurrent.path);
+      setSettingsStatus(status, "作業場所に選びました。保存すると次回起動でも使われます。");
+    } catch (error) {
+      setSettingsStatus(status, error.message, "error");
+    }
+  });
+
+  browserPin.addEventListener("click", async () => {
+    if (!browserCurrent) return;
+    try {
+      const result = await apiPost("/api/workspaces/bookmark", { path: browserCurrent.path, pinned: !browserCurrent.pinned });
+      browserCurrent.pinned = result.pinned;
+      setBookmarkButton(result.pinned);
+      workspaceItems = result.options || workspaceItems;
+      renderWorkspaceOptions(workspaceSelect, workspaceItems, workspaceSelect.value);
+      setSettingsStatus(status, result.pinned ? "ブックマークしました。" : "ブックマークを解除しました。");
+    } catch (error) {
+      setSettingsStatus(status, error.message, "error");
+    }
+  });
+
+  openBrowserAt(settings.workdir || active.workdir || "");
+
   const historyLabel = document.createElement("label");
   historyLabel.className = "settings-check";
   const historyInput = document.createElement("input");
@@ -5341,7 +5433,8 @@ function renderLocalSettings(payload) {
     settingField("使用AI", providerSelect),
     settingField("モデル", modelSelect),
     settingField("作業場所", workspaceSelect),
-    settingField("候補にないフォルダを追加", manualRow),
+    settingGroup("フォルダをたどって選ぶ", browser),
+    settingGroup("パスを直接入力", manualRow),
     historyLabel,
     status,
   );
@@ -5474,6 +5567,18 @@ function settingField(labelText, control) {
   span.textContent = labelText;
   label.append(span, control);
   return label;
+}
+
+// A <label> forwards clicks anywhere inside it to its first labelable control,
+// so a field holding several buttons fires the wrong one. Group those with a
+// plain div instead.
+function settingGroup(labelText, control) {
+  const group = document.createElement("div");
+  group.className = "settings-field";
+  const span = document.createElement("span");
+  span.textContent = labelText;
+  group.append(span, control);
+  return group;
 }
 
 function shortenPath(value) {
