@@ -20,6 +20,22 @@ For remote access outside a trusted local network, prefer:
 - a VPN
 - a mesh network with device-level authentication
 
+## Handing the URL to a Phone Off-LAN
+
+Once a mesh VPN or VPN reaches this machine, the bridge already advertises that interface: it binds `0.0.0.0` in token mode and lists every non-internal IPv4 address, so a Tailscale `100.64.0.0/10` address appears alongside the LAN one. Nothing in the bridge needs changing.
+
+`npm run url:remote` assembles that URL and hands it over without putting the token on screen:
+
+```bash
+npm run url:remote            # prefers the mesh address, token masked
+npm run url:remote -- --qr    # scan it from the phone (needs qrencode)
+npm run url:remote -- --copy  # straight to the clipboard, nothing printed
+```
+
+It reads `PHONE_TOKEN` or `.phone-token`, picks up the MagicDNS name when `tailscale` is on PATH, and masks the token unless you pass `--reveal`. Prefer `--qr` or `--copy`: a masked URL is safe to leave on screen, a revealed one is a live access key.
+
+Do not paste a tokenized URL into chat, issues, or screenshots to move it between devices. Use the clipboard, a QR scan, or the private notification channels in [Phone Bridge](/guide/phone-bridge).
+
 ## Token Handling
 
 The bridge creates `.phone-token` with mode `0600` when `PHONE_TOKEN` is not provided. Delete `.phone-token` to rotate the generated token.
