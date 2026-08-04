@@ -68,6 +68,7 @@ const statusButton = document.querySelector("#statusButton");
 const chatViewButton = document.querySelector("#chatViewButton");
 const terminalViewButton = document.querySelector("#terminalViewButton");
 const chatUnreadBadge = document.querySelector("#chatUnreadBadge");
+const chatViewLabel = document.querySelector("#chatViewLabel");
 const terminalUnreadBadge = document.querySelector("#terminalUnreadBadge");
 const prevThreadButton = document.querySelector("#prevThread");
 const nextThreadButton = document.querySelector("#nextThread");
@@ -1271,6 +1272,9 @@ function setActiveProvider(provider) {
     threadProvider = activeProvider;
   }
   document.documentElement.dataset.provider = activeProvider;
+  // The chat tab used to be a hardcoded "Codex". With several bridges open at
+  // once, every tab read the same regardless of which agent was behind it.
+  if (chatViewLabel) chatViewLabel.textContent = providerLabel(currentThreadProvider());
   updateModelButton();
 }
 
