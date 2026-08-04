@@ -1374,6 +1374,51 @@ function approvalMcpConfig(socketPath) {
   });
 }
 
+function truncateStatusText(value, limit = 300) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  return text.length > limit ? `${text.slice(0, limit)}…` : text;
+}
+
+function claudeToolPath(value) {
+  const raw = String(value || "");
+  if (!raw) return "";
+  return path.isAbsolute(raw) ? relativeDisplayPath(raw) || raw : raw;
+}
+
+// Mirrors the Codex side's live status vocabulary (`$ cmd`, `file changes: …`)
+// so both providers read the same way in the collapsed status log.
+function summarizeClaudeToolUse(block) {
+  if (!block || block.type !== "tool_use") return null;
+  const name = String(block.name || "");
+  const input = block.input || {};
+  if (name === "Bash" || name === "BashOutput") return truncateStatusText(`$ ${input.command || input.description || ""}`);
+  if (name === "Edit" || name === "Write" || name === "NotebookEdit") {
+    return truncateStatusText(`file changes: ${claudeToolPath(input.file_path || input.notebook_path)}`);
+  }
+  if (name === "Read") return truncateStatusText(`read: ${claudeToolPath(input.file_path)}`);
+  if (name === "Glob") return truncateStatusText(`glob: ${input.pattern || ""}`);
+  if (name === "Grep") return truncateStatusText(`grep: ${input.pattern || ""}`);
+  if (name === "Task" || name === "Agent") {
+    return truncateStatusText(`subagent: ${input.description || input.subagent_type || ""}`);
+  }
+  if (name === "WebFetch") return truncateStatusText(`fetch: ${input.url || ""}`);
+  if (name === "WebSearch") return truncateStatusText(`web search: ${input.query || ""}`);
+  if (name.startsWith("mcp__")) return truncateStatusText(`mcp: ${name.slice("mcp__".length).replace(/__/g, " / ")}`);
+  if (!name) return null;
+  return truncateStatusText(name);
+}
+
+// Successful results are already implied by the next status line, so only
+// failures are worth surfacing while a turn is running.
+function summarizeClaudeToolResult(block) {
+  if (!block || block.type !== "tool_result" || !block.is_error) return null;
+  const content = block.content;
+  const text = Array.isArray(content)
+    ? content.map((part) => (typeof part === "string" ? part : part?.text || "")).join(" ")
+    : content;
+  return truncateStatusText(`failed: ${text || "tool returned an error"}`);
+}
+
 function summarizeClaudeAttachmentPrompt(text, savedAttachments) {
   if (!savedAttachments.length) return text;
   const lines = savedAttachments.map((file) => `- ${file.name}: ${file.absolutePath}`);
@@ -2109,6 +2154,20 @@ class ClaudeBridge {
         this.emit("assistantDelta", { text: delta });
         return;
       }
+      if (msg.type === "assistant") {
+        for (const block of msg.message?.content || []) {
+          const text = summarizeClaudeToolUse(block);
+          if (text) this.emit("status", { text });
+        }
+        return;
+      }
+      if (msg.type === "user") {
+        for (const block of msg.message?.content || []) {
+          const text = summarizeClaudeToolResult(block);
+          if (text) this.emit("status", { text });
+        }
+        return;
+      }
       if (msg.type === "result") {
         if (!assistantText && msg.result) {
           assistantText = String(msg.result);
@@ -2573,5 +2632,7 @@ if (require.main === module) {
     safePathWithin,
     safeRelativePath,
     safeWorkdirPath,
+    summarizeClaudeToolResult,
+    summarizeClaudeToolUse,
   };
 }
