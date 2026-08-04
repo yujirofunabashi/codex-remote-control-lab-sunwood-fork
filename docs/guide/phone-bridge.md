@@ -11,6 +11,16 @@ npm ci
 npm run phone
 ```
 
+To start the same bridge UI against Claude Code instead of Codex, use the experimental Claude provider:
+
+```bash
+npm run phone:claude
+```
+
+This holds one `claude -p --input-format stream-json --output-format stream-json` process open per bridge and reads same-workdir Claude Code JSONL sessions for the sidebar. Turns stream into the running process, so a follow-up skips session startup; changing the model or access mode retires the process and starts a fresh one. You can also select it explicitly with `PHONE_AGENT_PROVIDER=claude npm run phone`.
+
+Approvals reach the same UI as Codex. Claude Code spawns a stdio MCP server (`scripts/claude-approval-mcp.js`) that dials back to the bridge over a per-bridge Unix socket, so no port is bound and concurrent bridges or concurrent phone servers cannot collide. The transport fails closed: an unreachable socket, a timeout (`PHONE_APPROVAL_TIMEOUT_MS`, default 5 minutes), or a bridge with no browser attached all deny. Codex-only features such as app-server plugin lookup and history sync remain disabled in Claude mode.
+
 The command prints one URL per LAN IPv4 address:
 
 ```text
@@ -20,6 +30,24 @@ http://192.168.11.8:45214/?token=...
 Open the exact printed URL from a phone or another browser on the same network. Use the phone to send prompts, approve work, inspect artifacts, and then resume the same thread from the desktop browser when you return to the PC.
 
 The printed URL includes `?token=...`. Keep that URL private. To stop the bridge, press `Ctrl+C` in the terminal that is running `npm run phone`. If the terminal is closed or the PC restarts, start it again with `npm run phone`.
+
+For repeatable local settings, copy the public-safe template:
+
+```bash
+cp .env.example .env
+```
+
+For localhost-only UI debugging, you can disable the token requirement explicitly:
+
+```bash
+PHONE_DEBUG_NO_TOKEN=1 npm run phone
+```
+
+For repeated local debugging, put `PHONE_DEBUG_NO_TOKEN=1` in the repo-local `.env` file. The bridge loads `.env` before resolving this mode.
+
+This prints a tokenless `http://127.0.0.1:45214/` URL and binds the bridge to `127.0.0.1`. It is not for phones, LAN sharing, tunnels, or shared networks.
+
+For tokenless debugging from another device on a trusted LAN, set `PHONE_DEBUG_BIND=lan` together with `PHONE_DEBUG_NO_TOKEN=1`. This binds the bridge to `0.0.0.0` and prints tokenless LAN URLs. Use it only on a private network you control.
 
 ## Runtime Layout
 
@@ -50,21 +78,34 @@ In this mode, OCdex does not start a new app-server. It uses the app-server behi
 
 ## Useful Environment Variables
 
-```bash
-PHONE_UI_PORT=45214 npm run phone
-CODEX_WORKDIR=/Users/admin/Prj/some-project npm run phone
-CODEX_MODEL=gpt-5.4 npm run phone
-CODEX_APP_SERVER_SOCK=/Users/admin/.codex/app-server-control/app-server-control.sock npm run phone
-CODEX_APP_SERVER_URL=ws://127.0.0.1:45213 npm run phone
-CODEX_HISTORY_SYNC=0 npm run phone
-PHONE_TOKEN=choose-your-own-token npm run phone
-PHONE_NTFY_TOPIC=your-private-topic npm run phone
-PHONE_PUSHOVER_TOKEN=app-token PHONE_PUSHOVER_USER=user-key npm run phone
-PHONE_DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/... npm run phone
-PHONE_NOTIFY_TIMEOUT_MS=5000 npm run phone
+```text
+PHONE_UI_PORT=45214
+CODEX_WORKDIR=/Users/admin/Prj/some-project
+CODEX_MODEL=gpt-5.4
+PHONE_AGENT_PROVIDER=codex
+CLAUDE_WORKDIR=/Users/admin/Prj/some-project
+CLAUDE_MODEL=sonnet
+CODEX_APP_SERVER_SOCK=/Users/admin/.codex/app-server-control/app-server-control.sock
+CODEX_APP_SERVER_URL=ws://127.0.0.1:45213
+CODEX_HISTORY_SYNC=1
+PHONE_CODEX_RATE_LIMIT_REFRESH_COMMAND="node scripts/read-desktop-rate-limits.js"
+PHONE_TOKEN=choose-your-own-token
+PHONE_DEBUG_NO_TOKEN=1
+PHONE_DEBUG_BIND=lan
+PHONE_NTFY_TOPIC=your-private-topic
+PHONE_PUSHOVER_TOKEN=app-token
+PHONE_PUSHOVER_USER=user-key
+PHONE_DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
+PHONE_NOTIFY_TIMEOUT_MS=5000
 ```
 
+See `.env.example` for the full commented template.
+
+Codex rate-limit display is optional. Set `PHONE_CODEX_RATE_LIMIT_REFRESH_COMMAND="node scripts/read-desktop-rate-limits.js"` to let the bridge read the local Codex auth file at `~/.codex/auth.json`, call the usage endpoint, normalize only the displayed remaining percentage/reset fields, and cache that small snapshot in `.phone-rate-limits.json`. The legacy `PHONE_RATE_LIMIT_REFRESH_COMMAND` name is still honored for Codex only, so Claude mode cannot accidentally show Codex limits. The bridge does not cache tokens or raw API responses; failures fall back to the last provider cache or `unavailable`.
+
 Startup notifications are optional. If `PHONE_NTFY_TOPIC` is set, the bridge posts the ready URLs to that ntfy topic. If `PHONE_PUSHOVER_TOKEN` and `PHONE_PUSHOVER_USER` are set, it sends the same URLs through Pushover. If `PHONE_DISCORD_WEBHOOK_URL` is set, it posts them to Discord. `npm run phone` loads local `.env` values before reading these variables. `PHONE_NTFY_SERVER` defaults to `https://ntfy.sh` and must use HTTPS. Notification requests time out after `PHONE_NOTIFY_TIMEOUT_MS`, which defaults to 5000 ms. When a LAN IPv4 URL is available, the message includes the tokenized bridge URL, so use a private/protected topic, account, or channel and keep notification credentials out of Git. If no LAN IPv4 URL is detected, the notification omits provider link fields and tells you to check the host console.
+
+Tokenless debug mode intentionally skips startup notifications. If you manually send a `PHONE_DEBUG_NO_TOKEN=1` plus `PHONE_DEBUG_BIND=lan` URL to Discord, only do it with your own private/trusted webhook and channel. Anyone who can reach that LAN URL can operate the bridge without a token.
 
 Background thread-list polling suppresses repeated identical errors. A transient app-server restart or token mismatch should not continuously fill the chat log with the same `/api/threads` failure.
 
@@ -78,5 +119,5 @@ Background thread-list polling suppresses repeated identical errors. A transient
 - repository artifact preview
 - Markdown rendering for chat and artifacts
 - browser image attachments passed to Codex as `localImage` inputs
-- simple, cyberpunk, and botanical color themes from the settings panel
+- simple, cyberpunk, botanical, and Stigmata color themes from the settings panel
 - LAN sharing for a single bridge-managed thread

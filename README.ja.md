@@ -40,6 +40,12 @@ npm ci
 npm run phone
 ```
 
+同じ browser bridge UI を Claude Code 向けに起動する experimental provider もあります。
+
+```bash
+npm run phone:claude
+```
+
 次のような URL が表示されます。
 
 ```text
@@ -47,6 +53,24 @@ http://192.168.11.8:45214/?token=...
 ```
 
 同じ Wi-Fi/LAN 上のスマホで、その URL をそのまま開きます。
+
+繰り返し使う local 設定は、example をコピーして編集できます。
+
+```bash
+cp .env.example .env
+```
+
+token なしで UI をローカルデバッグする場合は、次を使います。
+
+```bash
+PHONE_DEBUG_NO_TOKEN=1 npm run phone
+```
+
+local `.env` に `PHONE_DEBUG_NO_TOKEN=1` を置いても、同じ localhost 専用 mode になります。
+
+このデバッグモードでは bridge を `127.0.0.1` に bind し、`?token=...` なしの URL を表示します。LAN、tunnel、shared network では使わないでください。
+
+信頼できる LAN 上の別端末から token なしで触りたい場合だけ、`PHONE_DEBUG_NO_TOKEN=1` と一緒に `PHONE_DEBUG_BIND=lan` を置きます。この場合は bridge を `0.0.0.0` に bind し、token なし LAN URL を表示します。自分が管理する private network でだけ使ってください。
 
 ## 🧭 構成
 
@@ -79,39 +103,63 @@ local smoke test では、WebSocket app-server 経由の `initialize` / `thread/
 
 便利な環境変数:
 
-```bash
-PHONE_UI_PORT=45214 npm run phone
-CODEX_WORKDIR=/Users/admin/Prj/some-project npm run phone
-CODEX_MODEL=gpt-5.4 npm run phone
-CODEX_APP_SERVER_SOCK=/Users/admin/.codex/app-server-control/app-server-control.sock npm run phone
-CODEX_APP_SERVER_URL=ws://127.0.0.1:45213 npm run phone
-CODEX_HISTORY_SYNC=0 npm run phone
-PHONE_TOKEN=choose-your-own-token npm run phone
-PHONE_NTFY_TOPIC=your-private-topic npm run phone
-PHONE_PUSHOVER_TOKEN=app-token PHONE_PUSHOVER_USER=user-key npm run phone
-PHONE_DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/... npm run phone
-PHONE_NOTIFY_TIMEOUT_MS=5000 npm run phone
+```text
+PHONE_UI_PORT=45214
+CODEX_WORKDIR=/Users/admin/Prj/some-project
+CODEX_MODEL=gpt-5.4
+PHONE_AGENT_PROVIDER=codex
+CLAUDE_WORKDIR=/Users/admin/Prj/some-project
+CLAUDE_MODEL=sonnet
+CODEX_APP_SERVER_SOCK=/Users/admin/.codex/app-server-control/app-server-control.sock
+CODEX_APP_SERVER_URL=ws://127.0.0.1:45213
+CODEX_HISTORY_SYNC=1
+PHONE_CODEX_RATE_LIMIT_REFRESH_COMMAND="node scripts/read-desktop-rate-limits.js"
+PHONE_TOKEN=choose-your-own-token
+PHONE_DEBUG_NO_TOKEN=1
+PHONE_DEBUG_BIND=lan
+PHONE_NTFY_TOPIC=your-private-topic
+PHONE_PUSHOVER_TOKEN=app-token
+PHONE_PUSHOVER_USER=user-key
+PHONE_DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
+PHONE_NOTIFY_TIMEOUT_MS=5000
 ```
+
+公開安全な template は [.env.example](.env.example) にあります。
 
 `CODEX_APP_SERVER_SOCK` または `CODEX_APP_SERVER_URL` を指定すると、bridge は新しい app-server を起動せず、既存の headless app-server に接続します。Codex Desktop 本体とライブ同期したい場合は、Desktop の通常ローカル会話画面ではなく、Desktop の Remote Connection と OCdex を同じ headless app-server に接続してください。Desktop の通常ローカル会話画面は専用の `stdio` app-server を使うため、外部 bridge からその画面へ直接ライブ注入する公開経路はありません。
 
 履歴同期は既定で有効です。Web 側の turn 完了後、bridge は `thread/read` と scan-backed な `thread/list` を実行して app-server の履歴/index を温めます。`/api/threads` も state DB 限定ではなく scan-and-repair で取得します。これにより Codex Desktop 側で thread を開き直す/再読込したときに、更新済み session を見つけやすくします。ただし、通常の Desktop 会話画面へライブ注入するものではありません。追加の履歴 refresh を止めたい場合は `CODEX_HISTORY_SYNC=0` を指定します。
 
+`npm run phone:claude` は `PHONE_AGENT_PROVIDER=claude` を設定し、bridge ごとに `claude -p --input-format stream-json --output-format stream-json` を1つ常駐させます。sidebar は同じ workdir の Claude Code JSONL session を読みます。turn は常駐プロセスへ流し込むため、2回目以降は session 起動を省けます。model や access mode を変更した turn は、古い設定のまま実行しないよう新しい process を起動し直します。
+
+承認は Codex と同じ UI に届きます。Claude Code が stdio MCP server (`scripts/claude-approval-mcp.js`) を起動し、bridge ごとの Unix socket 経由で親 bridge に問い合わせます。port を使わないため、複数 bridge や複数 phone server を同時に立てても衝突しません。経路は fail closed です。socket 不達、タイムアウト (`PHONE_APPROVAL_TIMEOUT_MS`、既定5分)、接続端末なしのいずれも拒否になります。フルアクセスを選ぶと `bypassPermissions` で動作し、承認自体が発生しません。
+
+Codex 専用の app-server plugin lookup と history sync は Claude mode では無効です。
+
+Codex rate-limit 表示は任意です。`PHONE_CODEX_RATE_LIMIT_REFRESH_COMMAND="node scripts/read-desktop-rate-limits.js"` を設定すると、local Codex auth を読み、usage endpoint を呼び、remaining percentage / reset metadata だけを正規化して `.phone-rate-limits.json` に表示用 snapshot として cache します。
+
 起動通知は opt-in です。`PHONE_NTFY_TOPIC` がある場合は ntfy topic へ、`PHONE_PUSHOVER_TOKEN` と `PHONE_PUSHOVER_USER` がある場合は Pushover へ、`PHONE_DISCORD_WEBHOOK_URL` がある場合は Discord へ bridge URL を送ります。`npm run phone` は local `.env` を読んでから環境変数を参照します。`PHONE_NTFY_SERVER` は既定で `https://ntfy.sh`、HTTPS 必須です。通知本文には token 付き URL が入るので、private/protected topic、account、channel を使い、値は local environment variables に置いてください。
+
+token なしデバッグモードでは、起動通知は意図的にスキップされます。`PHONE_DEBUG_NO_TOKEN=1` と `PHONE_DEBUG_BIND=lan` の URL を手動で Discord に送る場合は、自分の private/trusted な webhook・channel 前提で扱ってください。同じ LAN 上でその URL を開ける人は、token なしで bridge を操作できます。
 
 現在の bridge は次をサポートします。
 
 - Codex Desktop 風の sidebar / conversation / artifact panel / composer layout
 - 最近の thread 一覧と直接 resume
 - Desktop の開き直し/再読込に寄せた既定の履歴同期 refresh
+- `npm run phone:claude` による experimental Claude provider mode
+- local refresh command による任意の Codex rate-limit status 表示
+- installed skill 向けの mobile slash command completion
+- chat / review digest card からの mobile-safe artifact open
 - plugin、model、config/auth、automation status panel
+- interrupt、reconnect、completion、failure、approval の run-state indicator
 - 次 turn 向けの approval / sandbox mode control
 - chat と artifact preview の Markdown rendering
 - Markdown image link の inline rendering
 - browser で選んだ画像を Codex `localImage` input として送信
 - local repository image artifact を token-protected file route から表示
 - status/tool log の折りたたみ表示
-- simple / cyberpunk / botanical のカラーテーマを browser local storage に保存
+- simple / cyberpunk / botanical / Stigmata のカラーテーマを browser local storage に保存
 
 ## 🖼️ UI Evidence
 
@@ -127,31 +175,39 @@ Theme comparison:
 
 <table>
   <tr>
-    <td align="center" width="33%">
+    <td align="center" width="25%">
       <img src="docs/assets/theme-simple-desktop.png" alt="Simple theme desktop screenshot" width="280"><br>
       <sub>シンプル desktop</sub>
     </td>
-    <td align="center" width="33%">
+    <td align="center" width="25%">
       <img src="docs/assets/theme-cyberpunk-desktop.png" alt="Cyberpunk theme desktop screenshot" width="280"><br>
       <sub>サイバーパンク desktop</sub>
     </td>
-    <td align="center" width="33%">
+    <td align="center" width="25%">
       <img src="docs/assets/theme-botanical-desktop.png" alt="Botanical theme desktop screenshot" width="280"><br>
       <sub>ボタニカル desktop</sub>
     </td>
+    <td align="center" width="25%">
+      <img src="docs/assets/theme-stigmata-desktop.png" alt="Stigmata theme desktop screenshot" width="280"><br>
+      <sub>Stigmata desktop</sub>
+    </td>
   </tr>
   <tr>
-    <td align="center" width="33%">
+    <td align="center" width="25%">
       <img src="docs/assets/theme-simple-mobile-settings.png" alt="Simple theme mobile settings screenshot" width="180"><br>
       <sub>シンプル設定</sub>
     </td>
-    <td align="center" width="33%">
+    <td align="center" width="25%">
       <img src="docs/assets/theme-cyberpunk-mobile-settings.png" alt="Cyberpunk theme mobile settings screenshot" width="180"><br>
       <sub>サイバーパンク設定</sub>
     </td>
-    <td align="center" width="33%">
+    <td align="center" width="25%">
       <img src="docs/assets/theme-botanical-mobile-settings.png" alt="Botanical theme mobile settings screenshot" width="180"><br>
       <sub>ボタニカル設定</sub>
+    </td>
+    <td align="center" width="25%">
+      <img src="docs/assets/theme-stigmata-mobile-settings.png" alt="Stigmata theme mobile settings screenshot" width="180"><br>
+      <sub>Stigmata設定</sub>
     </td>
   </tr>
 </table>
@@ -196,6 +252,7 @@ Mobile flow:
 - Codex app-server は `127.0.0.1` に保ちます。
 - 認証なしの Codex app-server を LAN や public interface に直接 bind しないでください。
 - 表示された `?token=...` 付き URL は local access key として扱い、公開 issue、共有チャット、スクリーンショット、配信には載せないでください。
+- `PHONE_DEBUG_NO_TOKEN=1` は localhost デバッグ用です。信頼できる private LAN に token なしで出す場合だけ `PHONE_DEBUG_BIND=lan` を一緒に使ってください。
 - bridge は `Ctrl+C` で停止します。terminal を閉じた場合や PC を再起動した後は、もう一度 `npm run phone` を実行します。
 - trusted LAN 外から使う場合は SSH forwarding、VPN、mesh network を優先してください。
 - 認証なしの public tunnel や raw port forwarding で bridge を公開しないでください。
@@ -207,10 +264,11 @@ Mobile flow:
 
 - [English docs](https://sunwood-ai-labs.github.io/codex-remote-control-lab/)
 - [日本語ドキュメント](https://sunwood-ai-labs.github.io/codex-remote-control-lab/ja/)
-- [v0.2.0 リリースノート](https://sunwood-ai-labs.github.io/codex-remote-control-lab/ja/guide/releases/v0.2.0)
+- [v0.4.0 リリースノート](https://sunwood-ai-labs.github.io/codex-remote-control-lab/ja/guide/releases/v0.4.0)
 - [Phone bridge guide](docs/ja/guide/phone-bridge.md)
 - [Protocol notes](docs/ja/guide/protocol.md)
 - [Security model](docs/ja/guide/security.md)
+- [コントリビュートと上流PR](docs/ja/guide/contributing.md)
 
 ## 🗂️ Repository Layout
 
