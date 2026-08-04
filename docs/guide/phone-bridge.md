@@ -17,7 +17,9 @@ To start the same bridge UI against Claude Code instead of Codex, use the experi
 npm run phone:claude
 ```
 
-This starts per-turn `claude -p --output-format stream-json` processes and reads same-workdir Claude Code JSONL sessions for the sidebar. Codex-only features such as app-server plugin lookup, live approval callbacks, and history sync are disabled in Claude mode. You can also select it explicitly with `PHONE_AGENT_PROVIDER=claude npm run phone`.
+This holds one `claude -p --input-format stream-json --output-format stream-json` process open per bridge and reads same-workdir Claude Code JSONL sessions for the sidebar. Turns stream into the running process, so a follow-up skips session startup; changing the model or access mode retires the process and starts a fresh one. You can also select it explicitly with `PHONE_AGENT_PROVIDER=claude npm run phone`.
+
+Approvals reach the same UI as Codex. Claude Code spawns a stdio MCP server (`scripts/claude-approval-mcp.js`) that dials back to the bridge over a per-bridge Unix socket, so no port is bound and concurrent bridges or concurrent phone servers cannot collide. The transport fails closed: an unreachable socket, a timeout (`PHONE_APPROVAL_TIMEOUT_MS`, default 5 minutes), or a bridge with no browser attached all deny. Codex-only features such as app-server plugin lookup and history sync remain disabled in Claude mode.
 
 The command prints one URL per LAN IPv4 address:
 

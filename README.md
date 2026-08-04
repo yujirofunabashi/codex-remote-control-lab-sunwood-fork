@@ -130,7 +130,11 @@ See [.env.example](.env.example) for a public-safe template.
 
 History sync is enabled by default. After a web turn completes, the bridge warms the app-server history with `thread/read` and a scan-backed `thread/list`, and `/api/threads` also avoids state-DB-only listing. This helps Codex Desktop discover the updated session after reopening or refreshing the thread. It does not inject live updates into an already-open normal Desktop conversation view. Set `CODEX_HISTORY_SYNC=0` to disable the extra history refresh calls.
 
-`npm run phone:claude` sets `PHONE_AGENT_PROVIDER=claude`, starts per-turn `claude -p --output-format stream-json` processes, and reads same-workdir Claude Code JSONL sessions for the sidebar. Codex-only app-server plugin lookup, live approval callbacks, and history sync stay disabled in Claude mode.
+`npm run phone:claude` sets `PHONE_AGENT_PROVIDER=claude`, holds one `claude -p --input-format stream-json --output-format stream-json` process open per bridge, and reads same-workdir Claude Code JSONL sessions for the sidebar. Turns stream into the running process, so a follow-up skips session startup; changing the model or access mode retires the process and starts a fresh one.
+
+Approvals reach the same UI as Codex. Claude Code spawns a stdio MCP server (`scripts/claude-approval-mcp.js`) that dials back to the bridge over a per-bridge Unix socket, so no port is bound and concurrent bridges or concurrent phone servers cannot collide. The transport fails closed: an unreachable socket, a timeout (`PHONE_APPROVAL_TIMEOUT_MS`, default 5 minutes), or a bridge with no browser attached all deny. Picking フルアクセス runs at `bypassPermissions` and skips the prompt entirely.
+
+Codex-only app-server plugin lookup and history sync stay disabled in Claude mode.
 
 Codex rate-limit display is optional. Set `PHONE_CODEX_RATE_LIMIT_REFRESH_COMMAND="node scripts/read-desktop-rate-limits.js"` to read local Codex auth, call the usage endpoint, normalize remaining percentage/reset metadata, and cache only the display snapshot in `.phone-rate-limits.json`.
 

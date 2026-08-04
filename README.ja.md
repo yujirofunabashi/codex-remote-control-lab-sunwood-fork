@@ -130,7 +130,11 @@ PHONE_NOTIFY_TIMEOUT_MS=5000
 
 履歴同期は既定で有効です。Web 側の turn 完了後、bridge は `thread/read` と scan-backed な `thread/list` を実行して app-server の履歴/index を温めます。`/api/threads` も state DB 限定ではなく scan-and-repair で取得します。これにより Codex Desktop 側で thread を開き直す/再読込したときに、更新済み session を見つけやすくします。ただし、通常の Desktop 会話画面へライブ注入するものではありません。追加の履歴 refresh を止めたい場合は `CODEX_HISTORY_SYNC=0` を指定します。
 
-`npm run phone:claude` は `PHONE_AGENT_PROVIDER=claude` を設定し、turn ごとに `claude -p --output-format stream-json` を起動します。sidebar は同じ workdir の Claude Code JSONL session を読みます。Codex 専用の app-server plugin lookup、live approval callback、history sync は Claude mode では無効です。
+`npm run phone:claude` は `PHONE_AGENT_PROVIDER=claude` を設定し、bridge ごとに `claude -p --input-format stream-json --output-format stream-json` を1つ常駐させます。sidebar は同じ workdir の Claude Code JSONL session を読みます。turn は常駐プロセスへ流し込むため、2回目以降は session 起動を省けます。model や access mode を変更した turn は、古い設定のまま実行しないよう新しい process を起動し直します。
+
+承認は Codex と同じ UI に届きます。Claude Code が stdio MCP server (`scripts/claude-approval-mcp.js`) を起動し、bridge ごとの Unix socket 経由で親 bridge に問い合わせます。port を使わないため、複数 bridge や複数 phone server を同時に立てても衝突しません。経路は fail closed です。socket 不達、タイムアウト (`PHONE_APPROVAL_TIMEOUT_MS`、既定5分)、接続端末なしのいずれも拒否になります。フルアクセスを選ぶと `bypassPermissions` で動作し、承認自体が発生しません。
+
+Codex 専用の app-server plugin lookup と history sync は Claude mode では無効です。
 
 Codex rate-limit 表示は任意です。`PHONE_CODEX_RATE_LIMIT_REFRESH_COMMAND="node scripts/read-desktop-rate-limits.js"` を設定すると、local Codex auth を読み、usage endpoint を呼び、remaining percentage / reset metadata だけを正規化して `.phone-rate-limits.json` に表示用 snapshot として cache します。
 

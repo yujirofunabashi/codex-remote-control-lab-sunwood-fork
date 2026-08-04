@@ -17,7 +17,9 @@ npm run phone
 npm run phone:claude
 ```
 
-これは turn ごとに `claude -p --output-format stream-json` を起動し、同じ workdir の Claude Code JSONL session を sidebar に読みます。Codex 専用の app-server plugin lookup、live approval callback、history sync は Claude mode では無効です。明示的に選ぶ場合は `PHONE_AGENT_PROVIDER=claude npm run phone` も使えます。
+これは bridge ごとに `claude -p --input-format stream-json --output-format stream-json` を1つ常駐させ、同じ workdir の Claude Code JSONL session を sidebar に読みます。turn は常駐プロセスへ流し込むため、2回目以降は session 起動を省けます。model や access mode を変更した turn は新しい process を起動し直します。明示的に選ぶ場合は `PHONE_AGENT_PROVIDER=claude npm run phone` も使えます。
+
+承認は Codex と同じ UI に届きます。Claude Code が stdio MCP server (`scripts/claude-approval-mcp.js`) を起動し、bridge ごとの Unix socket 経由で親 bridge に問い合わせます。port を使わないため、複数 bridge や複数 phone server を同時に立てても衝突しません。経路は fail closed で、socket 不達・タイムアウト (`PHONE_APPROVAL_TIMEOUT_MS`、既定5分)・接続端末なしのいずれも拒否になります。Codex 専用の app-server plugin lookup と history sync は Claude mode では無効のままです。
 
 次のような URL が表示されます。
 
