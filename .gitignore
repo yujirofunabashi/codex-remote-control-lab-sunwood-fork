@@ -6,6 +6,7 @@ docs/.vitepress/dist/
 docs/.vitepress/cache/
 *.log
 .env
+.claude/
 .worktrees/
 .phone-token
 .phone-workspaces.json

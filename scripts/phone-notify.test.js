@@ -251,11 +251,11 @@ test("taskNotificationMessage includes failure details", () => {
   assert.match(
     taskNotificationMessage({
       status: "failed",
-      provider: "codex",
-      threadId: "thread-123",
+      provider: "claude",
+      threadId: "session-123",
       message: "process exited",
     }),
-    /codex task failed[\s\S]*process exited/,
+    /claude task failed[\s\S]*process exited/,
   );
 });
 

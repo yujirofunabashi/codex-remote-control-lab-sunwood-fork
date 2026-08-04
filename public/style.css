@@ -3477,6 +3477,14 @@ textarea::placeholder {
     linear-gradient(var(--accent), var(--accent)) center 13px / 11px 1.6px no-repeat;
 }
 
+html[data-provider="claude"] .thinking-button {
+  display: none;
+}
+
+html[data-provider="claude"] .model-button {
+  max-width: 96px;
+}
+
 .model-menu {
   position: absolute;
   right: 52px;
@@ -6427,6 +6435,10 @@ body[data-main-view="terminal"] .pwa-install-hint {
     max-width: 104px;
   }
 
+  html[data-provider="claude"] .model-button {
+    max-width: 84px;
+  }
+
   .model-menu {
     right: 8px;
     width: calc(100vw - 30px);
@@ -6579,6 +6591,10 @@ body[data-main-view="terminal"] .pwa-install-hint {
     max-width: 86px;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  html[data-provider="claude"] .model-button {
+    max-width: 74px;
   }
 
   .ghost-button,

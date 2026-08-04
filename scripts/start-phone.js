@@ -17,8 +17,8 @@ const root = path.resolve(__dirname, "..");
 
 function normalizeProvider(input) {
   const value = String(input || "codex").trim().toLowerCase();
-  if (!value || value === "codex") return "codex";
-  throw new Error("Only the Codex provider is supported by this bridge");
+  if (value === "codex" || value === "claude") return value;
+  throw new Error(`Unsupported PHONE_AGENT_PROVIDER: ${value}`);
 }
 
 function normalizeServiceTier(input) {
@@ -39,13 +39,11 @@ function appIdSlug(input, fallback) {
 }
 
 function defaultAppNameForProvider(provider) {
-  normalizeProvider(provider);
-  return "Codex Remote";
+  return provider === "claude" ? "Claude Remote" : "Codex Remote";
 }
 
 function defaultAppShortNameForProvider(provider) {
-  normalizeProvider(provider);
-  return "Codex";
+  return provider === "claude" ? "Claude" : "Codex";
 }
 
 function loadEnvFile(filePath) {
@@ -118,8 +116,75 @@ function formatRateLimitResetAt(value) {
   return new Intl.DateTimeFormat(locale, { dateStyle: "medium" }).format(date);
 }
 
+function claudeRateLimitLabel(type, fallback = "制限") {
+  const value = String(type || "").trim();
+  if (value === "five_hour") return "5時間";
+  if (value === "seven_day") return "週あたり";
+  if (value === "seven_day_opus") return "週あたり Opus";
+  if (value === "seven_day_sonnet") return "週あたり Sonnet";
+  if (value === "overage") return "追加利用";
+  return fallback;
+}
+
+function remainingFromUsedPercent(value) {
+  const used = numberOrNull(value);
+  return used === null ? null : clampPercent(100 - used);
+}
+
+function remainingFromUtilization(value) {
+  const utilization = numberOrNull(value);
+  if (utilization === null) return null;
+  const usedPercent = utilization <= 1 ? utilization * 100 : utilization;
+  return clampPercent(100 - usedPercent);
+}
+
+function claudeStatusLineWindow(rateLimits, type) {
+  const camelType = type.replace(/_([a-z])/g, (_, char) => char.toUpperCase());
+  const item = rateLimits?.[type] || rateLimits?.[camelType];
+  if (!item || typeof item !== "object") return null;
+  return sanitizeRateLimitWindow({
+    label: claudeRateLimitLabel(type),
+    remainingPercent: remainingFromUsedPercent(item.used_percentage ?? item.usedPercentage),
+    resetsAt: formatRateLimitResetAt(item.resets_at ?? item.resetsAt),
+  });
+}
+
+function claudeEventWindow(info) {
+  if (!info || typeof info !== "object") return null;
+  const type = info.rate_limit_type || info.rateLimitType;
+  return sanitizeRateLimitWindow({
+    label: claudeRateLimitLabel(type),
+    remainingPercent: remainingFromUtilization(info.utilization),
+    resetsAt: formatRateLimitResetAt(info.resets_at ?? info.resetsAt),
+  });
+}
+
+function normalizeClaudeRateLimitPayload(payload, fallbackSource = "claude") {
+  const rateLimits = payload?.rate_limits || payload?.rateLimits;
+  const windows = [];
+  if (rateLimits && typeof rateLimits === "object") {
+    for (const type of ["five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet", "overage"]) {
+      const window = claudeStatusLineWindow(rateLimits, type);
+      if (window) windows.push(window);
+    }
+  }
+  const info = payload?.rate_limit_info || payload?.rateLimitInfo || payload?.data?.rate_limit_info || payload?.data?.rateLimitInfo;
+  const eventWindow = claudeEventWindow(info);
+  if (eventWindow) windows.push(eventWindow);
+  return {
+    provider: "claude",
+    source: String(payload?.source || fallbackSource),
+    updatedAt: payload?.updatedAt || new Date().toISOString(),
+    windows,
+  };
+}
+
 function normalizeRateLimitSnapshot(payload, fallbackSource = "unknown", provider = "") {
   const normalizedProvider = provider ? normalizeProvider(provider) : "";
+  if (normalizedProvider === "claude") {
+    const claudeSnapshot = normalizeClaudeRateLimitPayload(payload, fallbackSource);
+    if (claudeSnapshot.windows.length) return claudeSnapshot;
+  }
   const rawWindows = Array.isArray(payload) ? payload : payload?.windows || payload?.limits || [];
   const windows = (Array.isArray(rawWindows) ? rawWindows : []).map(sanitizeRateLimitWindow).filter(Boolean);
   return {
@@ -187,7 +252,7 @@ function positiveNumber(value, fallback) {
 function rateLimitCachePathForProvider(provider) {
   const configured = providerEnvValue(provider, "RATE_LIMIT_CACHE_PATH", { legacyCodex: true });
   if (configured) return path.resolve(configured);
-  return path.join(root, ".phone-rate-limits.json");
+  return provider === "claude" ? path.join(root, ".phone-rate-limits.claude.json") : path.join(root, ".phone-rate-limits.json");
 }
 
 function readRateLimitCache(provider) {
@@ -290,13 +355,31 @@ async function rateLimitSnapshot({ provider = agentProvider, refresh = false } =
   return { provider: normalizedProvider, source: command ? "command" : "unavailable", windows: [] };
 }
 
+function persistClaudeRateLimitMessage(message) {
+  const snapshot = normalizeClaudeRateLimitPayload(message, "claude-rate-limit-event");
+  if (!snapshot.windows.length) return null;
+  const cached = readRateLimitCache("claude");
+  const merged = mergeRateLimitSnapshots(cached, snapshot, "claude");
+  writeRateLimitCache("claude", merged);
+  return merged;
+}
+
 const codexBin = path.join(root, "node_modules", ".bin", "codex");
+const claudeBin = process.env.CLAUDE_BIN || "claude";
 const envPath = path.join(root, ".env");
 const fleetConfigPath = process.env.PHONE_FLEET_CONFIG_PATH ? path.resolve(process.env.PHONE_FLEET_CONFIG_PATH) : "";
+const claudeProjectsRoot = path.join(os.homedir(), ".claude", "projects");
 const uiPort = Number(process.env.PHONE_UI_PORT || 45214);
 const uiHost = process.env.PHONE_UI_HOST || "0.0.0.0";
-const agentProvider = "codex";
-const isCodexProvider = true;
+const agentProvider = normalizeProvider(
+  slotSettingValue(process.env, "PHONE_AGENT_PROVIDER", uiPort, {
+    launchEnvKeys,
+    fallbackKeys: ["AGENT_PROVIDER", "PHONE_AGENT_PROVIDER_DEFAULT"],
+    fallback: "codex",
+  }),
+);
+const isCodexProvider = agentProvider === "codex";
+const isClaudeProvider = agentProvider === "claude";
 const launchSettings = launchSettingsFromFleetOrEnv(process.env, {
   filePath: fleetConfigPath,
   port: uiPort,
@@ -321,7 +404,14 @@ const codexUrl = process.env.CODEX_APP_SERVER_URL || (codexSocketPath ? "ws://co
 const shouldStartCodexServer = !process.env.CODEX_APP_SERVER_URL && !codexSocketPath;
 const workdir = launchSettings.workdir;
 const providerModels = {
-  codex: launchSettings.model,
+  // The active provider takes the fleet-resolved model; the other still needs a
+  // value so the UI can show it without a fleet entry of its own.
+  codex: isCodexProvider
+    ? launchSettings.model
+    : modelFromEnv(process.env, "codex", defaultModelForProvider("codex"), { launchEnvKeys }),
+  claude: isClaudeProvider
+    ? launchSettings.model
+    : modelFromEnv(process.env, "claude", defaultModelForProvider("claude"), { launchEnvKeys }),
 };
 const model = providerModels[agentProvider] || defaultModelForProvider(agentProvider);
 const historySyncEnabled = historySyncEnabledFromEnv(process.env, { launchEnvKeys });
@@ -332,7 +422,8 @@ const rateLimitRefreshTimeoutMs = positiveNumber(process.env.PHONE_RATE_LIMIT_RE
 const uploadDir = path.join(root, ".uploads");
 const maxUploadBytes = uploadLimitBytes();
 const codexModelOptions = ["gpt-5.5", "gpt-5.4", "gpt-5.3-codex", "gpt-5.3-codex-spark", "gpt-5.2"];
-const modelOptions = codexModelOptions;
+const claudeModelOptions = ["sonnet", "opus", "haiku", "claude-sonnet-4-6", "claude-opus-4-5"];
+const modelOptions = isClaudeProvider ? claudeModelOptions : codexModelOptions;
 const bridges = new Map();
 const bridgeStartedAt = Date.now();
 const phoneBridgeId = appIdSlug(process.env.PHONE_BRIDGE_ID, `${path.basename(workdir)}-${uiPort}`);
@@ -434,7 +525,7 @@ function bridgeInfoPayload() {
     dirty,
     dirtySummary: summary,
     provider: agentProvider,
-    providers: ["codex"],
+    providers: ["codex", "claude"],
     model,
     modelsByProvider: providerModels,
     approvalPolicy: "on-request",
@@ -480,28 +571,23 @@ function currentWorkspaceMeta(cwd = workdir) {
 }
 
 function modelEnvKeyForProvider(provider) {
-  normalizeProvider(provider);
-  return "CODEX_MODEL";
+  return provider === "claude" ? "CLAUDE_MODEL" : "CODEX_MODEL";
 }
 
 function workdirEnvKeyForProvider(provider) {
-  normalizeProvider(provider);
-  return "CODEX_WORKDIR";
+  return provider === "claude" ? "CLAUDE_WORKDIR" : "CODEX_WORKDIR";
 }
 
 function historySyncEnvKeyForProvider(provider) {
-  normalizeProvider(provider);
-  return "CODEX_HISTORY_SYNC";
+  return provider === "claude" ? "CLAUDE_HISTORY_SYNC" : "CODEX_HISTORY_SYNC";
 }
 
 function defaultModelForProvider(provider) {
-  normalizeProvider(provider);
-  return "gpt-5.4";
+  return provider === "claude" ? "sonnet" : "gpt-5.4";
 }
 
 function modelOptionsForProvider(provider) {
-  normalizeProvider(provider);
-  return codexModelOptions;
+  return provider === "claude" ? claudeModelOptions : codexModelOptions;
 }
 
 function modelForProvider(provider) {
@@ -510,15 +596,16 @@ function modelForProvider(provider) {
 }
 
 function historySyncEnabledForProvider(provider) {
-  normalizeProvider(provider);
-  return historySyncEnabled;
+  return normalizeProvider(provider) === "codex" && historySyncEnabled;
 }
 
 function modelFromEnv(env, provider, fallback = defaultModelForProvider(provider), options = {}) {
   const providerKey = modelEnvKeyForProvider(provider);
+  // Claude must not inherit CODEX_MODEL; that legacy fallback is Codex-only.
+  const fallbackKeys = provider === "codex" ? [providerKey, "CODEX_MODEL"] : [providerKey];
   return slotSettingValue(env, "PHONE_MODEL", options.uiPort || uiPort, {
     launchEnvKeys: options.launchEnvKeys,
-    fallbackKeys: [providerKey, "CODEX_MODEL"],
+    fallbackKeys,
     fallback,
   });
 }
@@ -883,19 +970,27 @@ function localSettingsPayload() {
     port: uiPort,
     bridgeId: process.env.PHONE_FLEET_BRIDGE_ID || process.env.PHONE_BRIDGE_ID || phoneBridgeId,
   });
-  const settingsProvider = agentProvider;
-  const modelPinned = settingPinned("PHONE_MODEL", [modelEnvKeyForProvider(settingsProvider), "CODEX_MODEL"]);
-  const historyPinned = settingPinned(historySyncEnvKeyForProvider(settingsProvider));
+  const savedProvider = normalizeProvider(
+    fleetSettings.provider ||
+      slotSettingValue(envValues, "PHONE_AGENT_PROVIDER", uiPort, {
+        fallbackKeys: ["AGENT_PROVIDER", "PHONE_AGENT_PROVIDER_DEFAULT"],
+        fallback: agentProvider,
+      }),
+  );
+  const providerPinned = settingPinned("PHONE_AGENT_PROVIDER", ["AGENT_PROVIDER", "PHONE_AGENT_PROVIDER_DEFAULT"]);
+  const settingsProvider = providerPinned ? agentProvider : savedProvider;
+  const modelPinned = settingPinned("PHONE_MODEL", [modelEnvKeyForProvider(settingsProvider), ...(settingsProvider === "codex" ? ["CODEX_MODEL"] : [])]);
+  const historyPinned = historySyncEnvKeyForProvider(settingsProvider) ? settingPinned(historySyncEnvKeyForProvider(settingsProvider)) : false;
   const portPinned = hasLaunchEnv("PHONE_UI_PORT");
   const hostPinned = hasLaunchEnv("PHONE_UI_HOST");
-  const savedHistorySyncEnabled = historySyncEnabledFromEnv(envValues);
+  const savedHistorySyncEnabled = settingsProvider === "codex" ? historySyncEnabledFromEnv(envValues) : false;
   const savedPort = Number(envValues.PHONE_UI_PORT || uiPort);
   const savedHost = envValues.PHONE_UI_HOST || uiHost;
-  const savedModel = fleetSettings.model || modelFromEnv(envValues, settingsProvider, model);
+  const savedModel = fleetSettings.model || modelFromEnv(envValues, settingsProvider, settingsProvider === agentProvider ? model : defaultModelForProvider(settingsProvider));
   const savedWorkdir = fleetSettings.workdir || workdirFromEnv(envValues, settingsProvider, workdir);
-  const settingsModel = modelPinned ? model : savedModel;
+  const settingsModel = modelPinned && settingsProvider === agentProvider ? model : savedModel;
   const settingsWorkdir = savedWorkdir;
-  const settingsHistorySyncEnabled = historyPinned ? historySyncEnabledForProvider(settingsProvider) : savedHistorySyncEnabled;
+  const settingsHistorySyncEnabled = historyPinned && settingsProvider === agentProvider ? historySyncEnabledForProvider(settingsProvider) : savedHistorySyncEnabled;
   const settingsPort = portPinned ? uiPort : savedPort;
   const settingsHost = hostPinned ? uiHost : savedHost;
   return {
@@ -916,20 +1011,22 @@ function localSettingsPayload() {
       uiHost,
     },
     options: {
-      providers: ["codex"],
+      providers: ["codex", "claude"],
       models: modelOptions,
       modelsByProvider: {
         codex: codexModelOptions,
+        claude: claudeModelOptions,
       },
       defaultModels: {
         codex: modelFromEnv(envValues, "codex", defaultModelForProvider("codex")),
+        claude: modelFromEnv(envValues, "claude", defaultModelForProvider("claude")),
       },
       workspaces: workspaceOptions(),
     },
     restartRequired:
-      (!modelPinned && savedModel !== model) ||
-      savedWorkdir !== workdir ||
-      (!historyPinned && savedHistorySyncEnabled !== historySyncEnabled),
+      (!modelPinned && settingsProvider === agentProvider && savedModel !== model) ||
+      (settingsProvider === agentProvider && savedWorkdir !== workdir) ||
+      (!historyPinned && settingsProvider === agentProvider && savedHistorySyncEnabled !== historySyncEnabled),
     networkRestartRequired: (!portPinned && savedPort !== uiPort) || (!hostPinned && savedHost !== uiHost),
   };
 }
@@ -1724,11 +1821,11 @@ function staticAssetHref(fileName) {
 }
 
 function bookmarkIconFileName() {
-  return "bookmark-codex.png";
+  return agentProvider === "claude" ? "bookmark-claude.png" : "bookmark-codex.png";
 }
 
 function bookmarkIcon512FileName() {
-  return "bookmark-codex-512.png";
+  return agentProvider === "claude" ? "bookmark-claude-512.png" : "bookmark-codex-512.png";
 }
 
 function iconHrefForRequest() {
@@ -2024,6 +2121,135 @@ function idleRunStateFromHistory(history = []) {
 
 function capHistory(history) {
   return history.slice(-historyLimit);
+}
+
+function claudeProjectDirFor(cwd = workdir) {
+  return path.join(claudeProjectsRoot, path.resolve(cwd).replace(/[^A-Za-z0-9]/g, "-"));
+}
+
+function textFromClaudeContent(content) {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  const parts = [];
+  for (const part of content) {
+    if (part?.type === "text" && typeof part.text === "string") parts.push(part.text);
+  }
+  return parts.join("\n");
+}
+
+function claudeSessionFilePath(sessionId) {
+  const id = String(sessionId || "").trim();
+  if (!/^[A-Za-z0-9._:-]+$/.test(id)) return null;
+  const base = path.resolve(claudeProjectDirFor());
+  const target = path.resolve(base, `${id}.jsonl`);
+  if (!target.startsWith(`${base}${path.sep}`)) return null;
+  return target;
+}
+
+function parseClaudeSessionFile(filePath, stat, text) {
+  const sessionId = path.basename(filePath, ".jsonl");
+  const history = [];
+  let title = "";
+  let firstUserText = "";
+  let lastUserText = "";
+  let cwd = workdir;
+  let createdAt = Number.POSITIVE_INFINITY;
+  let updatedAt = stat.mtimeMs;
+
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    let item;
+    try {
+      item = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (item.cwd) cwd = item.cwd;
+    if (item.type === "ai-title" && item.aiTitle) title = String(item.aiTitle);
+    const timestamp = Date.parse(item.timestamp || "");
+    if (Number.isFinite(timestamp)) {
+      createdAt = Math.min(createdAt, timestamp);
+      updatedAt = Math.max(updatedAt, timestamp);
+    }
+    if (item.type !== "user" && item.type !== "assistant") continue;
+    const contentText = textFromClaudeContent(item.message?.content);
+    if (!contentText.trim()) continue;
+    const role = item.message?.role === "assistant" || item.type === "assistant" ? "assistant" : "user";
+    if (role === "user") {
+      if (!firstUserText) firstUserText = contentText;
+      lastUserText = contentText;
+    }
+    history.push({
+      type: role === "assistant" ? "assistant" : "user",
+      text: contentText,
+      outputGroup: item.uuid || item.requestId || sessionId,
+    });
+  }
+
+  const fallbackTitle = firstUserText || sessionId;
+  const firstTimestamp = Number.isFinite(createdAt) ? createdAt : stat.birthtimeMs;
+  return {
+    summary: {
+      id: sessionId,
+      name: title || fallbackTitle,
+      preview: lastUserText || fallbackTitle,
+      cwd,
+      provider: "claude",
+      updatedAt,
+      updated_at: updatedAt,
+      createdAt: firstTimestamp,
+      created_at: firstTimestamp,
+    },
+    history: capHistory(history),
+  };
+}
+
+function readClaudeSessionFile(filePath) {
+  if (!filePath || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) return null;
+  const stat = fs.statSync(filePath);
+  return parseClaudeSessionFile(filePath, stat, fs.readFileSync(filePath, "utf8"));
+}
+
+async function readClaudeSessionFileAsync(filePath) {
+  if (!filePath) return null;
+  try {
+    const stat = await fs.promises.stat(filePath);
+    if (!stat.isFile()) return null;
+    const text = await fs.promises.readFile(filePath, "utf8");
+    return parseClaudeSessionFile(filePath, stat, text);
+  } catch {
+    return null;
+  }
+}
+
+function readClaudeSession(sessionId) {
+  return readClaudeSessionFile(claudeSessionFilePath(sessionId));
+}
+
+function claudeHistoryForSession(sessionId) {
+  return readClaudeSession(sessionId)?.history || [];
+}
+
+async function claudeThreadListPayload() {
+  const byId = new Map();
+  const dir = claudeProjectDirFor();
+  let fileNames = [];
+  try {
+    fileNames = await fs.promises.readdir(dir);
+  } catch {
+    fileNames = [];
+  }
+  const sessions = await Promise.all(
+    fileNames.filter((fileName) => fileName.endsWith(".jsonl")).map((fileName) => readClaudeSessionFileAsync(path.join(dir, fileName))),
+  );
+  for (const session of sessions) {
+    if (session) byId.set(session.summary.id, session.summary);
+  }
+  return {
+    provider: "claude",
+    activeProvider: "claude",
+    data: mergeThreadListData(Array.from(byId.values()), localThreadList("claude")),
+  };
 }
 
 class SharedBridge {
@@ -2705,10 +2931,413 @@ class SharedBridge {
   }
 }
 
+function claudePermissionMode(options = {}) {
+  if (options.permissionMode) return options.permissionMode;
+  if (options.sandboxMode === "danger-full-access" || options.approvalPolicy === "never") return "bypassPermissions";
+  if (options.sandboxMode === "read-only") return "plan";
+  return process.env.CLAUDE_PERMISSION_MODE || "acceptEdits";
+}
+
+function summarizeClaudeAttachmentPrompt(text, savedAttachments) {
+  if (!savedAttachments.length) return text;
+  const lines = savedAttachments.map((file) => `- ${file.name}: ${file.absolutePath}`);
+  return `${text || "添付ファイルを確認してください。"}\n\n添付ファイルはMac側に保存済みです。必要ならこのパスを読み取って処理してください:\n${lines.join("\n")}`;
+}
+
+class ClaudeBridge {
+  constructor(requestedThreadId, baseBridgeKey) {
+    this.provider = "claude";
+    this.model = modelForProvider(this.provider);
+    this.requestedThreadId = requestedThreadId;
+    this.baseBridgeKey = baseBridgeKey;
+    this.bridgeKey = bridgeMapKey(this.provider, baseBridgeKey);
+    this.clients = new Set();
+    this.threadId = requestedThreadId || `claude:${crypto.randomUUID()}`;
+    this.claudeSessionId = requestedThreadId && !requestedThreadId.startsWith("claude:") ? requestedThreadId : null;
+    this.activeTurnId = null;
+    this.createdAt = Date.now();
+    this.listUpdatedAt = 0;
+    this.ready = true;
+    this.history = this.claudeSessionId ? claudeHistoryForSession(this.claudeSessionId) : [];
+    this.terminalHistory = terminalHistoryFromChatHistory(this.history);
+    this.pendingApproval = null;
+    this.turnQueue = [];
+    this.activeProcess = null;
+    const idleState = idleRunStateFromHistory(this.history);
+    this.runState = { ...idleState, updatedAt: Date.now() };
+    this.streamingStarted = false;
+    this.interruptRequested = false;
+    this.idleDisposeTimer = null;
+    this.longRunningTimer = null;
+  }
+
+  addClient(browser) {
+    this.cancelIdleDispose();
+    this.clients.add(browser);
+    this.emitTo(browser, "status", { text: "共有Claudeブリッジに参加しました。" });
+    this.emitTo(browser, "ready", this.readyPayload());
+    browser.on("close", () => {
+      this.clients.delete(browser);
+      this.scheduleIdleDispose();
+    });
+  }
+
+  readyPayload() {
+    const thread = threadRecordForBridge(this);
+    return {
+      provider: this.provider,
+      threadId: this.threadId,
+      threadTitle: thread?.displayTitle || thread?.name || "",
+      thread,
+      model: this.model,
+      workdir,
+      ...currentWorkspaceMeta(),
+      shared: true,
+      clients: this.clients.size,
+      history: this.history,
+      terminalHistory: this.terminalHistory,
+      run: this.runPayload(),
+    };
+  }
+
+  runPayload() {
+    if (this.activeTurnId || this.activeProcess) {
+      if (this.runState?.state === "interrupting") return { ...this.runState, ...currentWorkspaceMeta() };
+      return {
+        state: this.streamingStarted ? "streaming" : "running",
+        label: this.streamingStarted ? "回答生成中" : "Agent 処理中",
+        turnId: this.activeTurnId,
+        updatedAt: Date.now(),
+        ...currentWorkspaceMeta(),
+      };
+    }
+    return {
+      ...(this.runState || { state: "ready", label: "未実行・送信できます", turnId: null, updatedAt: Date.now() }),
+      ...currentWorkspaceMeta(),
+    };
+  }
+
+  setBridgeRunState(state, label, turnId = this.activeTurnId || null) {
+    const next = { state, label, turnId, updatedAt: Date.now(), ...currentWorkspaceMeta() };
+    const previous = this.runState || {};
+    if (state !== "approval") this.pendingApproval = null;
+    this.runState = next;
+    lastBridgeEventAt = Date.now();
+    if (previous.state !== state || previous.label !== label || previous.turnId !== turnId) {
+      this.emit("runState", next);
+    }
+  }
+
+  hasActiveWork() {
+    return Boolean(this.activeTurnId || this.activeProcess || this.turnQueue.length);
+  }
+
+  cancelIdleDispose() {
+    if (!this.idleDisposeTimer) return;
+    clearTimeout(this.idleDisposeTimer);
+    this.idleDisposeTimer = null;
+  }
+
+  scheduleIdleDispose() {
+    this.cancelIdleDispose();
+    if (
+      !shouldDisposeIdleBridge({
+        clientCount: this.clients.size,
+        ready: this.ready,
+        active: this.hasActiveWork(),
+      })
+    ) {
+      return;
+    }
+    this.idleDisposeTimer = setTimeout(() => {
+      this.idleDisposeTimer = null;
+      if (this.clients.size || this.hasActiveWork()) return;
+      if (bridges.get(this.bridgeKey) === this) bridges.delete(this.bridgeKey);
+    }, idleBridgeTtlMs);
+    this.idleDisposeTimer.unref?.();
+  }
+
+  appendTerminal(entry) {
+    if (!entry) return null;
+    const next = {
+      id: entry.id || `terminal-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      ts: entry.ts || Date.now(),
+      kind: entry.kind || "status",
+      message: redactTerminalText(entry.message || ""),
+      detail: entry.detail ? redactTerminalText(entry.detail).slice(0, 4000) : "",
+      turnId: entry.turnId || this.activeTurnId || null,
+    };
+    this.terminalHistory.push(next);
+    this.terminalHistory = this.terminalHistory.slice(-terminalHistoryLimit);
+    return next;
+  }
+
+  emit(type, payload = {}) {
+    lastBridgeEventAt = Date.now();
+    const terminalEntry = this.appendTerminal(terminalEntryForBridgeMessage(type, payload, this));
+    const body = JSON.stringify({ type, ...(terminalEntry ? { terminalEntry } : {}), ...payload });
+    for (const client of this.clients) {
+      if (client.readyState === WebSocket.OPEN) client.send(body);
+    }
+  }
+
+  emitTo(client, type, payload = {}) {
+    if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify({ type, ...payload }));
+  }
+
+  promoteBridgeKey() {
+    if (!this.claudeSessionId || this.baseBridgeKey === this.claudeSessionId) return;
+    const previousKey = this.bridgeKey;
+    const nextKey = bridgeMapKey(this.provider, this.claudeSessionId);
+    if (bridges.has(nextKey) && bridges.get(nextKey) !== this) return;
+    if (bridges.get(previousKey) !== this) return;
+    this.threadId = this.claudeSessionId;
+    this.baseBridgeKey = this.claudeSessionId;
+    this.bridgeKey = nextKey;
+    bridges.delete(previousKey);
+    bridges.set(this.bridgeKey, this);
+    this.emit("ready", this.readyPayload());
+  }
+
+  interrupt() {
+    const queuedCount = this.turnQueue.length;
+    this.turnQueue = [];
+    if (queuedCount) this.emit("status", { text: `待機中の送信を破棄しました（${queuedCount}件）。` });
+
+    if (!this.activeProcess) {
+      if (!queuedCount) this.emit("status", { text: "中断できる処理はありません。" });
+      return;
+    }
+
+    const child = this.activeProcess;
+    this.interruptRequested = true;
+    this.setBridgeRunState("interrupting", "中断中", this.activeTurnId);
+    this.emit("status", { text: "Claude processへ中断信号を送信しました。" });
+    child.kill("SIGINT");
+    const forceTimer = setTimeout(() => {
+      if (this.activeProcess === child && child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+    }, 1500);
+    forceTimer.unref?.();
+  }
+
+  prompt(text, attachments = [], options = {}, clientMessageId = null) {
+    if (this.activeTurnId || this.activeProcess) {
+      this.turnQueue.push({ text, attachments, options, clientMessageId });
+      if (clientMessageId) this.emit("promptAccepted", { clientMessageId, queued: true });
+      this.emit("status", { text: `キューに追加しました（${this.turnQueue.length}件待機）` });
+      return;
+    }
+    try {
+      this.startPrompt(text, attachments, options, clientMessageId);
+    } catch (error) {
+      this.emit("error", { text: `送信に失敗しました: ${error.message}` });
+    }
+  }
+
+  startNextQueuedTurn() {
+    if (this.activeTurnId || this.activeProcess || !this.turnQueue.length) return;
+    const next = this.turnQueue.shift();
+    this.emit("status", { text: `キューから送信中（残り${this.turnQueue.length}件）` });
+    this.startPrompt(next.text, next.attachments, next.options, next.clientMessageId);
+  }
+
+  startPrompt(text, attachments = [], options = {}, clientMessageId = null) {
+    this.interruptRequested = false;
+    const savedAttachments = [];
+    const savedImages = [];
+    for (const attachment of attachments || []) {
+      const saved = saveDataUrlAttachment(attachment);
+      if (!saved) continue;
+      savedAttachments.push(saved.preview);
+      if (saved.preview.kind === "image") savedImages.push(saved.preview);
+    }
+
+    const promptText = summarizeClaudeAttachmentPrompt(text, savedAttachments);
+    const displayText = savedAttachments.length ? `${text || "添付ファイルを確認してください。"}\n\n添付: ${savedAttachments.map((file) => file.name).join(", ")}` : text;
+    const turnId = `claude-turn:${crypto.randomUUID()}`;
+    this.activeTurnId = turnId;
+    this.streamingStarted = false;
+    scheduleLongRunningNotification(this, turnId);
+    this.setBridgeRunState("running", "Agent 処理中", turnId);
+    this.appendHistory({ type: "user", text: displayText, attachments: savedImages });
+    this.emit("user", { text: displayText, attachments: savedImages, clientMessageId });
+    this.emit("turn", { status: "started", turnId, run: this.runPayload() });
+
+    const args = [
+      "-p",
+      promptText,
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--include-partial-messages",
+      "--model",
+      options.model || this.model,
+      "--permission-mode",
+      claudePermissionMode(options),
+    ];
+    if (this.claudeSessionId) args.push("--resume", this.claudeSessionId);
+
+    const child = spawn(claudeBin, args, {
+      cwd: workdir,
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    this.activeProcess = child;
+    let stdoutBuffer = "";
+    let stderrBuffer = "";
+    let assistantText = "";
+
+    const clearActiveProcess = () => {
+      if (this.activeProcess !== child && this.activeTurnId !== turnId) return false;
+      this.activeProcess = null;
+      this.activeTurnId = null;
+      this.streamingStarted = false;
+      clearLongRunningNotification(this);
+      return true;
+    };
+
+    const handleLine = (line) => {
+      if (!line.trim()) return;
+      let msg;
+      try {
+        msg = JSON.parse(line);
+      } catch {
+        this.emit("status", { text: line.slice(0, 500) });
+        return;
+      }
+      const rateLimitUpdate = persistClaudeRateLimitMessage(msg);
+      if (rateLimitUpdate) {
+        this.emit("rateLimits", { rateLimits: rateLimitUpdate });
+        return;
+      }
+      if (msg.session_id) {
+        this.claudeSessionId = msg.session_id;
+        this.promoteBridgeKey();
+      }
+      if (msg.type === "system" && msg.subtype === "init") {
+        this.emit("status", { text: `Claude session ready: ${msg.session_id || this.threadId}` });
+        return;
+      }
+      if (msg.type === "system" && msg.subtype === "api_retry") {
+        this.emit("status", { text: `Claude API retry ${msg.attempt}/${msg.max_retries}` });
+        return;
+      }
+      const delta = msg.type === "stream_event" && msg.event?.delta?.type === "text_delta" ? msg.event.delta.text : "";
+      if (delta) {
+        if (!this.streamingStarted) {
+          this.streamingStarted = true;
+          this.setBridgeRunState("streaming", "回答生成中", this.activeTurnId);
+        }
+        assistantText += delta;
+        this.emit("assistantDelta", { text: delta });
+        return;
+      }
+      if (msg.type === "result") {
+        if (msg.session_id) {
+          this.claudeSessionId = msg.session_id;
+          this.promoteBridgeKey();
+        }
+        if (!assistantText && msg.result) {
+          if (!this.streamingStarted) {
+            this.streamingStarted = true;
+            this.setBridgeRunState("streaming", "回答生成中", this.activeTurnId);
+          }
+          assistantText = String(msg.result);
+          this.emit("assistantDelta", { text: assistantText });
+        }
+      }
+    };
+
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdoutBuffer += chunk;
+      const lines = stdoutBuffer.split(/\r?\n/);
+      stdoutBuffer = lines.pop() || "";
+      for (const line of lines) handleLine(line);
+    });
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk) => {
+      stderrBuffer += chunk;
+      const lines = stderrBuffer.split(/\r?\n/);
+      stderrBuffer = lines.pop() || "";
+      for (const line of lines) {
+        if (line.trim()) this.emit("status", { text: line.slice(0, 500) });
+      }
+    });
+    child.on("error", (error) => {
+      if (!clearActiveProcess()) return;
+      this.interruptRequested = false;
+      this.setBridgeRunState("error", "起動に失敗", turnId);
+      this.emit("error", { text: `Claudeを起動できませんでした: ${error.message}` });
+      notifyRunEvent("failed", {
+        provider: this.provider,
+        model: this.model,
+        threadId: this.threadId,
+        turnId,
+        message: error.message,
+      });
+      this.startNextQueuedTurn();
+      this.scheduleIdleDispose();
+    });
+    child.on("exit", (code, signal) => {
+      const wasInterrupted = this.interruptRequested || signal === "SIGINT" || signal === "SIGTERM";
+      if (!clearActiveProcess()) return;
+      if (stdoutBuffer.trim()) handleLine(stdoutBuffer);
+      this.interruptRequested = false;
+      if (code === 0 && !wasInterrupted) {
+        if (assistantText.trim()) this.appendHistory({ type: "assistant", text: assistantText, outputGroup: turnId });
+        const question = latestAssistantQuestion(this);
+        this.setBridgeRunState(question ? "question" : "done", question ? "返信待ち" : "完了しました", turnId);
+        this.emit("turn", { status: "completed", turnId, run: this.runPayload() });
+        if (question) {
+          notifyBridgeEvent("question_required", {
+            provider: this.provider,
+            threadId: this.threadId,
+            turnId,
+            severity: "warning",
+            title: "Question requires your input",
+            message: question,
+          });
+        }
+        notifyRunEvent("completed", { provider: this.provider, model: this.model, threadId: this.threadId, turnId });
+      } else if (wasInterrupted) {
+        if (assistantText.trim()) this.appendHistory({ type: "assistant", text: assistantText, outputGroup: turnId });
+        this.setBridgeRunState("interrupted", "中断しました", turnId);
+        this.emit("turn", { status: "completed", turnId, run: this.runPayload() });
+        notifyRunEvent("interrupted", { provider: this.provider, model: this.model, threadId: this.threadId, turnId });
+      } else {
+        const reason = signal ? `signal=${signal}` : `code=${code}`;
+        const message = `Claude process exited (${reason})${stderrBuffer.trim() ? `: ${stderrBuffer.trim().slice(-1000)}` : ""}`;
+        this.setBridgeRunState("error", "エラー", turnId);
+        this.emit("error", { text: message });
+        notifyRunEvent("failed", {
+          provider: this.provider,
+          model: this.model,
+          threadId: this.threadId,
+          turnId,
+          message,
+        });
+      }
+      this.startNextQueuedTurn();
+      this.scheduleIdleDispose();
+    });
+  }
+
+  appendHistory(entry) {
+    this.history.push(entry);
+    this.history = capHistory(this.history);
+    if (entry?.text) this.listUpdatedAt = Date.now();
+  }
+
+  approval(_requestMsg, _decision) {
+    this.emit("status", { text: "Claude headless providerでは実行中の承認応答は未対応です。" });
+  }
+}
+
 function getBridge(threadId, provider = agentProvider, connectionId = crypto.randomUUID(), options = {}) {
   const requestedProvider = normalizeProvider(provider);
-  const requestedWorkdir = options.workdir ? validateWorkdir(options.workdir) : "";
-  const requestedServiceTier = Object.prototype.hasOwnProperty.call(options, "serviceTier") ? normalizeServiceTier(options.serviceTier) : null;
+  const requestedWorkdir = requestedProvider === "codex" && options.workdir ? validateWorkdir(options.workdir) : "";
+  const requestedServiceTier = requestedProvider === "codex" && Object.prototype.hasOwnProperty.call(options, "serviceTier") ? normalizeServiceTier(options.serviceTier) : null;
   const bridgeOptions = { ...options, ...(requestedWorkdir ? { workdir: requestedWorkdir } : {}), serviceTier: requestedServiceTier };
   const bridgeHasActiveWork = (bridge) => Boolean(typeof bridge?.hasActiveWork === "function" && bridge.hasActiveWork());
   const bridgeNeedsReplacement = (bridge) =>
@@ -2751,7 +3380,9 @@ function getBridge(threadId, provider = agentProvider, connectionId = crypto.ran
     bridges.delete(key);
     existing = null;
   }
-  if (!existing && !bridges.has(key)) bridges.set(key, new SharedBridge(threadId, baseKey, bridgeOptions));
+  if (!existing && !bridges.has(key)) {
+    bridges.set(key, requestedProvider === "claude" ? new ClaudeBridge(threadId, baseKey) : new SharedBridge(threadId, baseKey, bridgeOptions));
+  }
   return bridges.get(key);
 }
 
@@ -2772,7 +3403,7 @@ async function bindBrowser(browser, phoneToken, threadId, provider = agentProvid
   browser.on("pong", () => {
     browser.isAlive = true;
   });
-  if (shouldStartCodexServer) {
+  if (requestedProvider === "codex" && shouldStartCodexServer) {
     try {
       await ensureAppServer();
     } catch (error) {
@@ -3007,8 +3638,8 @@ function reviewTestsPayload(threadId = "", provider = "") {
 
 async function healthPayload(phoneToken, requestedProvider = agentProvider) {
   const summaries = bridgeSummaries();
-  normalizeProvider(requestedProvider);
-  const appServerConnected = codexSocketPath || !shouldStartCodexServer ? appServerClient.ready : await isCodexReady();
+  const appServerConnected =
+    requestedProvider === "claude" ? true : codexSocketPath || !shouldStartCodexServer ? appServerClient.ready : await isCodexReady();
   const bridgeState = summaries.some((item) => item.run?.state === "error")
     ? "degraded"
     : appServerConnected
@@ -3017,7 +3648,7 @@ async function healthPayload(phoneToken, requestedProvider = agentProvider) {
   return {
     ok: bridgeState !== "error",
     bridge: bridgeState,
-    appServer: appServerConnected ? "connected" : "disconnected",
+    appServer: requestedProvider === "claude" ? "local-process" : appServerConnected ? "connected" : "disconnected",
     websocket: activeClientCount() ? "connected" : "disconnected",
     historySync: {
       enabled: historySyncEnabledForProvider(requestedProvider),
@@ -3228,7 +3859,7 @@ async function main() {
       if (!requireToken(url, phoneToken, res)) return;
       sendJson(res, 200, {
         provider: agentProvider,
-        providers: ["codex"],
+        providers: ["codex", "claude"],
         model,
         workdir,
         app: { id: phoneAppId, name: phoneAppName, shortName: phoneAppShortName },
@@ -3256,6 +3887,10 @@ async function main() {
       if (!requireToken(url, phoneToken, res)) return;
       const requestedProvider = queryProvider(url, res);
       if (!requestedProvider) return;
+      if (requestedProvider === "claude") {
+        sendJson(res, 200, await claudeThreadListPayload());
+        return;
+      }
       try {
         sendJson(res, 200, await codexThreadListPayload(requestedProvider));
       } catch (error) {
@@ -3267,6 +3902,10 @@ async function main() {
       if (!requireToken(url, phoneToken, res)) return;
       const requestedProvider = queryProvider(url, res);
       if (!requestedProvider) return;
+      if (requestedProvider === "claude") {
+        sendJson(res, 200, localModelList(requestedProvider));
+        return;
+      }
       try {
         const result = await appServerRequest("model/list", { limit: 80, includeHidden: false });
         sendJson(res, 200, result);
@@ -3279,6 +3918,10 @@ async function main() {
       if (!requireToken(url, phoneToken, res)) return;
       const requestedProvider = queryProvider(url, res);
       if (!requestedProvider) return;
+      if (requestedProvider === "claude") {
+        sendJson(res, 200, { data: [] });
+        return;
+      }
       try {
         const result = await appServerRequest("plugin/list", { cwds: [workdir] });
         sendJson(res, 200, result);
@@ -3300,6 +3943,14 @@ async function main() {
       if (!requireToken(url, phoneToken, res)) return;
       const requestedProvider = queryProvider(url, res);
       if (!requestedProvider) return;
+      if (requestedProvider === "claude") {
+        sendJson(res, 200, {
+          config: { config: { model: modelForProvider(requestedProvider), cwd: workdir, provider: requestedProvider } },
+          auth: { authMethod: "claude-cli" },
+          errors: [],
+        });
+        return;
+      }
       try {
         const [config, auth] = await Promise.allSettled([
           appServerRequest("config/read", { includeLayers: false, cwd: workdir }),
@@ -3481,7 +4132,7 @@ async function main() {
     if (url.pathname === "/api/review/tests") {
       if (!requireToken(url, phoneToken, res)) return;
       const threadId = String(url.searchParams.get("thread") || "").trim();
-      const requestedProvider = queryProvider(url, res, agentProvider);
+      const requestedProvider = queryProvider(url, res, threadId?.startsWith("claude:") ? "claude" : agentProvider);
       if (!requestedProvider) return;
       sendJson(res, 200, reviewTestsPayload(threadId, requestedProvider));
       return;
@@ -3512,6 +4163,10 @@ async function main() {
       if (!requireToken(url, phoneToken, res)) return;
       const requestedProvider = queryProvider(url, res);
       if (!requestedProvider) return;
+      if (requestedProvider === "claude") {
+        sendJson(res, 200, { skipped: true, reason: "history sync is only available for the Codex provider" });
+        return;
+      }
       const threadId = url.searchParams.get("thread");
       if (!threadId) {
         sendJson(res, 400, { error: "thread is required" });
@@ -3533,10 +4188,25 @@ async function main() {
     if (url.pathname === "/api/thread") {
       if (!requireToken(url, phoneToken, res)) return;
       const threadId = url.searchParams.get("thread");
-      const requestedProvider = queryProvider(url, res, agentProvider);
+      const requestedProvider = queryProvider(url, res, threadId?.startsWith("claude:") ? "claude" : agentProvider);
       if (!requestedProvider) return;
       if (!threadId) {
         sendJson(res, 400, { error: "thread is required" });
+        return;
+      }
+      if (requestedProvider === "claude") {
+        const bridge = findBridgeByThreadId(threadId, requestedProvider);
+        const session = bridge ? null : readClaudeSession(threadId);
+        if (!bridge && !session) {
+          sendJson(res, 200, { provider: requestedProvider, activeProvider: requestedProvider, threadId, missing: true, history: [] });
+          return;
+        }
+        sendJson(res, 200, {
+          provider: requestedProvider,
+          activeProvider: requestedProvider,
+          threadId,
+          history: bridge?.history?.length ? bridge.history : session?.history || [],
+        });
         return;
       }
       try {
@@ -3648,7 +4318,7 @@ async function main() {
     const fresh = url.searchParams.get("fresh") === "1";
     let requestedProvider;
     try {
-      requestedProvider = normalizeProvider(url.searchParams.get("provider") || agentProvider);
+      requestedProvider = normalizeProvider(url.searchParams.get("provider") || (threadId?.startsWith("claude:") ? "claude" : agentProvider));
     } catch (error) {
       socket.write(`HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n${error.message}`);
       socket.destroy();
@@ -3683,6 +4353,7 @@ async function main() {
     console.log(`Bridge label: ${phoneBridgeLabel} (${phoneBridgeId})`);
     console.log(`Bridge:  ${uiHost}:${uiPort}`);
     console.log(`Codex:   ${managedCodexServer ? codexUrl : codexSocketPath || codexUrl}`);
+    console.log(`Claude:  ${claudeBin}`);
     console.log(`Fleet registry entry: ${JSON.stringify({ id: phoneBridgeId, label: phoneBridgeLabel, group: phoneBridgeGroup, baseUrl: `http://LAN-IP:${uiPort}`, token: "***", port: uiPort })}`);
     console.log("Open the private tokenized bridge URL from your protected startup channel to share one bridge thread.");
     console.log("The terminal output masks the local access key by default.");
