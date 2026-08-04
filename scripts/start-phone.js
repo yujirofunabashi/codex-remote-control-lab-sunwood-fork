@@ -440,7 +440,20 @@ const rateLimitRefreshTimeoutMs = positiveNumber(process.env.PHONE_RATE_LIMIT_RE
 const uploadDir = path.join(root, ".uploads");
 const maxUploadBytes = uploadLimitBytes();
 const codexModelOptions = ["gpt-5.5", "gpt-5.4", "gpt-5.3-codex", "gpt-5.3-codex-spark", "gpt-5.2"];
-const claudeModelOptions = ["sonnet", "opus", "haiku", "claude-sonnet-4-6", "claude-opus-4-5"];
+// Aliases rather than pinned full names: they follow the current generation, so
+// the list cannot rot into offering models that no longer exist.
+const claudeModelOptions = ["sonnet", "opus", "haiku", "fable"];
+// `claude --effort` accepts any string without complaining, so an unknown value
+// is silently ignored rather than rejected. Validate here or a typo looks like
+// it applied.
+const claudeEffortLevels = new Set(["low", "medium", "high", "xhigh", "max"]);
+
+function claudeEffortLevel(options = {}) {
+  const requested = String(options.effort || "").trim().toLowerCase();
+  if (claudeEffortLevels.has(requested)) return requested;
+  const configured = String(process.env.CLAUDE_EFFORT || "").trim().toLowerCase();
+  return claudeEffortLevels.has(configured) ? configured : "";
+}
 const modelOptions = isClaudeProvider ? claudeModelOptions : codexModelOptions;
 const bridges = new Map();
 const bridgeStartedAt = Date.now();
@@ -3326,6 +3339,8 @@ class ClaudeBridge {
       "--permission-mode",
       permissionMode,
     ];
+    const effort = claudeEffortLevel(options);
+    if (effort) args.push("--effort", effort);
     if (approvalSocketPath) {
       args.push(
         "--mcp-config",
@@ -4713,6 +4728,7 @@ module.exports = {
   ClaudeBridge,
   approvalMcpConfig,
   bindBrowser,
+  claudeEffortLevel,
   claudeModeCanPrompt,
   claudePermissionMode,
   executeTerminalCommand,

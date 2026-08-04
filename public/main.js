@@ -1243,8 +1243,24 @@ function setSelectedModel(model, { persist = true } = {}) {
   updateTerminalHeader();
 }
 
+// Codex calls it reasoning, Claude calls it effort, and both are chosen from the
+// same four-step menu.
 function providerSupportsReasoning() {
-  return activeProvider === "codex";
+  return activeProvider === "codex" || activeProvider === "claude";
+}
+
+// The bridge validates this too, because `claude --effort` accepts any string
+// and silently ignores one it does not know.
+const claudeEffortByReasoning = new Map([
+  ["L", "low"],
+  ["M", "medium"],
+  ["H", "high"],
+  ["XH", "xhigh"],
+]);
+
+function claudeEffortForSubmission() {
+  if (currentThreadProvider() !== "claude") return undefined;
+  return claudeEffortByReasoning.get(normalizeReasoning(selectedReasoning));
 }
 
 function providerSupportsServiceTier() {
@@ -6302,6 +6318,7 @@ composer.addEventListener("submit", (event) => {
         options: {
           model: selectedModel || undefined,
           serviceTier: currentThreadProvider() === "codex" ? selectedServiceTier || null : undefined,
+          effort: claudeEffortForSubmission(),
           approvalPolicy: accessMode.approvalPolicy,
           sandboxMode: accessMode.sandboxMode,
         },
