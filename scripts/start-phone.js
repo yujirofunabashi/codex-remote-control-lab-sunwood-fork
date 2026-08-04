@@ -2931,11 +2931,117 @@ class SharedBridge {
   }
 }
 
+const approvalMcpScript = path.join(root, "scripts", "claude-approval-mcp.js");
+const approvalMcpServerName = "phone_approval";
+const approvalTimeoutMs = Number(process.env.PHONE_APPROVAL_TIMEOUT_MS || 5 * 60 * 1000);
+const approvalSocketPaths = new Set();
+
 function claudePermissionMode(options = {}) {
   if (options.permissionMode) return options.permissionMode;
   if (options.sandboxMode === "danger-full-access" || options.approvalPolicy === "never") return "bypassPermissions";
   if (options.sandboxMode === "read-only") return "plan";
+  // 確認モード asks for on-request approval, so stay in `default` where unmatched
+  // tools fall through to the permission prompt tool instead of auto-approving.
+  if (options.approvalPolicy === "on-request") return process.env.CLAUDE_PERMISSION_MODE || "default";
   return process.env.CLAUDE_PERMISSION_MODE || "acceptEdits";
+}
+
+// bypassPermissions approves everything before the prompt tool is consulted, so
+// there is nothing for the approval socket to do in that mode.
+function claudeModeCanPrompt(permissionMode) {
+  return permissionMode !== "bypassPermissions";
+}
+
+// A Unix socket per bridge, never a port: the fleet runs several bridges at once
+// and a fixed-port approval channel would collide on the second one.
+function approvalSocketPathFor(bridgeKey) {
+  const suffix = crypto.createHash("sha1").update(`${process.pid}:${bridgeKey}`).digest("hex").slice(0, 10);
+  return path.join(os.tmpdir(), `phone-approval-${process.pid}-${suffix}.sock`);
+}
+
+function removeApprovalSocket(socketPath) {
+  approvalSocketPaths.delete(socketPath);
+  try {
+    if (fs.existsSync(socketPath)) fs.unlinkSync(socketPath);
+  } catch {
+    // Best effort: a leftover socket file is harmless on the next run.
+  }
+}
+
+function approvalMcpConfig(socketPath) {
+  return JSON.stringify({
+    mcpServers: {
+      [approvalMcpServerName]: {
+        type: "stdio",
+        command: process.execPath,
+        args: [approvalMcpScript],
+        env: {
+          PHONE_APPROVAL_SOCKET: socketPath,
+          PHONE_APPROVAL_TIMEOUT_MS: String(approvalTimeoutMs),
+          PHONE_APPROVAL_SERVER_NAME: approvalMcpServerName,
+        },
+      },
+    },
+  });
+}
+
+function truncateStatusText(value, limit = 300) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  return text.length > limit ? `${text.slice(0, limit)}…` : text;
+}
+
+function claudeToolPath(value, base) {
+  const raw = String(value || "");
+  if (!raw) return "";
+  return path.isAbsolute(raw) ? path.relative(base || workdir, raw) || raw : raw;
+}
+
+// Mirrors the Codex side's live status vocabulary (`$ cmd`, `file changes: …`)
+// so both providers read the same way in the collapsed status log.
+function summarizeClaudeToolUse(block, base) {
+  if (!block || block.type !== "tool_use") return null;
+  const name = String(block.name || "");
+  const input = block.input || {};
+  if (name === "Bash" || name === "BashOutput") return truncateStatusText(`$ ${input.command || input.description || ""}`);
+  if (name === "Edit" || name === "Write" || name === "NotebookEdit") {
+    return truncateStatusText(`file changes: ${claudeToolPath(input.file_path || input.notebook_path, base)}`);
+  }
+  if (name === "Read") return truncateStatusText(`read: ${claudeToolPath(input.file_path, base)}`);
+  if (name === "Glob") return truncateStatusText(`glob: ${input.pattern || ""}`);
+  if (name === "Grep") return truncateStatusText(`grep: ${input.pattern || ""}`);
+  if (name === "Task" || name === "Agent") {
+    return truncateStatusText(`subagent: ${input.description || input.subagent_type || ""}`);
+  }
+  if (name === "WebFetch") return truncateStatusText(`fetch: ${input.url || ""}`);
+  if (name === "WebSearch") return truncateStatusText(`web search: ${input.query || ""}`);
+  if (name.startsWith("mcp__")) return truncateStatusText(`mcp: ${name.slice("mcp__".length).replace(/__/g, " / ")}`);
+  if (!name) return null;
+  return truncateStatusText(name);
+}
+
+// Successful results are already implied by the next status line, so only
+// failures are worth surfacing while a turn is running.
+function summarizeClaudeToolResult(block) {
+  if (!block || block.type !== "tool_result" || !block.is_error) return null;
+  const content = block.content;
+  const text = Array.isArray(content)
+    ? content.map((part) => (typeof part === "string" ? part : part?.text || "")).join(" ")
+    : content;
+  return truncateStatusText(`failed: ${text || "tool returned an error"}`);
+}
+
+// Claude Code's streaming input takes image blocks directly, so an attachment
+// reaches the model as an image rather than a path it has to go and read.
+function claudeImageBlock(saved) {
+  const preview = saved?.preview;
+  if (!preview || preview.kind !== "image" || !preview.absolutePath) return null;
+  if (!fs.existsSync(preview.absolutePath)) return null;
+  const mediaType = preview.mimeType || preview.mediaType || "image/png";
+  if (!String(mediaType).startsWith("image/")) return null;
+  return {
+    type: "image",
+    source: { type: "base64", media_type: mediaType, data: fs.readFileSync(preview.absolutePath).toString("base64") },
+  };
 }
 
 function summarizeClaudeAttachmentPrompt(text, savedAttachments) {
@@ -3052,6 +3158,7 @@ class ClaudeBridge {
     this.idleDisposeTimer = setTimeout(() => {
       this.idleDisposeTimer = null;
       if (this.clients.size || this.hasActiveWork()) return;
+      this.closeApprovalServer();
       if (bridges.get(this.bridgeKey) === this) bridges.delete(this.bridgeKey);
     }, idleBridgeTtlMs);
     this.idleDisposeTimer.unref?.();
@@ -3142,17 +3249,42 @@ class ClaudeBridge {
   }
 
   startPrompt(text, attachments = [], options = {}, clientMessageId = null) {
+    const permissionMode = claudePermissionMode(options);
+    if (!claudeModeCanPrompt(permissionMode)) {
+      this.spawnTurn(text, attachments, options, clientMessageId, permissionMode, null);
+      return;
+    }
+    // Reserve the slot before awaiting so a second prompt still queues.
+    this.activeTurnId = `claude-turn:pending:${crypto.randomUUID()}`;
+    this.ensureApprovalServer()
+      .then((socketPath) => this.spawnTurn(text, attachments, options, clientMessageId, permissionMode, socketPath))
+      .catch((error) => {
+        this.activeTurnId = null;
+        this.emit("status", { text: `承認ソケットを準備できなかったため承認なしで実行します: ${error.message}` });
+        this.spawnTurn(text, attachments, options, clientMessageId, permissionMode, null);
+      });
+  }
+
+  spawnTurn(text, attachments = [], options = {}, clientMessageId = null, permissionMode = "acceptEdits", approvalSocketPath = null) {
     this.interruptRequested = false;
     const savedAttachments = [];
     const savedImages = [];
+    const imageBlocks = [];
+    const pathOnlyAttachments = [];
     for (const attachment of attachments || []) {
       const saved = saveDataUrlAttachment(attachment);
       if (!saved) continue;
       savedAttachments.push(saved.preview);
       if (saved.preview.kind === "image") savedImages.push(saved.preview);
+      const block = claudeImageBlock(saved);
+      // Anything we cannot inline still falls back to handing over its path.
+      if (block) imageBlocks.push(block);
+      else pathOnlyAttachments.push(saved.preview);
     }
 
-    const promptText = summarizeClaudeAttachmentPrompt(text, savedAttachments);
+    const promptText =
+      summarizeClaudeAttachmentPrompt(text, pathOnlyAttachments) ||
+      (imageBlocks.length ? "添付画像を確認してください。" : text);
     const displayText = savedAttachments.length ? `${text || "添付ファイルを確認してください。"}\n\n添付: ${savedAttachments.map((file) => file.name).join(", ")}` : text;
     const turnId = `claude-turn:${crypto.randomUUID()}`;
     this.activeTurnId = turnId;
@@ -3165,7 +3297,8 @@ class ClaudeBridge {
 
     const args = [
       "-p",
-      promptText,
+      "--input-format",
+      "stream-json",
       "--output-format",
       "stream-json",
       "--verbose",
@@ -3173,15 +3306,39 @@ class ClaudeBridge {
       "--model",
       options.model || this.model,
       "--permission-mode",
-      claudePermissionMode(options),
+      permissionMode,
     ];
+    if (approvalSocketPath) {
+      args.push(
+        "--mcp-config",
+        approvalMcpConfig(approvalSocketPath),
+        "--permission-prompt-tool",
+        `mcp__${approvalMcpServerName}__approve`,
+      );
+    }
     if (this.claudeSessionId) args.push("--resume", this.claudeSessionId);
 
     const child = spawn(claudeBin, args, {
-      cwd: workdir,
+      // Per-bridge workdir: the fleet pins each slot to its own worktree, so the
+      // module-level workdir would send every slot's turns to the same tree.
+      cwd: this.workdir || workdir,
       env: process.env,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
     });
+    child.stdin.on("error", (error) => {
+      this.emit("status", { text: `Claude prompt input closed early: ${error.message}` });
+    });
+    try {
+      child.stdin.end(
+        `${JSON.stringify({
+          type: "user",
+          message: { role: "user", content: [{ type: "text", text: promptText }, ...imageBlocks] },
+          parent_tool_use_id: null,
+        })}\n`,
+      );
+    } catch (error) {
+      this.emit("status", { text: `Claudeへの送信に失敗しました: ${error.message}` });
+    }
     this.activeProcess = child;
     let stdoutBuffer = "";
     let stderrBuffer = "";
@@ -3230,6 +3387,20 @@ class ClaudeBridge {
         }
         assistantText += delta;
         this.emit("assistantDelta", { text: delta });
+        return;
+      }
+      if (msg.type === "assistant") {
+        for (const block of msg.message?.content || []) {
+          const summary = summarizeClaudeToolUse(block, this.workdir || workdir);
+          if (summary) this.emit("status", { text: summary });
+        }
+        return;
+      }
+      if (msg.type === "user") {
+        for (const block of msg.message?.content || []) {
+          const summary = summarizeClaudeToolResult(block);
+          if (summary) this.emit("status", { text: summary });
+        }
         return;
       }
       if (msg.type === "result") {
@@ -3329,8 +3500,130 @@ class ClaudeBridge {
     if (entry?.text) this.listUpdatedAt = Date.now();
   }
 
-  approval(_requestMsg, _decision) {
-    this.emit("status", { text: "Claude headless providerでは実行中の承認応答は未対応です。" });
+  // Claude Code spawns the approval MCP server itself, so the bridge only has to
+  // listen on a Unix socket it can dial back on. No port is bound, which keeps
+  // concurrent fleet bridges from colliding.
+  ensureApprovalServer() {
+    if (this.approvalServer) return Promise.resolve(this.approvalSocketPath);
+    const socketPath = approvalSocketPathFor(this.bridgeKey || this.threadId || String(uiPort));
+    return new Promise((resolve, reject) => {
+      try {
+        if (fs.existsSync(socketPath)) fs.unlinkSync(socketPath);
+      } catch {
+        // A stale socket we cannot remove means listen() will fail below.
+      }
+      const server = net.createServer((socket) => this.handleApprovalConnection(socket));
+      server.on("error", (error) => {
+        this.approvalServer = null;
+        this.approvalSocketPath = null;
+        reject(error);
+      });
+      server.listen(socketPath, () => {
+        this.approvalServer = server;
+        this.approvalSocketPath = socketPath;
+        approvalSocketPaths.add(socketPath);
+        resolve(socketPath);
+      });
+    });
+  }
+
+  handleApprovalConnection(socket) {
+    socket.setEncoding("utf8");
+    let buffer = "";
+    socket.on("error", () => socket.destroy());
+    socket.on("data", (chunk) => {
+      buffer += chunk;
+      const newline = buffer.indexOf("\n");
+      if (newline === -1) return;
+      let payload;
+      try {
+        payload = JSON.parse(buffer.slice(0, newline));
+      } catch {
+        socket.end(`${JSON.stringify({ decision: "decline", message: "承認要求を解釈できませんでした。" })}\n`);
+        return;
+      }
+      buffer = buffer.slice(newline + 1);
+      this.openApproval(payload, socket);
+    });
+  }
+
+  openApproval(payload, socket) {
+    if (!this.pendingApprovals) this.pendingApprovals = new Map();
+    const id = `claude-approval:${(this.nextApprovalId = (this.nextApprovalId || 0) + 1)}`;
+    const request = {
+      id,
+      method: "claude/requestApproval",
+      params: {
+        toolName: payload.toolName || "unknown",
+        input: payload.input || {},
+        toolUseId: payload.toolUseId || null,
+      },
+    };
+
+    const settle = (decision, message) => {
+      if (!this.pendingApprovals.has(id)) return;
+      clearTimeout(timer);
+      this.pendingApprovals.delete(id);
+      if (!socket.destroyed) socket.end(`${JSON.stringify({ decision, message })}\n`);
+    };
+
+    const timer = setTimeout(() => {
+      settle("decline", "承認がタイムアウトしました。");
+      this.emit("status", { text: "承認がタイムアウトしたため拒否しました。" });
+    }, approvalTimeoutMs);
+
+    socket.on("close", () => {
+      if (!this.pendingApprovals.has(id)) return;
+      clearTimeout(timer);
+      this.pendingApprovals.delete(id);
+    });
+
+    this.pendingApprovals.set(id, settle);
+
+    if (!this.clients.size) {
+      settle("decline", "接続中のブラウザがないため拒否しました。");
+      this.emit("status", { text: "承認を求められましたが、接続中の端末がありません。" });
+      return;
+    }
+
+    this.setBridgeRunState("approval", "承認待ち", this.activeTurnId);
+    this.emit("approval", { request });
+    notifyBridgeEvent("approval_required", {
+      provider: this.provider,
+      threadId: this.threadId,
+      turnId: this.activeTurnId,
+      severity: "warning",
+      title: "Approval required",
+      message: `${request.params.toolName} の承認待ちです`,
+    });
+  }
+
+  closeApprovalServer() {
+    for (const settle of Array.from((this.pendingApprovals || new Map()).values())) {
+      settle("decline", "ブリッジが終了したため拒否しました。");
+    }
+    this.pendingApprovals?.clear();
+    if (this.approvalServer) {
+      this.approvalServer.close();
+      this.approvalServer = null;
+    }
+    if (this.approvalSocketPath) {
+      removeApprovalSocket(this.approvalSocketPath);
+      this.approvalSocketPath = null;
+    }
+  }
+
+  approval(requestMsg, decision) {
+    const id = requestMsg?.id;
+    const settle = id ? this.pendingApprovals?.get(id) : null;
+    if (!settle) {
+      this.emit("status", { text: "対象の承認リクエストは既に解決済みです。" });
+      return;
+    }
+    const accepted = decision === "accept";
+    settle(accepted ? "accept" : "decline", accepted ? undefined : "ブラウザから拒否されました。");
+    this.setBridgeRunState("running", "Agent 処理中", this.activeTurnId);
+    this.emit("status", { text: accepted ? "承認しました" : "拒否しました" });
   }
 }
 
@@ -4373,6 +4666,7 @@ async function main() {
 
   process.on("exit", () => {
     stopCodexServer();
+    for (const socketPath of Array.from(approvalSocketPaths)) removeApprovalSocket(socketPath);
   });
   process.once("SIGINT", () => shutdown("SIGINT"));
   process.once("SIGTERM", () => shutdown("SIGTERM"));
@@ -4386,7 +4680,11 @@ if (require.main === module) {
 }
 
 module.exports = {
+  ClaudeBridge,
+  approvalMcpConfig,
   bindBrowser,
+  claudeModeCanPrompt,
+  claudePermissionMode,
   executeTerminalCommand,
   launchSettingsFromFleetOrEnv,
   manifestHrefForRequest,
@@ -4396,6 +4694,8 @@ module.exports = {
   readFleetConfigBridgeSettings,
   requestTokenFromHeaders,
   safeProxyBasePath,
+  summarizeClaudeToolResult,
+  summarizeClaudeToolUse,
   threadRecordForBridge,
   threadListTimestamp,
   tokenMetadata,
