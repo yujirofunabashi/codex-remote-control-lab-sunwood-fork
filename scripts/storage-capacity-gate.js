@@ -1,4 +1,5 @@
 const { spawnSync } = require("child_process");
+const fs = require("fs");
 
 const STORAGE_CAPACITY_GATE_PATH = "/Users/minijiro/agent-hub/machines/mini/automation/storage_capacity_gate.sh";
 const STORAGE_CAPACITY_GATE_HOME = "/Users/minijiro";
@@ -45,10 +46,25 @@ function ingressWriterForPort(port, ingress) {
   return { port: numericPort, parentWriterId: config.parentWriterId, writerId };
 }
 
+// The gate script is provisioned on one specific machine. On a host that does
+// not have it, the policy simply does not apply — and failing closed there
+// blocks every bridge connection, upload, and terminal run without protecting
+// anything, because there is no gate to consult.
+function isStorageCapacityGateInstalled(gatePath = STORAGE_CAPACITY_GATE_PATH) {
+  try {
+    return fs.existsSync(gatePath);
+  } catch {
+    return false;
+  }
+}
+
 function assertStorageCapacityIngress(port, ingress, dependencies = {}) {
+  const gatePath = dependencies.gatePath || STORAGE_CAPACITY_GATE_PATH;
+  const installed =
+    dependencies.gateInstalled === undefined ? isStorageCapacityGateInstalled(gatePath) : Boolean(dependencies.gateInstalled);
+  if (!installed) return null;
   const writer = ingressWriterForPort(port, ingress);
   const run = dependencies.spawnSync || spawnSync;
-  const gatePath = dependencies.gatePath || STORAGE_CAPACITY_GATE_PATH;
   let result;
 
   try {
@@ -96,6 +112,7 @@ module.exports = {
   StorageCapacityProtectionError,
   assertStorageCapacityIngress,
   ingressWriterForPort,
+  isStorageCapacityGateInstalled,
   isStorageCapacityProtectionError,
   storageCapacityErrorPayload,
 };

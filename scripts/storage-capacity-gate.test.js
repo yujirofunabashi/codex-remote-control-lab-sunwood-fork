@@ -10,6 +10,7 @@ const {
   STORAGE_CAPACITY_GATE_TIMEOUT_MS,
   assertStorageCapacityIngress,
   ingressWriterForPort,
+  isStorageCapacityGateInstalled,
   storageCapacityErrorPayload,
 } = require("./storage-capacity-gate");
 
@@ -42,8 +43,8 @@ test("rejects an unregistered port or ingress without running a command", () => 
     calls += 1;
     return { status: 0 };
   };
-  assert.throws(() => assertStorageCapacityIngress(45224, "prompt", { spawnSync }), { code: "storage_capacity_protected" });
-  assert.throws(() => assertStorageCapacityIngress(45214, "unknown", { spawnSync }), { code: "storage_capacity_protected" });
+  assert.throws(() => assertStorageCapacityIngress(45224, "prompt", { spawnSync, gateInstalled: true }), { code: "storage_capacity_protected" });
+  assert.throws(() => assertStorageCapacityIngress(45214, "unknown", { spawnSync, gateInstalled: true }), { code: "storage_capacity_protected" });
   assert.equal(calls, 0);
 });
 
@@ -53,7 +54,7 @@ test("runs the fixed mini gate with a bounded timeout, null output, and minimal 
     call = { command, args, options };
     return { status: 0, signal: null, stdout: "STATUS: ALLOWED", stderr: "" };
   };
-  const result = assertStorageCapacityIngress(45214, "upload", { spawnSync });
+  const result = assertStorageCapacityIngress(45214, "upload", { spawnSync, gateInstalled: true });
   assert.deepEqual(result, {
     port: 45214,
     parentWriterId: "mini.phone_bridge_45214",
@@ -81,7 +82,7 @@ for (const [name, result] of [
   test(`fails closed on ${name} without exposing gate output`, () => {
     let error;
     try {
-      assertStorageCapacityIngress(45244, "prompt", { spawnSync: () => result });
+      assertStorageCapacityIngress(45244, "prompt", { spawnSync: () => result, gateInstalled: true });
     } catch (caught) {
       error = caught;
     }
@@ -96,3 +97,30 @@ for (const [name, result] of [
     });
   });
 }
+
+test("a host without the gate script installed is not gated", () => {
+  let calls = 0;
+  const spawnSync = () => {
+    calls += 1;
+    return { status: 0 };
+  };
+
+  // The gate lives on one machine. Elsewhere there is nothing to consult, and
+  // failing closed would block every bridge connection without protecting
+  // anything.
+  assert.equal(assertStorageCapacityIngress(45214, "prompt", { spawnSync, gateInstalled: false }), null);
+  assert.equal(assertStorageCapacityIngress(45214, "upload", { spawnSync, gateInstalled: false }), null);
+  assert.equal(assertStorageCapacityIngress(45214, "terminal", { spawnSync, gateInstalled: false }), null);
+  assert.equal(calls, 0, "an absent gate must not be executed");
+});
+
+test("an unregistered port is allowed through when the gate is not installed", () => {
+  // Otherwise a machine that never had the gate cannot serve any port but the
+  // two hardcoded ones.
+  assert.equal(assertStorageCapacityIngress(45999, "prompt", { gateInstalled: false }), null);
+});
+
+test("gate installation is decided by the script's presence on disk", () => {
+  assert.equal(isStorageCapacityGateInstalled("/nonexistent/storage_capacity_gate.sh"), false);
+  assert.equal(isStorageCapacityGateInstalled(__filename), true);
+});
