@@ -1080,7 +1080,18 @@ function saveDataUrlAttachment(attachment) {
   fs.writeFileSync(target, Buffer.from(match[2], "base64"), { mode: 0o600 });
   return {
     input: { type: "localImage", path: target },
+    image: { mediaType: mime, data: match[2] },
     preview: { name: attachment.name || fileName, path: fileName, url: `/api/uploaded?name=${encodeURIComponent(fileName)}` },
+  };
+}
+
+// Claude Code's streaming input takes image blocks directly, so an attachment
+// reaches the model as an image rather than as a file path it has to go and read.
+function claudeImageBlock(saved) {
+  if (!saved?.image?.data) return null;
+  return {
+    type: "image",
+    source: { type: "base64", media_type: saved.image.mediaType, data: saved.image.data },
   };
 }
 
@@ -2061,18 +2072,24 @@ class ClaudeBridge {
   }
 
   spawnTurn(text, attachments = [], options = {}, permissionMode = "acceptEdits", approvalSocketPath = null) {
-    const savedAttachments = [];
+    const pathOnlyAttachments = [];
     const savedImages = [];
+    const imageBlocks = [];
     for (const attachment of attachments || []) {
       const saved = saveDataUrlAttachment(attachment);
       if (!saved) continue;
-      savedAttachments.push({ ...saved.preview, absolutePath: saved.input.path });
       savedImages.push(saved.preview);
+      const block = claudeImageBlock(saved);
+      // Anything we cannot inline still falls back to handing over its path.
+      if (block) imageBlocks.push(block);
+      else pathOnlyAttachments.push({ ...saved.preview, absolutePath: saved.input.path });
     }
 
-    const promptText = summarizeClaudeAttachmentPrompt(text, savedAttachments);
-    const displayText = savedAttachments.length
-      ? `${text || "添付ファイルを確認してください。"}\n\n添付: ${savedAttachments.map((file) => file.name).join(", ")}`
+    const promptText =
+      summarizeClaudeAttachmentPrompt(text, pathOnlyAttachments) ||
+      (imageBlocks.length ? "添付画像を確認してください。" : text);
+    const displayText = savedImages.length
+      ? `${text || "添付ファイルを確認してください。"}\n\n添付: ${savedImages.map((file) => file.name).join(", ")}`
       : text;
     const turnId = `claude-turn:${crypto.randomUUID()}`;
     this.activeTurnId = turnId;
@@ -2092,7 +2109,7 @@ class ClaudeBridge {
 
     const line = JSON.stringify({
       type: "user",
-      message: { role: "user", content: [{ type: "text", text: promptText }] },
+      message: { role: "user", content: [{ type: "text", text: promptText }, ...imageBlocks] },
       parent_tool_use_id: null,
     });
     try {

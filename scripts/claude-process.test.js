@@ -7,6 +7,7 @@ const path = require("path");
 const stubRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-stub-"));
 const stubBin = path.join(stubRoot, "claude-stub.js");
 const argsLog = path.join(stubRoot, "args.log");
+const inputLog = path.join(stubRoot, "input.log");
 
 // Stands in for the Claude Code CLI: speaks stream-json over stdio, stays alive
 // between turns, and records the flags it was launched with.
@@ -26,6 +27,7 @@ process.stdin.on("data", (chunk) => {
   for (const line of lines) {
     if (!line.trim()) continue;
     const msg = JSON.parse(line);
+    fs.appendFileSync(process.env.STUB_INPUT_LOG, JSON.stringify(msg) + "\\n");
     const text = msg.message.content[0].text;
     const reply = () => {
       emit({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "echo:" + text } }, session_id: "stub-session" });
@@ -43,6 +45,7 @@ process.stdin.on("end", () => process.exit(0));
 process.env.PHONE_AGENT_PROVIDER = "claude";
 process.env.CLAUDE_BIN = stubBin;
 process.env.STUB_ARGS_LOG = argsLog;
+process.env.STUB_INPUT_LOG = inputLog;
 
 const { ClaudeBridge } = require("./start-phone");
 
@@ -67,6 +70,15 @@ function spawnedRuns() {
   if (!fs.existsSync(argsLog)) return [];
   return fs
     .readFileSync(argsLog, "utf8")
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+}
+
+function sentMessages() {
+  if (!fs.existsSync(inputLog)) return [];
+  return fs
+    .readFileSync(inputLog, "utf8")
     .split("\n")
     .filter(Boolean)
     .map((line) => JSON.parse(line));
@@ -243,6 +255,72 @@ test("disposing the bridge stops the held process", async () => {
   assert.equal(bridge.activeProcess, null);
   await new Promise((resolve) => setTimeout(resolve, 200));
   assert.ok(child.killed || child.exitCode !== null, "child process should be stopped");
+});
+
+// 1x1 transparent PNG.
+const pngBase64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+
+test("an attached image is sent as an image block, not as a file path", async () => {
+  fs.writeFileSync(argsLog, "");
+  fs.writeFileSync(inputLog, "");
+  const bridge = new ClaudeBridge(null, "image");
+  const client = fakeClient();
+  bridge.clients.add(client);
+  try {
+    bridge.prompt("What is in this image?", [{ name: "shot.png", dataUrl: `data:image/png;base64,${pngBase64}` }], fullAccess);
+    await turnCompleted(client, 1);
+
+    const [message] = sentMessages();
+    const content = message.message.content;
+    const image = content.find((block) => block.type === "image");
+
+    assert.ok(image, "an image block should be sent");
+    assert.equal(image.source.type, "base64");
+    assert.equal(image.source.media_type, "image/png");
+    assert.equal(image.source.data, pngBase64);
+
+    const textBlock = content.find((block) => block.type === "text");
+    assert.equal(textBlock.text, "What is in this image?");
+    assert.ok(!textBlock.text.includes(".uploads"), "the prompt should not fall back to handing over a path");
+  } finally {
+    bridge.dispose();
+  }
+});
+
+test("an image with no caption still carries a usable prompt", async () => {
+  fs.writeFileSync(inputLog, "");
+  const bridge = new ClaudeBridge(null, "image-no-caption");
+  const client = fakeClient();
+  bridge.clients.add(client);
+  try {
+    bridge.prompt("", [{ name: "shot.png", dataUrl: `data:image/png;base64,${pngBase64}` }], fullAccess);
+    await turnCompleted(client, 1);
+
+    const [message] = sentMessages();
+    const textBlock = message.message.content.find((block) => block.type === "text");
+    assert.ok(textBlock.text.trim().length > 0, "an empty text block would be rejected upstream");
+    assert.ok(message.message.content.some((block) => block.type === "image"));
+  } finally {
+    bridge.dispose();
+  }
+});
+
+test("the browser still gets a preview entry for an attached image", async () => {
+  const bridge = new ClaudeBridge(null, "image-preview");
+  const client = fakeClient();
+  bridge.clients.add(client);
+  try {
+    bridge.prompt("look", [{ name: "shot.png", dataUrl: `data:image/png;base64,${pngBase64}` }], fullAccess);
+    await turnCompleted(client, 1);
+
+    const [userMessage] = client.messagesOfType("user");
+    assert.equal(userMessage.attachments.length, 1);
+    assert.match(userMessage.attachments[0].url, /^\/api\/uploaded\?name=/);
+    assert.match(userMessage.text, /添付: shot\.png/);
+  } finally {
+    bridge.dispose();
+  }
 });
 
 test("a resumed session passes --resume so the transcript continues", async () => {
