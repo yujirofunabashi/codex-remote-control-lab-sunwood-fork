@@ -401,7 +401,9 @@ const codexPort = Number(
 );
 const codexSocketPath = process.env.CODEX_APP_SERVER_SOCK || "";
 const codexUrl = process.env.CODEX_APP_SERVER_URL || (codexSocketPath ? "ws://codex-app-server/rpc" : `ws://127.0.0.1:${codexPort}`);
-const shouldStartCodexServer = !process.env.CODEX_APP_SERVER_URL && !codexSocketPath;
+// A Claude-default bridge has no use for the Codex app-server, and starting one
+// anyway makes the bridge depend on the codex binary being present and runnable.
+const shouldStartCodexServer = isCodexProvider && !process.env.CODEX_APP_SERVER_URL && !codexSocketPath;
 const workdir = launchSettings.workdir;
 const providerModels = {
   // The active provider takes the fleet-resolved model; the other still needs a
