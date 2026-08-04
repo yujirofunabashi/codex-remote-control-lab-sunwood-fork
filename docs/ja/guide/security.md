@@ -20,6 +20,22 @@
 - VPN
 - device-level authentication 付き mesh network
 
+## LAN 外のスマホへ URL を渡す
+
+mesh VPN や VPN でこのマシンに到達できる状態なら、bridge 側の変更は不要です。token mode では `0.0.0.0` に bind し、非 internal な IPv4 address をすべて列挙するため、Tailscale の `100.64.0.0/10` address も LAN address と並んで表示されます。
+
+`npm run url:remote` はその URL を組み立て、token を画面に出さずに渡します。
+
+```bash
+npm run url:remote            # mesh address を優先、token は伏字
+npm run url:remote -- --qr    # スマホで読み取る (qrencode が必要)
+npm run url:remote -- --copy  # clipboard へ直接、画面には出さない
+```
+
+`PHONE_TOKEN` または `.phone-token` を読み、`tailscale` が PATH にあれば MagicDNS 名を使います。`--reveal` を付けない限り token は伏字です。`--qr` か `--copy` を使ってください。伏字の URL は画面に残しても安全ですが、表示した URL はそのまま access key です。
+
+端末間で移すために、token 付き URL を chat、issue、スクリーンショットへ貼らないでください。clipboard、QR、または [Phone Bridge](/ja/guide/phone-bridge) の private な通知チャネルを使ってください。
+
 ## Token Handling
 
 `PHONE_TOKEN` が未指定の場合、bridge は mode `0600` の `.phone-token` を作ります。token を rotate するときは `.phone-token` を削除します。
