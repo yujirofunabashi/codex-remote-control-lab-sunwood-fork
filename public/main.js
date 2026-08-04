@@ -1265,6 +1265,29 @@ function providerLabel(provider) {
   return provider === "claude" ? "Claude" : "Codex";
 }
 
+// A bridge serves exactly one provider. A per-thread choice left over from an
+// earlier session — stored per bridge, and sticky once explicit — otherwise
+// keeps asking for the provider this bridge cannot serve, and the connection
+// never settles. The bridge's own answer wins over the stored one.
+function adoptBridgeProvider(provider) {
+  const next = normalizeProviderName(provider);
+  if (!next) return;
+  if (threadProvider && threadProvider !== next) {
+    threadProvider = next;
+    threadProviderExplicit = false;
+  }
+  setActiveProvider(next);
+}
+
+async function syncProviderFromBridge() {
+  try {
+    const info = await apiGet("/api/info");
+    adoptBridgeProvider(info?.provider);
+  } catch {
+    // Falls back to whatever the thread list reports once it loads.
+  }
+}
+
 function setActiveProvider(provider) {
   const previousProvider = activeProvider;
   activeProvider = normalizeProviderName(provider) || "codex";
@@ -3824,6 +3847,7 @@ async function setActiveBridge(bridgeId, { silent = false, reconnect = true, fol
   }
   await refreshBridgeState(bridgeId).catch(() => {});
   loadArtifacts();
+  await syncProviderFromBridge();
   loadThreads({ background: true }).finally(() => connect());
 }
 
@@ -4333,7 +4357,7 @@ async function loadThreads({ background = false, provider = "" } = {}) {
   const path = requestedProvider ? `/api/threads?provider=${encodeURIComponent(requestedProvider)}` : "/api/threads";
   try {
     const result = await apiGet(path);
-    if (result.activeProvider) setActiveProvider(result.activeProvider);
+    if (result.activeProvider) adoptBridgeProvider(result.activeProvider);
     const resultProvider = normalizeProviderName(result.provider || requestedProvider || activeProvider) || currentThreadProvider();
     if (requestedProvider && requestedProvider !== currentThreadProvider()) return;
     if (!threadProviderExplicit) threadProvider = resultProvider;
@@ -6707,7 +6731,10 @@ renderFleet();
 loadArtifacts();
 refreshBridgeState(activeBridgeId, { force: true })
   .catch(() => {})
-  .finally(() => loadThreads().catch(() => {}).finally(connect));
+  // Ask the bridge which provider it serves before the first thread load, so a
+  // stored per-thread choice cannot send this session at a provider the bridge
+  // has no way to answer.
+  .finally(() => syncProviderFromBridge().finally(() => loadThreads().catch(() => {}).finally(connect)));
 refreshFleet({ force: true }).catch(() => {});
 unregisterStaleServiceWorkersIfNeeded().finally(() => {
   if (params.get("pwaDiagnostics") === "1") safeWriteStorage(localStorage, pwaDiagnosticsStorageKey, "1");
