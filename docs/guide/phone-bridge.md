@@ -171,6 +171,21 @@ The one exception is asking for a folder explicitly. The per-project "new chat" 
 
 The list is polled, so summaries are cached until a file changes underneath them, and each folder contributes its 20 newest sessions — raise or lower that with `PHONE_CLAUDE_SESSIONS_PER_PROJECT`.
 
+## Picking Up Desktop Work on the Phone
+
+A session is one file, and **the desktop app, the terminal `claude`, and this bridge all append to the same one**. Open it from the sidebar and the conversation so far is there to carry on from.
+
+While it is open the bridge follows that file, so work continuing on the PC shows up on the phone:
+
+- **the open session** — about a second (`PHONE_CLAUDE_WATCH_INTERVAL_MS`), and an append is pushed over the WebSocket rather than waiting for the next poll
+- **the list** — polled every 10 seconds
+
+The watch runs only while a phone actually has the session open, and stops when the last one closes. A turn of the bridge's own is left alone: the stream already on screen is the newer view, and everything written meanwhile arrives once that turn finishes.
+
+::: warning The claude.ai phone app is not included
+What can be picked up here is what lives **on that Mac's disk** — the desktop app and the terminal `claude`. Conversations in the claude.ai phone app or in a browser live server-side and are not files on the Mac, so they cannot be read this way.
+:::
+
 ## Picking Up Phone Work on the Desktop
 
 The bridge records its turns exactly where Claude Code expects them:
