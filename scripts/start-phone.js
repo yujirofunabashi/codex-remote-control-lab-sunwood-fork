@@ -3959,6 +3959,19 @@ function getBridge(threadId, provider = agentProvider, connectionId = crypto.ran
   return bridges.get(key);
 }
 
+// The phone remembers a cwd per thread, and it can name a folder that does not
+// exist on this machine — a thread opened on one Mac and reopened on another,
+// or a worktree since deleted. Dropping the hint costs routing; letting it throw
+// kills the socket, and the phone reconnects straight into the same failure.
+function usableRequestedWorkdir(requested) {
+  if (!requested) return { workdir: "" };
+  try {
+    return { workdir: validateWorkdir(requested) };
+  } catch (error) {
+    return { workdir: "", problem: error.message };
+  }
+}
+
 async function bindBrowser(browser, phoneToken, threadId, provider = agentProvider, options = {}, dependencies = {}) {
   const requestedProvider = normalizeProvider(provider);
   const assertIngress = dependencies.assertStorageCapacityIngress || assertStorageCapacityIngress;
@@ -3988,8 +4001,15 @@ async function bindBrowser(browser, phoneToken, threadId, provider = agentProvid
     }
   }
   if (browser.readyState !== WebSocket.OPEN) return;
-  const bridge = resolveBridge(threadId, requestedProvider, crypto.randomUUID(), options);
+  const requestedWorkspace = usableRequestedWorkdir(options.workdir);
+  const bridge = resolveBridge(threadId, requestedProvider, crypto.randomUUID(), { ...options, workdir: requestedWorkspace.workdir });
   bridge.addClient(browser);
+  if (requestedWorkspace.problem) {
+    // Say it rather than quietly working somewhere else than the phone shows.
+    bridge.emitTo(browser, "status", {
+      text: `保存されていた作業場所を使えないため ${bridge.workdir || workdir} で開きます: ${requestedWorkspace.problem}`,
+    });
+  }
 
   browser.on("message", (data) => {
     let msg;
