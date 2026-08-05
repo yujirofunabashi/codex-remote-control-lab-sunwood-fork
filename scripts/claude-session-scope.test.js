@@ -94,10 +94,44 @@ test("a session whose folder is gone falls back instead of failing to open", () 
   assert.equal(claudeSessionWorkdir(null, activeWorkdir), activeWorkdir);
 });
 
-test("a session recorded outside the home folder is not adopted as a workdir", () => {
-  // validateWorkdir's home rule is the guard; a transcript is data from disk,
-  // so it must not be able to point the bridge anywhere it likes.
-  assert.equal(claudeSessionWorkdir({ summary: { cwd: "/etc" } }, activeWorkdir), activeWorkdir);
+test("a session kept outside the home folder still opens where it lives", () => {
+  // An external volume is an ordinary place to keep a repo. Falling back to the
+  // configured workdir made the answer describe a different folder than the row
+  // the session was opened from — `git remote -v` reporting the wrong repo.
+  const volume = fs.mkdtempSync("/tmp/scope-volume-");
+  try {
+    assert.equal(claudeSessionWorkdir({ summary: { cwd: volume } }, activeWorkdir), volume);
+  } finally {
+    fs.rmSync(volume, { recursive: true, force: true });
+  }
+});
+
+test("a folder that is not a folder any more falls back", () => {
+  const file = path.join(activeWorkdir, "not-a-directory");
+  fs.writeFileSync(file, "");
+  try {
+    assert.equal(claudeSessionWorkdir({ summary: { cwd: file } }, activeWorkdir), activeWorkdir);
+  } finally {
+    fs.rmSync(file, { force: true });
+  }
+});
+
+test("sessions filed against the home folder are left out of the list", async () => {
+  // `claude` run from a bare shell lands there, and so does the tooling that
+  // spawns it — memory hooks and summarisers whose opening message is a system
+  // prompt. Listing them buried the sessions the phone is actually for.
+  const homeDir = projectDirFor(home);
+  const homeId = "dddddddd-0000-0000-0000-000000000004";
+  const existed = fs.existsSync(homeDir);
+  writeSession(home, homeId, "You are a Claude-Mem summariser…");
+  try {
+    const ids = (await claudeThreadListPayload()).data.map((thread) => thread.id);
+    assert.ok(!ids.includes(homeId), "the home folder is not a project");
+    assert.ok(ids.includes(otherId), "other workdirs are still listed");
+  } finally {
+    fs.rmSync(path.join(homeDir, `${homeId}.jsonl`), { force: true });
+    if (!existed) fs.rmSync(homeDir, { recursive: true, force: true });
+  }
 });
 
 test("each session's bridge holds its own directory, so opening one leaves the others alone", () => {
@@ -128,4 +162,13 @@ test("an unusable requested folder falls back rather than failing to open a chat
 test("an existing session ignores a requested folder and stays home", () => {
   // The session's own cwd is the one that keeps its transcript in one file.
   assert.equal(new ClaudeBridge(otherId, `${otherId}::k`, { workdir: activeWorkdir }).workdir, otherWorkdir);
+});
+
+test("the header is told the folder the turn will actually run in", () => {
+  // It reported the configured workdir regardless, so opening a session from
+  // another project left the header naming one folder while the turn ran in
+  // another — and the answer described a repo the header did not name.
+  const ready = new ClaudeBridge(otherId, `${otherId}::k`).readyPayload();
+  assert.equal(ready.workdir, otherWorkdir);
+  assert.notEqual(ready.workdir, activeWorkdir);
 });

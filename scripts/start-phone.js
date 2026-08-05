@@ -2439,11 +2439,17 @@ function requestedWorkdirOr(requested, fallback = workdir) {
 function claudeSessionWorkdir(session, fallback = workdir) {
   const cwd = String(session?.summary?.cwd || "").trim();
   if (!cwd || path.resolve(cwd) === path.resolve(fallback)) return fallback;
+  // Deliberately not validateWorkdir: its home-folder rule exists to constrain
+  // what a phone may ask for over the network, and this is not that. It is where
+  // the local `claude` already ran, read back out of its own transcript — an
+  // external volume is a perfectly ordinary place to keep a repo. Silently
+  // running somewhere else is the real hazard: the answer then describes a
+  // different folder than the row the session was opened from.
   try {
-    return validateWorkdir(cwd);
+    const target = path.resolve(cwd);
+    return fs.statSync(target).isDirectory() ? target : fallback;
   } catch {
-    // Deleted, or outside the home folder. Opening it read-only still beats
-    // refusing to show the session at all.
+    // Gone. Opening the history read-only beats refusing to show the session.
     return fallback;
   }
 }
@@ -2500,9 +2506,25 @@ async function claudeProjectSessionFiles(dir, limit = claudeSessionsPerProject) 
   return files.slice(0, limit).map((file) => file.filePath);
 }
 
+// The home folder is not a project. What lands there is `claude` run from a bare
+// shell and, mostly, tooling that spawns it — memory hooks, summarisers — whose
+// opening message is a system prompt rather than anything a person typed. Listing
+// them buries the sessions the phone is actually for.
+const listHomeSessions = /^(1|true|yes|on)$/i.test(process.env.PHONE_CLAUDE_LIST_HOME_SESSIONS || "");
+
+function claudeListedProjectDirs() {
+  const dirs = claudeProjectDirs();
+  if (listHomeSessions) return dirs;
+  const home = path.resolve(claudeProjectDirFor(os.homedir()));
+  // Never hide the workdir the bridge is actually running in, even if that is
+  // the home folder itself.
+  const active = path.resolve(claudeProjectDirFor());
+  return dirs.filter((dir) => dir !== home || dir === active);
+}
+
 async function claudeThreadListPayload() {
   const byId = new Map();
-  const files = (await Promise.all(claudeProjectDirs().map((dir) => claudeProjectSessionFiles(dir)))).flat();
+  const files = (await Promise.all(claudeListedProjectDirs().map((dir) => claudeProjectSessionFiles(dir)))).flat();
   const summaries = await Promise.all(files.map((filePath) => claudeSessionSummary(filePath)));
   for (const summary of summaries) {
     // The active workdir is listed first, so it wins a duplicate id.
@@ -3364,8 +3386,10 @@ class ClaudeBridge {
       threadTitle: thread?.displayTitle || thread?.name || "",
       thread,
       model: this.model,
-      workdir,
-      ...currentWorkspaceMeta(),
+      // Its own, the way SharedBridge already reports. Sending the configured
+      // workdir made the header name one folder while the turn ran in another.
+      workdir: this.workdir || workdir,
+      ...currentWorkspaceMeta(this.workdir || workdir),
       shared: true,
       clients: this.clients.size,
       history: this.history,

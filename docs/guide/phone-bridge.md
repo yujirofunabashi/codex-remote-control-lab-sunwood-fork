@@ -155,6 +155,10 @@ The bridge is served over HTTP, so `navigator.clipboard` is unavailable in some 
 
 A session opened from another workdir **runs in the directory it started in**. Otherwise the continuation would be filed under a different project and the original would look abandoned. Nothing is moved and nothing accumulates: bridges are keyed per session, each takes its directory once at construction, and the configured workdir is untouched — a new chat still starts there.
 
+That includes folders **outside the home directory**, such as an external volume. `validateWorkdir`'s home rule exists to constrain what a phone may ask for over the network; a `cwd` read back out of a transcript is not that — it is where the local `claude` already ran. Falling back there is the real hazard: `git remote -v` then answers for a different repository than the row it was opened from. The workspace shown in the header follows the folder the turn will actually run in.
+
+Sessions filed against the home folder itself are left out of the list. That is where `claude` run from a bare shell lands, and with it the tooling that spawns it — memory hooks, summarisers, anything whose opening message is a system prompt rather than something a person typed. Set `PHONE_CLAUDE_LIST_HOME_SESSIONS=1` to include them. The exclusion never applies to the workdir the bridge is itself running in.
+
 The one exception is asking for a folder explicitly. The per-project "new chat" button sends the project it belongs to, and Claude honours it now; while the sidebar showed one workdir that button could only ever mean the folder the bridge was already in, so the request was dropped. A folder that is gone, or outside the home folder, falls back to the configured workdir rather than failing to open the chat.
 
 The list is polled, so summaries are cached until a file changes underneath them, and each folder contributes its 20 newest sessions — raise or lower that with `PHONE_CLAUDE_SESSIONS_PER_PROJECT`.
