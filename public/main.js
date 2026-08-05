@@ -146,6 +146,7 @@ const bridgeAddSubmit = document.querySelector("#bridgeAddSubmit");
 const bridgeAddStatus = document.querySelector("#bridgeAddStatus");
 const threadInboxTabs = document.querySelector("#threadInboxTabs");
 const threadInboxTabButtons = document.querySelectorAll("[data-thread-filter]");
+const threadSortTabButtons = document.querySelectorAll("[data-thread-sort]");
 const approvalStrip = document.querySelector("#approvalStrip");
 const taskTemplates = document.querySelector("#taskTemplates");
 const reviewTabButtons = document.querySelectorAll("[data-review-tab]");
@@ -679,6 +680,7 @@ const activeBridgeStorageKey = "codexPhoneActiveBridgeId:v1";
 const bridgeSessionTokensStorageKey = "codexPhoneBridgeSessionTokens:v1";
 const bridgeViewStateStorageKey = "codexPhoneBridgeViewState:v1";
 const threadInboxFilterStorageKey = "codexPhoneThreadInboxFilter:v1";
+const threadSortModeStorageKey = "codexPhoneThreadSortMode:v1";
 const taskTemplateStorageKey = "codexPhoneLastTaskTemplate:v1";
 const serviceTierStorageKey = "codexPhoneServiceTier:v1";
 const terminalHistoryLimit = 300;
@@ -704,6 +706,10 @@ let bridgeRegistry = readJsonStorage(bridgeRegistryStorageKey, { version: 1, bri
 let bridgeLocalTokens = readJsonStorage(bridgeLocalTokensStorageKey, {});
 let bridgeViewState = readJsonStorage(bridgeViewStateStorageKey, {});
 let threadInboxFilter = localStorage.getItem(threadInboxFilterStorageKey) || "attention";
+// Grouping by project is the default because it is what the list has always
+// done; date order is the view that answers "what was I just doing" when the
+// work is spread across several folders.
+let threadSortMode = localStorage.getItem(threadSortModeStorageKey) === "recent" ? "recent" : "project";
 let quickActionState = uiUtils.safeJsonParse
   ? uiUtils.safeJsonParse(localStorage.getItem(quickActionsStorageKey), {}, { objectOnly: true })
   : {};
@@ -1002,6 +1008,11 @@ function threadMatchesInboxFilter(thread) {
 function renderThreadInboxTabs() {
   for (const button of threadInboxTabButtons) {
     const active = button.dataset.threadFilter === threadInboxFilter;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+  }
+  for (const button of threadSortTabButtons) {
+    const active = button.dataset.threadSort === threadSortMode;
     button.classList.toggle("active", active);
     button.setAttribute("aria-selected", String(active));
   }
@@ -1474,6 +1485,11 @@ function selectModel(model) {
   setSelectedModel(model);
   closeModelMenu();
   addStatus(`モデルを ${model.toUpperCase()} に設定しました。次の送信から反映します。`);
+}
+
+function resumeCommandForThread(thread) {
+  if (uiUtils.resumeCommandForThread) return uiUtils.resumeCommandForThread(thread);
+  return "";
 }
 
 function titleForThread(thread) {
@@ -2975,6 +2991,33 @@ function createThreadListItem(thread, options = {}) {
   }
   selectButton.addEventListener("click", () => selectThread(thread.id, { thread, workdir: workspaceKeyForThread(thread), project: projectForThread(thread) }));
   item.append(colorButton, selectButton);
+  const resumeCommand = resumeCommandForThread(thread);
+  if (resumeCommand) {
+    const copyButton = document.createElement("button");
+    copyButton.type = "button";
+    copyButton.className = "thread-resume-copy";
+    copyButton.title = resumeCommand;
+    copyButton.setAttribute("aria-label", `${displayTitle} を PC で開くコマンドをコピー`);
+    const glyph = document.createElement("span");
+    glyph.className = "resume-copy-glyph";
+    glyph.setAttribute("aria-hidden", "true");
+    glyph.textContent = ">_";
+    copyButton.appendChild(glyph);
+    copyButton.addEventListener("click", async (event) => {
+      // The row itself opens the chat; copying is a separate intent.
+      event.stopPropagation();
+      try {
+        await copyTextToClipboard(resumeCommand);
+        showToast("ターミナル用コマンドをコピーしました。");
+      } catch (error) {
+        // Without a clipboard there is still something useful to do: show the
+        // command so it can be read off the screen.
+        showToast(`コピーできませんでした: ${error.message}`, "warn");
+        window.prompt("ターミナルに貼り付けてください", resumeCommand);
+      }
+    });
+    item.append(copyButton);
+  }
   return item;
 }
 
@@ -3036,6 +3079,30 @@ function renderThreadList() {
       }),
     );
     threadList.appendChild(currentGroup);
+  }
+
+  if (threadSortMode === "recent" && groups.size) {
+    // One flat list across every project. Each row already carries its own cwd,
+    // so nothing is lost by dropping the headings, and work spread over several
+    // folders reads in the order it actually happened.
+    const flat = sortThreadsForInbox(Array.from(groups.values()).flat());
+    const group = document.createElement("section");
+    group.className = "project-group";
+    const heading = document.createElement("div");
+    heading.className = "project-heading";
+    const folder = document.createElement("span");
+    folder.className = "project-folder";
+    const name = document.createElement("span");
+    name.className = "project-name";
+    name.textContent = "日時順";
+    heading.append(folder, name);
+    group.appendChild(heading);
+    for (const thread of limitedVisibleThreads(flat, 30)) group.appendChild(createThreadListItem(thread));
+    threadList.appendChild(group);
+    updateThreadNavigation();
+    renderThreadSwitcher();
+    renderContextMismatch();
+    return;
   }
 
   for (const [project, threads] of groups) {
@@ -6492,6 +6559,13 @@ for (const button of threadInboxTabButtons) {
   button.addEventListener("click", () => {
     threadInboxFilter = button.dataset.threadFilter || "recent";
     localStorage.setItem(threadInboxFilterStorageKey, threadInboxFilter);
+    renderThreadList();
+  });
+}
+for (const button of threadSortTabButtons) {
+  button.addEventListener("click", () => {
+    threadSortMode = button.dataset.threadSort === "recent" ? "recent" : "project";
+    localStorage.setItem(threadSortModeStorageKey, threadSortMode);
     renderThreadList();
   });
 }

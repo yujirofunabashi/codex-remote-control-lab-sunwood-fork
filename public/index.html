@@ -72,6 +72,10 @@
               <button type="button" data-thread-filter="running" aria-selected="false">実行中</button>
               <button type="button" data-thread-filter="recent" aria-selected="false">最近</button>
             </div>
+            <div id="threadSortTabs" class="thread-inbox-tabs thread-sort-tabs" role="tablist" aria-label="チャットの並び順">
+              <button type="button" class="active" data-thread-sort="project" aria-selected="true">プロジェクト別</button>
+              <button type="button" data-thread-sort="recent" aria-selected="false">日時順</button>
+            </div>
           </div>
           <input id="threadSearch" class="thread-search hidden" type="search" placeholder="チャットを検索" />
           <div id="threadList" class="thread-list"></div>

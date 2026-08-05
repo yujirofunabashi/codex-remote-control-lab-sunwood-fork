@@ -35,7 +35,9 @@ const activeThread = { id: "thread-mobile-compact", name: "Mobile terminal compa
 const threads = [
   activeThread,
   { id: "thread-artifacts", name: "Artifact preview polish", cwd: artifactRepo, updatedAt: Date.now() - 3600_000 },
-  { id: "thread-drawer", name: "Drawer and composer tuning", cwd: drawerRepo, updatedAt: Date.now() - 86_400_000 },
+  // One Claude thread: only Claude sessions are resumed with `claude --resume`,
+  // so the copy-command button belongs to them alone.
+  { id: "thread-drawer", name: "Drawer and composer tuning", cwd: drawerRepo, updatedAt: Date.now() - 86_400_000, provider: "claude" },
 ];
 const threadsById = Object.fromEntries(threads.map((thread) => [thread.id, thread]));
 const staleThreadList = threads.filter((thread) => thread.id !== activeThread.id);
@@ -241,7 +243,13 @@ async function run() {
   const consoleErrors = [];
   try {
     browser = await chromium.launch();
-    const page = await browser.newPage({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2 });
+    const page = await browser.newPage({
+      viewport: { width: 390, height: 844 },
+      deviceScaleFactor: 2,
+      // Headless Chromium refuses a clipboard write without this, which would
+      // exercise the fallback path instead of the one a phone actually takes.
+      permissions: ["clipboard-read", "clipboard-write"],
+    });
     page.on("console", (msg) => {
       if (msg.type() === "error") consoleErrors.push(msg.text());
     });
@@ -497,6 +505,93 @@ async function run() {
       "repo markers are scoped by repo",
       repoMarkerState.length >= 3 && repoMarkerColors.size >= 3,
       JSON.stringify(repoMarkerState),
+    );
+    // Work spread across folders is only findable if the list can be read in
+    // the order it happened, not just grouped by where it lives.
+    const projectHeadings = await page.evaluate(() =>
+      Array.from(document.querySelectorAll(".project-group:not(.current-thread-group) .project-name")).map((node) => node.textContent?.trim() || ""),
+    );
+    check("project order is the default view", projectHeadings.length >= 3, JSON.stringify(projectHeadings));
+    await page.locator("[data-thread-sort='recent']").click();
+    const dateOrdered = await page.evaluate(() => {
+      const groups = Array.from(document.querySelectorAll(".project-group:not(.current-thread-group)"));
+      const rows = Array.from(document.querySelectorAll(".project-group:not(.current-thread-group) .thread-item"));
+      return {
+        groups: groups.length,
+        heading: groups[0]?.querySelector(".project-name")?.textContent?.trim() || "",
+        rows: rows.length,
+        workdirs: new Set(rows.map((row) => row.querySelector(".thread-workdir")?.textContent?.trim() || "")).size,
+      };
+    });
+    check(
+      "date order collapses every project into one list",
+      dateOrdered.groups === 1 && dateOrdered.heading === "日時順" && dateOrdered.workdirs >= 2,
+      JSON.stringify(dateOrdered),
+    );
+    await page.locator("[data-thread-sort='project']").click();
+    const backToProjects = await page.evaluate(
+      () => document.querySelectorAll(".project-group:not(.current-thread-group)").length,
+    );
+    check("switching back restores the project headings", backToProjects >= 3, String(backToProjects));
+    // Picking a session back up on the PC needs both the id and the folder it
+    // belongs to, so the row hands over the whole command rather than the id.
+    const resumeCopy = await page.evaluate(() => {
+      const rowFor = (title) =>
+        Array.from(document.querySelectorAll(".thread-item")).find((item) => item.querySelector(".thread-title")?.textContent?.includes(title));
+      const claudeRow = rowFor("Drawer and composer tuning");
+      return {
+        command: claudeRow?.querySelector(".thread-resume-copy")?.title || "",
+        label: claudeRow?.querySelector(".thread-resume-copy")?.getAttribute("aria-label") || "",
+        // Codex sessions are not resumed with this command, so they get no button.
+        codexButtons: rowFor("Artifact preview polish")?.querySelectorAll(".thread-resume-copy").length ?? -1,
+      };
+    });
+    check(
+      "a Claude row offers the command that reopens it on the PC",
+      /^cd \S*drawer-workspace && claude --resume thread-drawer$/.test(resumeCopy.command) &&
+        resumeCopy.label.includes("コピー") &&
+        resumeCopy.codexButtons === 0,
+      JSON.stringify(resumeCopy),
+    );
+    // The row is a grid, so a column the button does not fit into silently
+    // wraps it onto a second line instead of overflowing visibly.
+    const copyButtonPlacement = await page.evaluate(() => {
+      const row = Array.from(document.querySelectorAll(".thread-item")).find((item) => item.querySelector(".thread-resume-copy"));
+      if (!row) return null;
+      const rowBox = row.getBoundingClientRect();
+      const button = row.querySelector(".thread-resume-copy").getBoundingClientRect();
+      const title = row.querySelector(".thread-title").getBoundingClientRect();
+      return {
+        rowHeight: Math.round(rowBox.height),
+        sameLine: button.top < title.bottom && button.bottom > title.top,
+        atEnd: Math.round(rowBox.right - button.right) <= 12,
+        tall: Math.round(button.height) >= 28,
+      };
+    });
+    check(
+      "the copy button sits on the row rather than wrapping below it",
+      copyButtonPlacement?.sameLine && copyButtonPlacement.atEnd && copyButtonPlacement.tall,
+      JSON.stringify(copyButtonPlacement),
+    );
+    const selectedBeforeCopy = await page.evaluate(() => document.querySelector("#threadTitle")?.textContent?.trim() || "");
+    await page.locator(".thread-item", { hasText: "Drawer and composer tuning" }).locator(".thread-resume-copy").click();
+    const copyFeedback = await page
+      .waitForFunction(
+        () => {
+          // Newest toast: earlier ones are still on screen from bridge switching.
+          const toasts = document.querySelectorAll(".toast");
+          const toast = toasts[toasts.length - 1]?.textContent?.trim() || "";
+          return toast.includes("コピー") ? { toast, title: document.querySelector("#threadTitle")?.textContent?.trim() || "" } : null;
+        },
+        null,
+        { timeout: 4000 },
+      )
+      .then((handle) => handle.jsonValue())
+      .catch(() => ({ toast: "", title: "" }));
+    check(
+      "copying reports back without opening the chat",
+      copyFeedback.toast.includes("コピーしました") && copyFeedback.title === selectedBeforeCopy,
+      JSON.stringify({ ...copyFeedback, selectedBeforeCopy }),
     );
     if (wantShots) {
       fs.mkdirSync(shotsDir, { recursive: true });

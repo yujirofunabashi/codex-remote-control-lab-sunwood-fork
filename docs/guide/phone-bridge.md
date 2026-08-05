@@ -132,6 +132,33 @@ Background thread-list polling suppresses repeated identical errors. A transient
 
 Claude mode is intentionally narrower than Codex mode. It has Claude Code session listing for the active workdir, but does not provide Codex app-server history sync, plugin lookup, or live tool approval callbacks. Use `CLAUDE_PERMISSION_MODE` or the UI permission mode to decide how much autonomy each spawned Claude run has.
 
+## The Sidebar Spans Every Workdir
+
+Sessions are filed per working directory. While the sidebar read only the active one, **changing the workdir made every earlier session look deleted** — the display was scoped, the records were never lost.
+
+The sidebar now reads every workdir under `~/.claude/projects`, in one of two orders:
+
+- **プロジェクト別 (by project)** — grouped under a heading per folder. The original behaviour, and still the default.
+- **日時順 (by date)** — headings collapsed into one list across all folders, newest first. Each row carries its own `cwd:`, so nothing is lost by dropping the headings.
+
+The choice is remembered per device.
+
+The `>_` at the end of each row copies the command that reopens that session on the PC:
+
+```bash
+cd /Users/you/Prj/example && claude --resume 2bec35bc-1324-4b49-8a83-d550e9a9ba07
+```
+
+The `cd` is part of it because `claude --resume` without an id only offers sessions belonging to the directory it is started from. Paste it into a terminal and the conversation carries on where the phone left it.
+
+The bridge is served over HTTP, so `navigator.clipboard` is unavailable in some browsers; it falls back to `execCommand`, and then to showing the command in a field you can select by hand. Codex sessions are not resumed with this command, so the button belongs to Claude rows only.
+
+A session opened from another workdir **runs in the directory it started in**. Otherwise the continuation would be filed under a different project and the original would look abandoned. Nothing is moved and nothing accumulates: bridges are keyed per session, each takes its directory once at construction, and the configured workdir is untouched — a new chat still starts there.
+
+The one exception is asking for a folder explicitly. The per-project "new chat" button sends the project it belongs to, and Claude honours it now; while the sidebar showed one workdir that button could only ever mean the folder the bridge was already in, so the request was dropped. A folder that is gone, or outside the home folder, falls back to the configured workdir rather than failing to open the chat.
+
+The list is polled, so summaries are cached until a file changes underneath them, and each folder contributes its 20 newest sessions — raise or lower that with `PHONE_CLAUDE_SESSIONS_PER_PROJECT`.
+
 ## Picking Up Phone Work on the Desktop
 
 The bridge records its turns exactly where Claude Code expects them:
@@ -159,6 +186,20 @@ cd /Users/you/Prj/example && claude --resume 2bec35bc-1324-4b49-8a83-d550e9a9ba0
 ```
 
 If you want the interactive picker instead, run `claude --resume` **from the bridge's workdir** — that directory is what scopes the list.
+
+### When the picker still does not show it
+
+`claude -c` continues that directory's newest conversation **without going through the picker**, which separates the two things that look identical from the outside:
+
+```bash
+cd "$(the ■ path from npm run sessions)"
+claude -c
+```
+
+- **It opens the phone conversation** — the session is reachable, so you were either in the wrong directory before, or the row was in the picker under a label you did not recognise. Sessions created before naming existed are labelled by their opening message, not by anything that says "phone".
+- **It finds nothing** — you are not in the directory the session belongs to. Re-check the `■` line.
+
+Either way `claude --resume <id>` works: the id is the one label that cannot be misread, and `npm run sessions` prints the whole command per row.
 
 ### Naming
 

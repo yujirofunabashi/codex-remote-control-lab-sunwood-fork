@@ -21,6 +21,7 @@ const {
   pwaManifestTokenIssues,
   redactSensitiveText,
   removeBridgeFromRegistry,
+  resumeCommandForThread,
   safeJsonParse,
   sameWorkspaceThreadRecord,
   sanitizeHexColor,
@@ -307,4 +308,37 @@ test("thread inbox status derivation prioritizes actionable work", () => {
     sortThreadsForInbox([done, running, approval], runtime).map((thread) => thread.id),
     ["a", "b", "c"],
   );
+});
+
+test("the copy button hands over a command that works as pasted", () => {
+  // `claude --resume` without an id only offers sessions belonging to the
+  // directory it is started from, so the cd is part of the command.
+  assert.equal(
+    resumeCommandForThread({ id: "2bec35bc-1324-4b49-8a83-d550e9a9ba07", cwd: "/Users/you/Prj/example", provider: "claude" }),
+    "cd /Users/you/Prj/example && claude --resume 2bec35bc-1324-4b49-8a83-d550e9a9ba07",
+  );
+});
+
+test("a folder with no recorded path still yields a usable resume", () => {
+  assert.equal(resumeCommandForThread({ id: "abc", provider: "claude" }), "claude --resume abc");
+  assert.equal(resumeCommandForThread({ id: "abc", cwd: "/Users/you/Prj/example/" }), "cd /Users/you/Prj/example && claude --resume abc");
+});
+
+test("a path that would break the command line is quoted", () => {
+  assert.equal(
+    resumeCommandForThread({ id: "abc", cwd: "/Users/you/My Project" }),
+    "cd '/Users/you/My Project' && claude --resume abc",
+  );
+  assert.equal(
+    resumeCommandForThread({ id: "abc", cwd: "/Users/you/it's mine" }),
+    `cd '/Users/you/it'\\''s mine' && claude --resume abc`,
+  );
+});
+
+test("no command is offered where none would work", () => {
+  // A thread with no answer yet carries a placeholder id, and Codex threads are
+  // not resumed with this command at all.
+  assert.equal(resumeCommandForThread({ id: "claude:6f9e", cwd: "/Users/you/Prj/example" }), "");
+  assert.equal(resumeCommandForThread({ id: "thread-1", provider: "codex", cwd: "/Users/you/Prj/example" }), "");
+  assert.equal(resumeCommandForThread({}), "");
 });

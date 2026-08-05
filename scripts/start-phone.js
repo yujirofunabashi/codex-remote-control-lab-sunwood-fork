@@ -2295,13 +2295,44 @@ function textFromClaudeContent(content) {
   return parts.join("\n");
 }
 
+// Every workdir that has transcripts, the active one first. Sessions are filed
+// per directory, so looking only at the active one is what made earlier work
+// disappear from the sidebar the moment the workdir changed.
+function claudeProjectDirs() {
+  const current = path.resolve(claudeProjectDirFor());
+  let names = [];
+  try {
+    names = fs.readdirSync(claudeProjectsRoot);
+  } catch {
+    return [current];
+  }
+  const others = [];
+  for (const name of names) {
+    const dir = path.resolve(claudeProjectsRoot, name);
+    if (dir === current) continue;
+    try {
+      if (fs.statSync(dir).isDirectory()) others.push(dir);
+    } catch {
+      // Raced with a delete; nothing to list.
+    }
+  }
+  return [current, ...others];
+}
+
 function claudeSessionFilePath(sessionId) {
   const id = String(sessionId || "").trim();
   if (!/^[A-Za-z0-9._:-]+$/.test(id)) return null;
-  const base = path.resolve(claudeProjectDirFor());
+  const dirs = claudeProjectDirs();
+  for (const base of dirs) {
+    const target = path.resolve(base, `${id}.jsonl`);
+    if (!target.startsWith(`${base}${path.sep}`)) continue;
+    if (fs.existsSync(target)) return target;
+  }
+  // Nothing on disk yet: keep pointing at the active workdir so a new session
+  // is filed where the bridge is working.
+  const base = dirs[0];
   const target = path.resolve(base, `${id}.jsonl`);
-  if (!target.startsWith(`${base}${path.sep}`)) return null;
-  return target;
+  return target.startsWith(`${base}${path.sep}`) ? target : null;
 }
 
 function parseClaudeSessionFile(filePath, stat, text) {
@@ -2392,20 +2423,90 @@ function claudeHistoryForSession(sessionId) {
   return readClaudeSession(sessionId)?.history || [];
 }
 
-async function claudeThreadListPayload() {
-  const byId = new Map();
-  const dir = claudeProjectDirFor();
+// A session belongs to the directory it was started in. Now that the sidebar
+// lists every workdir, resuming one from wherever the bridge happens to be
+// pointing would file the continuation under a different project and leave the
+// original looking abandoned.
+function requestedWorkdirOr(requested, fallback = workdir) {
+  if (!requested) return fallback;
+  try {
+    return validateWorkdir(requested);
+  } catch {
+    return fallback;
+  }
+}
+
+function claudeSessionWorkdir(session, fallback = workdir) {
+  const cwd = String(session?.summary?.cwd || "").trim();
+  if (!cwd || path.resolve(cwd) === path.resolve(fallback)) return fallback;
+  try {
+    return validateWorkdir(cwd);
+  } catch {
+    // Deleted, or outside the home folder. Opening it read-only still beats
+    // refusing to show the session at all.
+    return fallback;
+  }
+}
+
+// The list is polled, and it now spans every workdir, so re-reading every
+// transcript each time would make it too slow to leave on. A summary stays good
+// until the file changes underneath it.
+const claudeSummaryCache = new Map();
+const claudeSummaryCacheLimit = 500;
+
+async function claudeSessionSummary(filePath) {
+  let stat;
+  try {
+    stat = await fs.promises.stat(filePath);
+    if (!stat.isFile()) return null;
+  } catch {
+    claudeSummaryCache.delete(filePath);
+    return null;
+  }
+  const cached = claudeSummaryCache.get(filePath);
+  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) return cached.summary;
+  const parsed = await readClaudeSessionFileAsync(filePath);
+  if (!parsed) return null;
+  if (claudeSummaryCache.size >= claudeSummaryCacheLimit) {
+    claudeSummaryCache.delete(claudeSummaryCache.keys().next().value);
+  }
+  claudeSummaryCache.set(filePath, { mtimeMs: stat.mtimeMs, size: stat.size, summary: parsed.summary });
+  return parsed.summary;
+}
+
+// Statting is cheap and parsing is not, so the cap is applied before any
+// transcript is opened.
+const claudeSessionsPerProject = Number(process.env.PHONE_CLAUDE_SESSIONS_PER_PROJECT || 20) || 20;
+
+async function claudeProjectSessionFiles(dir, limit = claudeSessionsPerProject) {
   let fileNames = [];
   try {
     fileNames = await fs.promises.readdir(dir);
   } catch {
-    fileNames = [];
+    return [];
   }
-  const sessions = await Promise.all(
-    fileNames.filter((fileName) => fileName.endsWith(".jsonl")).map((fileName) => readClaudeSessionFileAsync(path.join(dir, fileName))),
-  );
-  for (const session of sessions) {
-    if (session) byId.set(session.summary.id, session.summary);
+  const files = [];
+  for (const fileName of fileNames) {
+    if (!fileName.endsWith(".jsonl")) continue;
+    const filePath = path.join(dir, fileName);
+    try {
+      const stat = await fs.promises.stat(filePath);
+      if (stat.isFile()) files.push({ filePath, mtimeMs: stat.mtimeMs });
+    } catch {
+      // Raced with a delete.
+    }
+  }
+  files.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return files.slice(0, limit).map((file) => file.filePath);
+}
+
+async function claudeThreadListPayload() {
+  const byId = new Map();
+  const files = (await Promise.all(claudeProjectDirs().map((dir) => claudeProjectSessionFiles(dir)))).flat();
+  const summaries = await Promise.all(files.map((filePath) => claudeSessionSummary(filePath)));
+  for (const summary of summaries) {
+    // The active workdir is listed first, so it wins a duplicate id.
+    if (summary && !byId.has(summary.id)) byId.set(summary.id, summary);
   }
   return {
     provider: "claude",
@@ -3213,7 +3314,7 @@ function summarizeClaudeAttachmentPrompt(text, savedAttachments) {
 }
 
 class ClaudeBridge {
-  constructor(requestedThreadId, baseBridgeKey) {
+  constructor(requestedThreadId, baseBridgeKey, options = {}) {
     this.provider = "claude";
     this.model = modelForProvider(this.provider);
     this.requestedThreadId = requestedThreadId;
@@ -3226,7 +3327,12 @@ class ClaudeBridge {
     this.createdAt = Date.now();
     this.listUpdatedAt = 0;
     this.ready = true;
-    this.history = this.claudeSessionId ? claudeHistoryForSession(this.claudeSessionId) : [];
+    const session = this.claudeSessionId ? readClaudeSession(this.claudeSessionId) : null;
+    this.history = session?.history || [];
+    // Follow the session home rather than dragging it into the active workdir.
+    // A new chat has no session to follow, so a folder asked for by the caller
+    // decides instead, and the configured workdir is the last word.
+    this.workdir = claudeSessionWorkdir(session, requestedWorkdirOr(options.workdir));
     this.terminalHistory = terminalHistoryFromChatHistory(this.history);
     this.pendingApproval = null;
     this.turnQueue = [];
@@ -3800,7 +3906,10 @@ class ClaudeBridge {
 
 function getBridge(threadId, provider = agentProvider, connectionId = crypto.randomUUID(), options = {}) {
   const requestedProvider = normalizeProvider(provider);
-  const requestedWorkdir = requestedProvider === "codex" && options.workdir ? validateWorkdir(options.workdir) : "";
+  // Claude honours this too now. While the sidebar showed only the active
+  // workdir, the per-project "new chat" button could only ever mean the folder
+  // the bridge was already in; listing every project made it a real request.
+  const requestedWorkdir = options.workdir ? validateWorkdir(options.workdir) : "";
   const requestedServiceTier = requestedProvider === "codex" && Object.prototype.hasOwnProperty.call(options, "serviceTier") ? normalizeServiceTier(options.serviceTier) : null;
   const bridgeOptions = { ...options, ...(requestedWorkdir ? { workdir: requestedWorkdir } : {}), serviceTier: requestedServiceTier };
   const bridgeHasActiveWork = (bridge) => Boolean(typeof bridge?.hasActiveWork === "function" && bridge.hasActiveWork());
@@ -3845,7 +3954,7 @@ function getBridge(threadId, provider = agentProvider, connectionId = crypto.ran
     existing = null;
   }
   if (!existing && !bridges.has(key)) {
-    bridges.set(key, requestedProvider === "claude" ? new ClaudeBridge(threadId, baseKey) : new SharedBridge(threadId, baseKey, bridgeOptions));
+    bridges.set(key, requestedProvider === "claude" ? new ClaudeBridge(threadId, baseKey, bridgeOptions) : new SharedBridge(threadId, baseKey, bridgeOptions));
   }
   return bridges.get(key);
 }
@@ -4901,7 +5010,10 @@ module.exports = {
   claudeEffortLevel,
   claudeModeCanPrompt,
   claudePermissionMode,
+  claudeSessionFilePath,
   claudeSessionName,
+  claudeSessionWorkdir,
+  claudeThreadListPayload,
   executeTerminalCommand,
   launchSettingsFromFleetOrEnv,
   manifestHrefForRequest,

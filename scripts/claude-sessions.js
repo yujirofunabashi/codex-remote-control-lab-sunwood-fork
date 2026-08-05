@@ -223,12 +223,19 @@ function main() {
   for (const group of groups) printGroup(group);
 
   console.log("`claude --resume` without an id only lists sessions for the directory it is started");
-  console.log("from, so run it from the workdir a session belongs to, or pass the id directly.");
+  console.log("from, so run the `cd` above first, or pass the id directly.");
+  console.log("");
+  console.log("Not showing up in the picker even after the cd? `claude -c` opens that directory's");
+  console.log("newest conversation without the picker, which tells you whether the session is");
+  console.log("reachable at all or you are simply in the wrong directory.");
 }
 
 function printGroup({ cwd, dir, sessions }) {
   console.log(`■ ${cwd}`);
   console.log(`  ${dir}`);
+  // The picker is scoped to the directory it is started from, so getting into
+  // the right one is the whole job. Lead with it rather than trailing it.
+  console.log(`  cd ${cwd}`);
   console.log("");
   if (!sessions.length) {
     console.log("  (no sessions recorded for this workdir yet)");
@@ -243,10 +250,10 @@ function printGroup({ cwd, dir, sessions }) {
     if (session.lastPrompt && session.lastPrompt !== session.firstPrompt) {
       console.log(`    最新: ${session.lastPrompt.replace(/\s+/g, " ").slice(0, 60)}`);
     }
-    console.log(`    ${session.messages} messages  ${session.id}`);
+    // Per row, not just the newest: an id alone still leaves the command to be
+    // assembled, and the id is the one label that cannot be misread.
+    console.log(`    ${session.messages} messages  ·  claude --resume ${session.id}`);
   }
-  console.log("");
-  console.log(`  cd ${cwd} && claude --resume ${sessions[0].id}`);
   console.log("");
 }
 
