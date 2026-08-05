@@ -2322,23 +2322,38 @@ function isClaudeConversationRecord(item) {
   return item.message?.model !== "<synthetic>";
 }
 
+// Two views of one session agree about content without agreeing about shape: a
+// turn the bridge streamed as a single answer is written to the transcript as
+// the separate messages it was made of, and only the transcript keeps the system
+// reminders a user record can carry. Both are read as one whitespace-free
+// string, so the comparisons below are about what was said.
+function packedHistoryText(history = []) {
+  return history
+    .map((entry) => String(entry.text || ""))
+    .join("")
+    .replace(/\s+/g, "");
+}
+
+// Whether the file still holds the conversation the phone is already showing.
+//
+// Counting entries cannot answer that. Both views are capped at `historyLimit`,
+// so a session past that cap grows without ever getting longer: `length <=
+// length` stayed true for every later write, and the phone stopped following
+// exactly the long chats it was opened to follow, while the sidebar went on
+// listing them as active.
+function claudeHistoryHoldsSameConversation(a = [], b = []) {
+  return packedHistoryText(a) === packedHistoryText(b);
+}
+
 // The newest answer is the one the phone is looking at. A transcript that does
 // not carry it - because the file is mid-write, or because something appended a
 // turn of its own between our two reads - must not be allowed to redraw it off
-// the screen. The comparison drops whitespace and searches the file as one
-// string, because the two views disagree about shape without disagreeing about
-// content: a turn we streamed as a single answer is written to the transcript as
-// the separate messages it was made of.
+// the screen.
 function historyKeepsLatestAnswer(nextHistory = [], previousHistory = []) {
-  const packed = (history) =>
-    history
-      .map((entry) => String(entry.text || ""))
-      .join("")
-      .replace(/\s+/g, "");
   const latest = [...previousHistory].reverse().find((entry) => entry.type === "assistant" && String(entry.text || "").trim());
   if (!latest) return true;
   const tail = String(latest.text).replace(/\s+/g, "").slice(-60);
-  return !tail || packed(nextHistory).includes(tail);
+  return !tail || packedHistoryText(nextHistory).includes(tail);
 }
 
 function claudeProjectDirFor(cwd = workdir) {
@@ -3429,6 +3444,11 @@ class ClaudeBridge {
 
   addClient(browser) {
     this.cancelIdleDispose();
+    // The watcher below only reports what happens next, and it is torn down
+    // while nobody is connected. A phone that locked its screen, or walked out
+    // of range, would come back to the snapshot it left - so the file is read
+    // once here, before `ready` carries this history to the arriving client.
+    this.reloadSessionFromDisk();
     this.clients.add(browser);
     this.watchSession();
     this.emitTo(browser, "status", { text: "共有Claudeブリッジに参加しました。" });
@@ -3467,10 +3487,11 @@ class ClaudeBridge {
     if (this.hasActiveWork()) return;
     const session = readClaudeSession(this.claudeSessionId);
     const history = session?.history;
-    if (!Array.isArray(history) || history.length <= this.history.length) return;
-    // Growth alone is not enough: the file is appended to by several writers,
-    // so a longer transcript can still be one that does not carry the answer we
-    // just streamed. Adopting it would take that answer off the phone.
+    if (!Array.isArray(history) || !history.length) return;
+    if (claudeHistoryHoldsSameConversation(history, this.history)) return;
+    // Different is not the same as newer: the file is appended to by several
+    // writers, and one that does not carry the answer we just streamed is one
+    // caught mid-write. Adopting it would take that answer off the phone.
     if (!historyKeepsLatestAnswer(history, this.history)) return;
     this.history = history;
     // Deliberately not terminalHistory: a transcript carries no status or error
@@ -5174,6 +5195,7 @@ module.exports = {
   workspaceBookmarks,
   claudeAcceptsNameFlag,
   claudeEffortLevel,
+  claudeHistoryHoldsSameConversation,
   claudeModeCanPrompt,
   claudePermissionMode,
   claudeSessionFilePath,

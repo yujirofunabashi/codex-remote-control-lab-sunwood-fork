@@ -200,6 +200,57 @@ test("a transcript that has not caught up cannot redraw the newest answer away",
   }
 });
 
+test("a chat longer than the history cap still reports what was added to it", async () => {
+  // Both views of a session are capped at the same number of entries, so past
+  // that cap the transcript grows without ever getting longer. Comparing
+  // lengths made every later write invisible - and the chats that reach the cap
+  // are the long-running ones the phone is there to follow.
+  const id = "88888888-8888-8888-8888-aaaaaaaaaaaa";
+  let opening = "";
+  for (let turn = 0; turn < 50; turn += 1) {
+    opening += record("user", `古い質問 ${turn}`, id) + record("assistant", `古い答え ${turn}`, id);
+  }
+  const { bridge, seen, file } = openSession(id, opening);
+  try {
+    const capped = bridge.history.length;
+    assert.ok(capped < 100, "the opening snapshot is already at the cap");
+
+    fs.appendFileSync(file, record("user", "ターミナルで続きを入力", id) + record("assistant", "ターミナル側の最新の答え", id));
+    await historyChanged(seen);
+
+    assert.equal(bridge.history.length, capped, "the cap still holds");
+    assert.equal(bridge.history.at(-1).text, "ターミナル側の最新の答え");
+  } finally {
+    bridge.unwatchSession();
+  }
+});
+
+test("a phone that reconnects is told what happened while it was away", () => {
+  // The watch is torn down with the last client and only reports what happens
+  // next, so a screen lock or a walk out of range used to bring the phone back
+  // to the snapshot it left.
+  const id = "99999999-9999-9999-9999-aaaaaaaaaaaa";
+  const file = path.join(projectDir, `${id}.jsonl`);
+  fs.writeFileSync(file, record("user", "見ている間の発言", id) + record("assistant", "見ている間の答え", id));
+  const bridge = new ClaudeBridge(id, `${id}::live`);
+  const closers = [];
+  bridge.addClient({ readyState: 1, send() {}, on: (event, handler) => event === "close" && closers.push(handler) });
+  bridge.clients.clear();
+  for (const close of closers) close();
+
+  fs.appendFileSync(file, record("user", "離れている間の発言", id) + record("assistant", "離れている間の答え", id));
+
+  const seen = [];
+  bridge.addClient(fakeClient(seen));
+  try {
+    const ready = seen.find((message) => message.type === "ready");
+    assert.ok(ready, "the arriving phone is sent a thread to draw");
+    assert.equal(ready.history.at(-1).text, "離れている間の答え");
+  } finally {
+    bridge.unwatchSession();
+  }
+});
+
 test("the last phone to close stops the watch", () => {
   const id = "55555555-5555-5555-5555-aaaaaaaaaaaa";
   fs.writeFileSync(path.join(projectDir, `${id}.jsonl`), record("user", "見ている人はいない", id));
