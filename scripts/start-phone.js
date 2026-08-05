@@ -4084,8 +4084,20 @@ function getBridge(threadId, provider = agentProvider, connectionId = crypto.ran
   const requestedWorkdir = options.workdir ? validateWorkdir(options.workdir) : "";
   const requestedServiceTier = requestedProvider === "codex" && Object.prototype.hasOwnProperty.call(options, "serviceTier") ? normalizeServiceTier(options.serviceTier) : null;
   const bridgeOptions = { ...options, ...(requestedWorkdir ? { workdir: requestedWorkdir } : {}), serviceTier: requestedServiceTier };
+  // A Claude session already names its own directory, and the bridge reads it
+  // out of the transcript - a requested folder is only the fallback for a
+  // session that does not exist yet. So for a request that names one, the
+  // folder must decide neither the bridge key nor whether to replace a bridge.
+  // It used to decide both, and the phone sends whichever directory it happens
+  // to know when it dials: returning to a backgrounded tab could reconnect
+  // under a different key and land on a second bridge for the same session,
+  // built fresh from the transcript. That one reports the session idle - 前回
+  // 完了・送信できます - while the turn it should have been watching goes on
+  // streaming into the first, which no longer has a client.
+  const sessionOwnsWorkdir = requestedProvider === "claude" && Boolean(threadId);
   const bridgeHasActiveWork = (bridge) => Boolean(typeof bridge?.hasActiveWork === "function" && bridge.hasActiveWork());
   const bridgeNeedsReplacement = (bridge) =>
+    !sessionOwnsWorkdir &&
     shouldReplaceBridgeForWorkdir({
       bridgeWorkdir: bridge?.workdir || workdir,
       targetWorkdir: requestedWorkdir,
@@ -4112,7 +4124,7 @@ function getBridge(threadId, provider = agentProvider, connectionId = crypto.ran
       bridges.delete(key);
     }
   }
-  const baseKey = bridgeKeyForRequest(threadId, connectionId, bridgeOptions);
+  const baseKey = bridgeKeyForRequest(threadId, connectionId, sessionOwnsWorkdir ? { ...bridgeOptions, workdir: "", cwd: "" } : bridgeOptions);
   const key = bridgeMapKey(requestedProvider, baseKey);
   let existing = bridges.get(key);
   if (existing && bridgeNeedsReplacement(existing)) {
@@ -5224,6 +5236,7 @@ module.exports = {
   claudeSessionWorkdir,
   claudeThreadListPayload,
   executeTerminalCommand,
+  getBridge,
   historyKeepsLatestAnswer,
   launchSettingsFromFleetOrEnv,
   manifestHrefForRequest,

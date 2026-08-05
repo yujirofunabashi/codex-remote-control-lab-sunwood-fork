@@ -24,6 +24,29 @@ test("notificationTargets stays empty without opt-in environment variables", () 
   assert.deepEqual(notificationTargets({}), []);
 });
 
+test("a notification setting can be written per slot, the way the rest of a fleet's env is", () => {
+  // Two bridges share one `.env`, so every other setting there is suffixed with
+  // the slot's port. These were read as bare keys only, and a webhook written
+  // the way the rest of the file is written notified nobody.
+  const env = {
+    PHONE_UI_PORT: "46214",
+    PHONE_DISCORD_WEBHOOK_URL_46214: "https://discord.com/api/webhooks/codex",
+    PHONE_DISCORD_WEBHOOK_URL_45214: "https://discord.com/api/webhooks/claude",
+  };
+  assert.deepEqual(notificationTargets(env), [{ type: "discord", webhookUrl: "https://discord.com/api/webhooks/codex" }]);
+  assert.deepEqual(notificationTargets({ ...env, PHONE_UI_PORT: "45214" }), [
+    { type: "discord", webhookUrl: "https://discord.com/api/webhooks/claude" },
+  ]);
+});
+
+test("a bare notification setting still covers every slot", () => {
+  const shared = { PHONE_NTFY_TOPIC: "codex-phone" };
+  assert.equal(notificationTargets({ ...shared, PHONE_UI_PORT: "45214" })[0].topic, "codex-phone");
+  assert.equal(notificationTargets({ ...shared, PHONE_UI_PORT: "46214" })[0].topic, "codex-phone");
+  // A slot key outranks it, so one bridge can be sent somewhere else.
+  assert.equal(notificationTargets({ ...shared, PHONE_UI_PORT: "46214", PHONE_NTFY_TOPIC_46214: "codex-only" })[0].topic, "codex-only");
+});
+
 test("notifyBridgeUrls posts to configured ntfy topic", async () => {
   const requests = [];
   const results = await notifyBridgeUrls(["http://192.168.11.8:45214/?token=secret"], {

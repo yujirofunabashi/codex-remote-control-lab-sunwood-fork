@@ -19,6 +19,7 @@ const {
   claudeSessionFilePath,
   claudeSessionWorkdir,
   claudeThreadListPayload,
+  getBridge,
   hiddenWorkspaces,
   setWorkspaceHidden,
 } = require("./start-phone");
@@ -178,6 +179,26 @@ test("each session's bridge holds its own directory, so opening one leaves the o
     assert.equal(openA().workdir, activeWorkdir);
     assert.equal(openB().workdir, otherWorkdir);
     assert.equal(new ClaudeBridge(null, `new:${round}`).workdir, activeWorkdir, "a new chat still starts where the bridge is configured");
+  }
+});
+
+test("coming back to a session reconnects to the bridge that is running it", () => {
+  // The phone sends whichever directory it happens to know when it dials, and
+  // that used to be part of the bridge key. Returning to a backgrounded tab
+  // could land on a second bridge for the same session, built fresh from the
+  // transcript: it reported the session idle while the turn it should have been
+  // watching went on streaming into the first one.
+  const running = getBridge(activeId, "claude", "conn-1", { workdir: activeWorkdir });
+  try {
+    running.activeTurnId = "claude-turn:in-flight";
+
+    assert.equal(getBridge(activeId, "claude", "conn-2", {}), running, "a reconnect that names no folder");
+    assert.equal(getBridge(activeId, "claude", "conn-3", { workdir: otherWorkdir }), running, "or names the wrong one");
+    assert.equal(running.runPayload().state, "running", "the turn is still reported as running");
+  } finally {
+    running.activeTurnId = null;
+    running.unwatchSession();
+    running.closeApprovalServer();
   }
 });
 

@@ -1,9 +1,17 @@
+const { slotSettingValue } = require("./phone-slot-settings");
+
 function bridgeUrls(addresses, uiPort, phoneToken) {
   return addresses.map((address) => `http://${address}:${uiPort}/?token=${phoneToken}`);
 }
 
+// Every other setting in a fleet is written per slot - `PHONE_WORKDIR_45214`,
+// `CLAUDE_MODEL_45214` - because two bridges share one `.env`. Notification
+// settings were the exception: they were read as bare keys only, so a webhook
+// written the way the rest of the file is written was silently ignored and the
+// bridge notified nobody. A slot key wins, and a bare key still covers both.
 function envValue(env, key) {
-  const value = env[key];
+  const port = Number(env.PHONE_UI_PORT) || 45214;
+  const value = slotSettingValue(env, key, port);
   return value && String(value).trim();
 }
 
