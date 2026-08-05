@@ -6188,9 +6188,9 @@ body[data-main-view="terminal"] .pwa-install-hint {
     height: 18px;
   }
 
-  .access-button {
-    max-width: 110px;
-  }
+  /* No clamp on the access label between 520 and 820px: at this size the left
+     group has hundreds of spare pixels, and the 110px that used to be here was
+     three short of what "フルアクセス" renders at, so it clipped for no gain. */
 }
 
 @media (max-width: 520px) {
@@ -6605,9 +6605,9 @@ body[data-main-view="terminal"] .pwa-install-hint {
     max-width: 104px;
   }
 
-  html[data-provider="claude"] .model-button {
-    max-width: 84px;
-  }
+  /* No claude-specific narrowing here: 84px was under the 89px "sonnet-M"
+     actually renders at, so it clipped the model name on every phone between
+     380 and 520px. The 104px above clears it with room to spare. */
 
   .model-menu {
     right: 8px;
@@ -6753,18 +6753,35 @@ body[data-main-view="terminal"] .pwa-install-hint {
     gap: 5px;
   }
 
-  .access-button {
-    max-width: 94px;
+  /* The three access modes are told apart by their label alone, so a clipped
+     one is worse than none: "フルアクt" says nothing about whether the agent
+     needs to ask before it writes. The clamps here cut both labels even at
+     widths where they fit, and below that the row shrank them to stubs. The
+     footer takes a second line instead; flex only breaks it when it has to, so
+     wider phones keep the single row they had. */
+  /* Back to flex from the two-column grid the 820px block sets up. That grid's
+     first track is minmax(0, 1fr), so the left group was squeezed until its
+     label was a stub, and pinning the track to its content only made it
+     overflow into the column beside it. Flex can put the row on two lines, and
+     only does so when it actually needs to. */
+  .composer-footer {
+    display: flex;
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+
+  .composer-left {
+    min-width: max-content;
+    overflow: visible;
+  }
+
+  .composer-right {
+    margin-left: auto;
   }
 
   .model-button {
-    max-width: 86px;
     overflow: hidden;
     text-overflow: ellipsis;
-  }
-
-  html[data-provider="claude"] .model-button {
-    max-width: 74px;
   }
 
   .ghost-button,
