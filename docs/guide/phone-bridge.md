@@ -143,6 +143,16 @@ The sidebar now reads every workdir under `~/.claude/projects`, in one of two or
 
 The choice is remembered per device.
 
+The `>_` at the end of each row copies the command that reopens that session on the PC:
+
+```bash
+cd /Users/you/Prj/example && claude --resume 2bec35bc-1324-4b49-8a83-d550e9a9ba07
+```
+
+The `cd` is part of it because `claude --resume` without an id only offers sessions belonging to the directory it is started from. Paste it into a terminal and the conversation carries on where the phone left it.
+
+The bridge is served over HTTP, so `navigator.clipboard` is unavailable in some browsers; it falls back to `execCommand`, and then to showing the command in a field you can select by hand. Codex sessions are not resumed with this command, so the button belongs to Claude rows only.
+
 A session opened from another workdir **runs in the directory it started in**. Otherwise the continuation would be filed under a different project and the original would look abandoned. Nothing is moved and nothing accumulates: bridges are keyed per session, each takes its directory once at construction, and the configured workdir is untouched — a new chat still starts there.
 
 The one exception is asking for a folder explicitly. The per-project "new chat" button sends the project it belongs to, and Claude honours it now; while the sidebar showed one workdir that button could only ever mean the folder the bridge was already in, so the request was dropped. A folder that is gone, or outside the home folder, falls back to the configured workdir rather than failing to open the chat.

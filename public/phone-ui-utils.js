@@ -199,6 +199,25 @@
     return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(value || "").trim());
   }
 
+  // The command that picks a session back up in a terminal. `claude --resume`
+  // without an id only offers sessions belonging to the directory it is started
+  // from, so the cd is part of the command rather than an afterthought.
+  function resumeCommandForThread(thread = {}) {
+    const provider = String(thread.provider || "").trim().toLowerCase();
+    if (provider && provider !== "claude") return "";
+    const id = String(thread.id || "").trim();
+    // A thread that has not been answered yet carries a placeholder id, and no
+    // session exists behind it to resume.
+    if (!id || id.startsWith("claude:")) return "";
+    const resume = `claude --resume ${id}`;
+    const cwd = String(thread.cwd || "").trim().replace(/\/+$/, "");
+    if (!cwd) return resume;
+    // Quote only when it would otherwise break, so the common case stays
+    // readable in a toast and on a terminal line.
+    const target = /^[A-Za-z0-9._\-/~]+$/.test(cwd) ? cwd : `'${cwd.replace(/'/g, `'\\''`)}'`;
+    return `cd ${target} && ${resume}`;
+  }
+
   function threadDisplayTitle(thread = {}, options = {}) {
     const fallback = String(options.fallback || "名前未設定のチャット");
     const max = Math.max(12, Number(options.max || 54));
@@ -588,6 +607,7 @@
     workspaceKeyForThreadRecord,
     sameWorkspaceThreadRecord,
     isOpaqueThreadId,
+    resumeCommandForThread,
     threadDisplayTitle,
     timestampValueMs,
     threadTimestamp,

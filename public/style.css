@@ -1025,7 +1025,9 @@ button.project-heading.active {
 
 .thread-item {
   display: grid;
-  grid-template-columns: 26px minmax(0, 1fr);
+  /* The trailing column holds the copy-command button and collapses to nothing
+     on rows that have no session to resume. */
+  grid-template-columns: 26px minmax(0, 1fr) auto;
   align-items: center;
   gap: 7px;
   width: 100%;
@@ -1062,6 +1064,50 @@ button.project-heading.active {
 .thread-color-button:focus-visible {
   outline: 2px solid var(--item-thread-accent, var(--thread-accent));
   outline-offset: 2px;
+}
+
+/* Copies `cd <cwd> && claude --resume <id>`. The glyph matches the Terminal tab
+   in the header, so it reads as "this is a terminal command". */
+.thread-resume-copy {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  min-height: 34px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 0;
+  background: transparent;
+  color: var(--muted);
+}
+
+.thread-item:hover .thread-resume-copy,
+.thread-item.active .thread-resume-copy {
+  border-color: var(--line);
+  color: var(--text);
+}
+
+.thread-resume-copy:active {
+  background: var(--hover);
+}
+
+.thread-resume-copy:focus-visible {
+  outline: 2px solid var(--item-thread-accent, var(--thread-accent));
+  outline-offset: 2px;
+}
+
+.resume-copy-glyph {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+}
+
+/* Touch has no hover, so the affordance has to be visible without one. */
+@media (hover: none) {
+  .thread-resume-copy {
+    border-color: var(--line);
+  }
 }
 
 .thread-select {
@@ -4898,7 +4944,8 @@ body.prompt-modal-open {
     opacity 160ms ease;
 }
 
-.toast.approval {
+.toast.approval,
+.toast.warn {
   border-color: var(--warning-line);
   background: var(--warning-bg);
   color: var(--warning-text);
@@ -5487,7 +5534,7 @@ body[data-main-view="terminal"] .pwa-install-hint {
   }
 
   .thread-item {
-    grid-template-columns: 22px minmax(0, 1fr);
+    grid-template-columns: 22px minmax(0, 1fr) auto;
     gap: 6px;
     min-height: 34px;
     padding: 0 7px 0 10px;
@@ -5843,7 +5890,7 @@ body[data-main-view="terminal"] .pwa-install-hint {
   }
 
   .thread-item {
-    grid-template-columns: 24px minmax(0, 1fr);
+    grid-template-columns: 24px minmax(0, 1fr) auto;
     min-height: 34px;
     padding: 0 6px 0 8px;
     font-size: 14px;

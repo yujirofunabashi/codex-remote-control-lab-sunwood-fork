@@ -1487,6 +1487,11 @@ function selectModel(model) {
   addStatus(`モデルを ${model.toUpperCase()} に設定しました。次の送信から反映します。`);
 }
 
+function resumeCommandForThread(thread) {
+  if (uiUtils.resumeCommandForThread) return uiUtils.resumeCommandForThread(thread);
+  return "";
+}
+
 function titleForThread(thread) {
   if (uiUtils.threadDisplayTitle) return uiUtils.threadDisplayTitle(thread, { fallback: "名前未設定のチャット", max: 54 });
   const raw = thread.name || thread.preview || thread.cwd || "";
@@ -2986,6 +2991,33 @@ function createThreadListItem(thread, options = {}) {
   }
   selectButton.addEventListener("click", () => selectThread(thread.id, { thread, workdir: workspaceKeyForThread(thread), project: projectForThread(thread) }));
   item.append(colorButton, selectButton);
+  const resumeCommand = resumeCommandForThread(thread);
+  if (resumeCommand) {
+    const copyButton = document.createElement("button");
+    copyButton.type = "button";
+    copyButton.className = "thread-resume-copy";
+    copyButton.title = resumeCommand;
+    copyButton.setAttribute("aria-label", `${displayTitle} を PC で開くコマンドをコピー`);
+    const glyph = document.createElement("span");
+    glyph.className = "resume-copy-glyph";
+    glyph.setAttribute("aria-hidden", "true");
+    glyph.textContent = ">_";
+    copyButton.appendChild(glyph);
+    copyButton.addEventListener("click", async (event) => {
+      // The row itself opens the chat; copying is a separate intent.
+      event.stopPropagation();
+      try {
+        await copyTextToClipboard(resumeCommand);
+        showToast("ターミナル用コマンドをコピーしました。");
+      } catch (error) {
+        // Without a clipboard there is still something useful to do: show the
+        // command so it can be read off the screen.
+        showToast(`コピーできませんでした: ${error.message}`, "warn");
+        window.prompt("ターミナルに貼り付けてください", resumeCommand);
+      }
+    });
+    item.append(copyButton);
+  }
   return item;
 }
 
