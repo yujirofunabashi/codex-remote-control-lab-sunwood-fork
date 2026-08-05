@@ -2785,8 +2785,14 @@ function releasePendingSubmission(message = "") {
 }
 
 function renderHistory(history) {
+  // A redraw that lands mid-turn used to leave `assistantEntry` pointing at the
+  // bubble it had just thrown away, so every delta after it wrote into a node
+  // that is no longer in the log: the answer appeared, vanished, and never came
+  // back. The text is carried across instead, into a bubble that is on screen.
+  const liveText = assistantEntry?.markdownSource || "";
   log.replaceChildren();
   statusGroup = null;
+  assistantEntry = null;
   const outputGroupLastIndex = new Map();
   for (const [index, entry] of (history || []).entries()) {
     if (entry.type !== "assistant" || !entry.outputGroup) continue;
@@ -2800,6 +2806,15 @@ function renderHistory(history) {
       showBulkCopy,
     });
   }
+  if (!liveText || !liveTurnActive) return;
+  // Unless the history being drawn already ends with what was streamed, in
+  // which case re-adding it would show the same answer twice.
+  const alreadyDrawn = (history || []).some((entry) => entry.type === "assistant" && String(entry.text || "").includes(liveText));
+  if (alreadyDrawn) return;
+  assistantEntry = addEntry("assistant", liveText, [], {
+    outputGroup: liveOutputGroup || "",
+    showBulkCopy: true,
+  });
 }
 
 function historySignature(history = []) {

@@ -2306,6 +2306,41 @@ function capHistory(history) {
   return history.slice(-historyLimit);
 }
 
+// A transcript holds far more than the conversation. System reminders, hook
+// prompts and the observer chatter a memory plugin injects are all written as
+// `user` records with isMeta set; a subagent's whole exchange lands on a
+// sidechain; the compact summary arrives as a user turn; and when a second
+// process resumes a session that is still being worked on, Claude Code writes a
+// synthetic "Continue from where you left off." / "No response requested." pair
+// to bridge the gap. None of it was typed by this user or answered to them, and
+// showing it put words in both their mouths - most visibly by parking a
+// synthetic non-answer under a real one, which read as the newest answer having
+// been lost.
+function isClaudeConversationRecord(item) {
+  if (item.isMeta === true || item.isSidechain === true || item.isCompactSummary === true) return false;
+  if (item.isApiErrorMessage === true) return false;
+  return item.message?.model !== "<synthetic>";
+}
+
+// The newest answer is the one the phone is looking at. A transcript that does
+// not carry it - because the file is mid-write, or because something appended a
+// turn of its own between our two reads - must not be allowed to redraw it off
+// the screen. The comparison drops whitespace and searches the file as one
+// string, because the two views disagree about shape without disagreeing about
+// content: a turn we streamed as a single answer is written to the transcript as
+// the separate messages it was made of.
+function historyKeepsLatestAnswer(nextHistory = [], previousHistory = []) {
+  const packed = (history) =>
+    history
+      .map((entry) => String(entry.text || ""))
+      .join("")
+      .replace(/\s+/g, "");
+  const latest = [...previousHistory].reverse().find((entry) => entry.type === "assistant" && String(entry.text || "").trim());
+  if (!latest) return true;
+  const tail = String(latest.text).replace(/\s+/g, "").slice(-60);
+  return !tail || packed(nextHistory).includes(tail);
+}
+
 function claudeProjectDirFor(cwd = workdir) {
   return path.join(claudeProjectsRoot, path.resolve(cwd).replace(/[^A-Za-z0-9]/g, "-"));
 }
@@ -2390,6 +2425,7 @@ function parseClaudeSessionFile(filePath, stat, text) {
       updatedAt = Math.max(updatedAt, timestamp);
     }
     if (item.type !== "user" && item.type !== "assistant") continue;
+    if (!isClaudeConversationRecord(item)) continue;
     const contentText = textFromClaudeContent(item.message?.content);
     if (!contentText.trim()) continue;
     const role = item.message?.role === "assistant" || item.type === "assistant" ? "assistant" : "user";
@@ -3432,6 +3468,10 @@ class ClaudeBridge {
     const session = readClaudeSession(this.claudeSessionId);
     const history = session?.history;
     if (!Array.isArray(history) || history.length <= this.history.length) return;
+    // Growth alone is not enough: the file is appended to by several writers,
+    // so a longer transcript can still be one that does not carry the answer we
+    // just streamed. Adopting it would take that answer off the phone.
+    if (!historyKeepsLatestAnswer(history, this.history)) return;
     this.history = history;
     // Deliberately not terminalHistory: a transcript carries no status or error
     // records, so rebuilding it from one yields nothing and would throw away the
@@ -5141,6 +5181,7 @@ module.exports = {
   claudeSessionWorkdir,
   claudeThreadListPayload,
   executeTerminalCommand,
+  historyKeepsLatestAnswer,
   launchSettingsFromFleetOrEnv,
   manifestHrefForRequest,
   manifestPayloadForRequest,
