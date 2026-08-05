@@ -68,6 +68,8 @@
   --icon-chevron-down: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23777772' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9.5 6 6 6-6'/%3E%3C/svg%3E");
   --icon-user: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='8.4' r='3.7'/%3E%3Cpath d='M4.8 20a7.2 7.2 0 0 1 14.4 0'/%3E%3C/svg%3E");
   --icon-agent: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 3.4l1.9 4.3 4.7.5-3.5 3.2 1 4.6-4.1-2.4-4.1 2.4 1-4.6L5.4 8.2l4.7-.5Z'/%3E%3Cpath d='M18.6 16.4l.7 1.6 1.7.2-1.3 1.2.4 1.7-1.5-.9-1.5.9.4-1.7-1.3-1.2 1.7-.2Z'/%3E%3C/svg%3E");
+  --icon-chat: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20.5 12.2c0 4-3.8 7.2-8.5 7.2a9.9 9.9 0 0 1-2.7-.4l-4.8 1.5 1.4-4A6.8 6.8 0 0 1 3.5 12.2C3.5 8.2 7.3 5 12 5s8.5 3.2 8.5 7.2Z'/%3E%3C/svg%3E");
+  --icon-terminal: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3.2' y='4.6' width='17.6' height='14.8' rx='2.6'/%3E%3Cpath d='m7.6 9.8 3 2.6-3 2.6'/%3E%3Cpath d='M12.8 15.2h4'/%3E%3C/svg%3E");
   /* Stacking order, low to high. Every z-index in this file comes from here, so
      the order is decided in one place instead of by whoever picked the larger
      number last. Hints sit below the drawer on purpose: a dismissible
@@ -1940,6 +1942,9 @@ body.terminal-focus-mode .composer-footer {
 }
 
 .main-view-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   min-height: 30px;
   border: 0;
   border-radius: 999px;
@@ -1948,6 +1953,25 @@ body.terminal-focus-mode .composer-footer {
   color: var(--muted);
   font-size: 12px;
   font-weight: 700;
+}
+
+/* These were the characters □ and >_ standing in for icons, which is exactly as
+   solid as it sounds at 12px next to real artwork everywhere else. */
+.main-view-icon {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  background: currentColor;
+}
+
+.main-view-icon.chat {
+  -webkit-mask: var(--icon-chat) center / contain no-repeat;
+  mask: var(--icon-chat) center / contain no-repeat;
+}
+
+.main-view-icon.terminal {
+  -webkit-mask: var(--icon-terminal) center / contain no-repeat;
+  mask: var(--icon-terminal) center / contain no-repeat;
 }
 
 .main-view-button.active {
@@ -3585,7 +3609,6 @@ textarea::placeholder {
 .ghost-button,
 .access-button,
 .model-button,
-.thinking-button,
 .expand-button,
 .interrupt-button,
 .voice-button {
@@ -3672,26 +3695,12 @@ textarea::placeholder {
   opacity: 0.78;
 }
 
-.thinking-button,
 .voice-button {
   position: relative;
   display: grid;
   place-items: center;
   width: 38px;
   padding: 0;
-}
-
-.thinking-button {
-  display: none !important;
-}
-
-.thinking-button::before {
-  content: "";
-  width: 18px;
-  height: 18px;
-  border: 3px solid color-mix(in srgb, var(--muted) 42%, transparent);
-  border-top-color: var(--muted);
-  border-radius: 50%;
 }
 
 .voice-button::before {
@@ -3731,10 +3740,6 @@ textarea::placeholder {
   background:
     linear-gradient(var(--accent), var(--accent)) center 7px / 1.6px 7px no-repeat,
     linear-gradient(var(--accent), var(--accent)) center 13px / 11px 1.6px no-repeat;
-}
-
-html[data-provider="claude"] .thinking-button {
-  display: none;
 }
 
 html[data-provider="claude"] .model-button {
@@ -6213,7 +6218,6 @@ body[data-main-view="terminal"] .pwa-install-hint {
   .ghost-button,
   .access-button,
   .model-button,
-  .thinking-button,
   .expand-button,
   .interrupt-button,
   .voice-button {
@@ -6221,15 +6225,9 @@ body[data-main-view="terminal"] .pwa-install-hint {
     font-size: 15px;
   }
 
-  .thinking-button,
   .expand-button,
   .voice-button {
     width: 28px;
-  }
-
-  .thinking-button::before {
-    width: 17px;
-    height: 17px;
   }
 
   .voice-button::before {
@@ -6834,7 +6832,6 @@ body[data-main-view="terminal"] .pwa-install-hint {
   .ghost-button,
   .access-button,
   .model-button,
-  .thinking-button,
   .expand-button,
   .interrupt-button,
   .voice-button {

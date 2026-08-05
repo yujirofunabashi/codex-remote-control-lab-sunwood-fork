@@ -109,10 +109,10 @@
           <div class="main-view-bar">
             <div class="main-view-toggle" role="group" aria-label="表示モード">
               <button type="button" id="chatViewButton" class="main-view-button active" data-main-view="chat" aria-pressed="true" aria-selected="true">
-                <span aria-hidden="true">□</span><span id="chatViewLabel">Codex</span><span id="chatUnreadBadge" class="view-unread-badge hidden"></span>
+                <span class="main-view-icon chat" aria-hidden="true"></span><span id="chatViewLabel">Codex</span><span id="chatUnreadBadge" class="view-unread-badge hidden"></span>
               </button>
               <button type="button" id="terminalViewButton" class="main-view-button" data-main-view="terminal" aria-pressed="false" aria-selected="false">
-                <span aria-hidden="true">&gt;_</span><span>Terminal</span><span id="terminalUnreadBadge" class="view-unread-badge hidden"></span>
+                <span class="main-view-icon terminal" aria-hidden="true"></span><span>ターミナル</span><span id="terminalUnreadBadge" class="view-unread-badge hidden"></span>
               </button>
             </div>
             <div id="swipeFeedback" class="swipe-feedback hidden" aria-live="polite"></div>
@@ -356,7 +356,6 @@
                   <button type="button" class="access-button" id="accessButton">フルアクセス</button>
                 </div>
                 <div class="composer-right">
-                  <button type="button" class="thinking-button" id="thinkingButton" title="思考の深さ"></button>
                   <button type="button" id="modelButton" class="model-button">5.5-M</button>
                   <button type="button" class="voice-button" id="voiceButton" title="音声入力" aria-label="音声入力"></button>
                   <button type="button" id="interruptRun" class="interrupt-button hidden" title="現在の処理を中断" aria-label="現在の処理を中断">

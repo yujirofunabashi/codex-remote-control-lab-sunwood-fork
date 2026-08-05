@@ -12,7 +12,6 @@ const closePanelButton = document.querySelector("#closePanelButton");
 const addButton = document.querySelector("#addButton");
 const expandPromptButton = document.querySelector("#expandPromptButton");
 const accessButton = document.querySelector("#accessButton");
-const thinkingButton = document.querySelector("#thinkingButton");
 const modelButton = document.querySelector("#modelButton");
 const modelMenu = document.querySelector("#modelMenu");
 const rateLimitList = document.querySelector("#rateLimitList");
@@ -1397,7 +1396,6 @@ function updateModelButton() {
   modelButton.textContent = showReasoning
     ? `${selectedModelLabel}・${reasoningDisplayLabel(selectedReasoning)}${serviceTierSuffix}`
     : selectedModelLabel;
-  thinkingButton.hidden = !showReasoning;
   modelMenu.classList.toggle("no-reasoning", !showReasoning);
   renderInlineModelChoices();
   for (const row of modelMenu.querySelectorAll(".model-menu-label, [data-reasoning]")) {
@@ -5232,15 +5230,15 @@ async function renderReviewDiff() {
       addPanelRow("Git repository ではありません", result.message || "");
       return;
     }
-    addPanelRow("Branch", result.branch || "--");
+    addPanelRow("ブランチ", result.branch || "--");
     addPanelRow("git status --short", result.statusShort || "変更なし");
     addPanelRow("git diff --stat", result.diffStat || "差分なし");
-    renderPanelSection("Files", result.files || [], "変更ファイルはありません");
+    renderPanelSection("変更ファイル", result.files || [], "変更ファイルはありません");
     if (result.truncated) addPanelRow("補足", "出力が長いため一部を省略しました");
     if (result.error) addPanelRow("補足エラー", result.error);
   } catch (error) {
     artifactList.replaceChildren();
-    addPanelRow("Diff を読めませんでした", error.message);
+    addPanelRow("差分を読めませんでした", error.message);
   }
 }
 
@@ -5251,16 +5249,16 @@ async function renderReviewTests() {
   try {
     const result = await apiGet(`/api/review/tests?thread=${encodeURIComponent(selectedThread || "")}&provider=${encodeURIComponent(currentThreadProvider())}`);
     artifactList.replaceChildren();
-    addPanelRow("Last command", result.lastCommand || "まだ test 実行履歴はありません");
-    addPanelRow("Status", result.status || "empty");
-    if (result.failureSummary) addPanelRow("Failure summary", result.failureSummary);
+    addPanelRow("最後のコマンド", result.lastCommand || "まだ実行履歴はありません");
+    addPanelRow("状態", result.status || "履歴なし");
+    if (result.failureSummary) addPanelRow("失敗の要約", result.failureSummary);
     addPanelRow("再実行", "安全のため直接 shell 実行せず、composer に依頼文を入れます", () => {
       insertPromptText("関連するテストを再実行し、失敗した場合は原因と修正案をまとめてください。");
       showToast("テスト再実行の依頼文を入力しました。");
     });
   } catch (error) {
     artifactList.replaceChildren();
-    addPanelRow("Tests を読めませんでした", error.message);
+    addPanelRow("テストを読めませんでした", error.message);
   }
 }
 
@@ -6102,17 +6100,17 @@ async function showStatus() {
     ]);
     const result = statusResult;
     const health = healthResult || result.health || {};
-    addPanelRow("Bridge", health.bridge || "unknown", null, { badge: "HLT" });
-    addPanelRow("App server", health.appServer || "unknown");
-    addPanelRow("WebSocket", health.websocket || "unknown");
-    addPanelRow("Active clients", String(health.activeClients ?? 0));
-    addPanelRow("History sync", `${health.historySync?.enabled ? "有効" : "無効"} / last success ${health.historySync?.lastSuccessAt || "none"} / last failure ${health.historySync?.lastFailureAt || "none"}`);
-    addPanelRow("Token", health.token?.present ? `${health.token.masked} / ${health.token.ageMs === null ? "age unknown" : `${Math.round(health.token.ageMs / 60000)} min`}` : "missing");
-    addPanelRow("Notification", `${health.notification?.eventsEnabled ? "events on" : "events off"} / ${(health.notification?.providers || []).join(", ") || "none"}`);
-    addPanelRow("Host", health.hostName || "--");
-    addPanelRow("LAN URL", (health.lanUrls || [])[0] || "--");
-    addPanelRow("Last event", health.lastEventAt || "--");
-    addPanelRow("Refresh", "接続状態を再取得", showStatus);
+    addPanelRow("bridge", health.bridge || "不明", null, { badge: "HLT" });
+    addPanelRow("アプリサーバー", health.appServer || "不明");
+    addPanelRow("WebSocket", health.websocket || "不明");
+    addPanelRow("接続中の端末", `${health.activeClients ?? 0}台`);
+    addPanelRow("履歴同期", `${health.historySync?.enabled ? "有効" : "無効"} / 最終成功 ${health.historySync?.lastSuccessAt || "なし"} / 最終失敗 ${health.historySync?.lastFailureAt || "なし"}`);
+    addPanelRow("接続キー", health.token?.present ? `${health.token.masked} / ${health.token.ageMs === null ? "経過時間は不明" : `${Math.round(health.token.ageMs / 60000)}分前`}` : "なし");
+    addPanelRow("通知", `${health.notification?.eventsEnabled ? "通知あり" : "通知なし"} / ${(health.notification?.providers || []).join(", ") || "宛先なし"}`);
+    addPanelRow("ホスト名", health.hostName || "--");
+    addPanelRow("LANのURL", (health.lanUrls || [])[0] || "--");
+    addPanelRow("最後のイベント", health.lastEventAt || "--");
+    addPanelRow("再取得", "接続状態を取り直します", showStatus);
     addPanelRow("画面ポート", String(result.uiPort));
     addPanelRow("使用AI", result.provider || "codex");
     if (result.defaultProvider && result.defaultProvider !== result.provider) addPanelRow("既定の使用AI", result.defaultProvider);
@@ -7205,7 +7203,6 @@ accessButton.addEventListener("click", () => {
   updateTerminalHeader();
   addStatus(`権限を ${accessMode.label} に切り替えました。次の送信から反映します。`);
 });
-thinkingButton.addEventListener("click", toggleModelMenu);
 modelButton.addEventListener("click", toggleModelMenu);
 voiceButton.addEventListener("click", startVoiceInput);
 modelMenu.addEventListener("click", (event) => {
@@ -7231,7 +7228,7 @@ modelMenu.addEventListener("click", (event) => {
 });
 document.addEventListener("click", (event) => {
   if (modelMenu.classList.contains("hidden")) return;
-  if (modelMenu.contains(event.target) || modelButton.contains(event.target) || thinkingButton.contains(event.target)) return;
+  if (modelMenu.contains(event.target) || modelButton.contains(event.target)) return;
   closeModelMenu();
 });
 document.addEventListener("click", (event) => {
