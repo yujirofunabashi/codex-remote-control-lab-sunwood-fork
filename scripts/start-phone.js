@@ -2509,6 +2509,11 @@ async function claudeSessionSummary(filePath) {
 // transcript is opened.
 const claudeSessionsPerProject = Number(process.env.PHONE_CLAUDE_SESSIONS_PER_PROJECT || 20) || 20;
 
+// How closely an open session follows work happening in the desktop app or the
+// terminal. One stat per second against one file, only while a phone is looking
+// at it.
+const claudeSessionWatchIntervalMs = Math.max(250, Number(process.env.PHONE_CLAUDE_WATCH_INTERVAL_MS || 1000) || 1000);
+
 async function claudeProjectSessionFiles(dir, limit = claudeSessionsPerProject) {
   let fileNames = [];
   try {
@@ -3382,17 +3387,56 @@ class ClaudeBridge {
     this.interruptRequested = false;
     this.idleDisposeTimer = null;
     this.longRunningTimer = null;
+    this.sessionWatchPath = "";
+    this.sessionWatchListener = null;
   }
 
   addClient(browser) {
     this.cancelIdleDispose();
     this.clients.add(browser);
+    this.watchSession();
     this.emitTo(browser, "status", { text: "共有Claudeブリッジに参加しました。" });
     this.emitTo(browser, "ready", this.readyPayload());
     browser.on("close", () => {
       this.clients.delete(browser);
+      if (!this.clients.size) this.unwatchSession();
       this.scheduleIdleDispose();
     });
+  }
+
+  // A session is one file, and the desktop app and the terminal CLI append to
+  // the same one. Without this the phone shows the snapshot it read when the
+  // thread was opened and never learns that the work carried on elsewhere.
+  watchSession() {
+    if (this.sessionWatchPath || !this.claudeSessionId) return;
+    const file = claudeSessionFilePath(this.claudeSessionId);
+    if (!file) return;
+    this.sessionWatchPath = file;
+    // watchFile rather than watch: it is a stat poll, so it survives the atomic
+    // replaces and editor-style rewrites that fs.watch drops on macOS.
+    this.sessionWatchListener = () => this.reloadSessionFromDisk();
+    fs.watchFile(file, { interval: claudeSessionWatchIntervalMs }, this.sessionWatchListener);
+  }
+
+  unwatchSession() {
+    if (!this.sessionWatchPath) return;
+    fs.unwatchFile(this.sessionWatchPath, this.sessionWatchListener);
+    this.sessionWatchPath = "";
+    this.sessionWatchListener = null;
+  }
+
+  reloadSessionFromDisk() {
+    // Our own turn is writing; its stream is already the live view, and
+    // replacing history underneath it would fight the deltas on screen.
+    if (this.hasActiveWork()) return;
+    const session = readClaudeSession(this.claudeSessionId);
+    const history = session?.history;
+    if (!Array.isArray(history) || history.length <= this.history.length) return;
+    this.history = history;
+    // Deliberately not terminalHistory: a transcript carries no status or error
+    // records, so rebuilding it from one yields nothing and would throw away the
+    // tool activity this bridge watched go by.
+    this.emit("historyChanged", { threadId: this.threadId, messages: history.length });
   }
 
   readyPayload() {
@@ -3467,6 +3511,7 @@ class ClaudeBridge {
     this.idleDisposeTimer = setTimeout(() => {
       this.idleDisposeTimer = null;
       if (this.clients.size || this.hasActiveWork()) return;
+      this.unwatchSession();
       this.closeApprovalServer();
       if (bridges.get(this.bridgeKey) === this) bridges.delete(this.bridgeKey);
     }, idleBridgeTtlMs);

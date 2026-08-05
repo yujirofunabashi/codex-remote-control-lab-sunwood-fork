@@ -6523,6 +6523,14 @@ function connect({ preserveHistory = false, freshThread = false, workdir = "" } 
       refreshSelectedThread();
       return;
     }
+    if (msg.type === "historyChanged") {
+      // The session grew somewhere else — the desktop app, or a terminal. Drop
+      // the signature so the redraw is not skipped as "same as last time".
+      lastHistorySignature = "";
+      refreshSelectedThread();
+      loadThreads({ background: true }).catch(() => {});
+      return;
+    }
     if (msg.type === "error") {
       releasePendingSubmission("送信に失敗しました。");
       showBridgeError(msg.text || "エラー");
