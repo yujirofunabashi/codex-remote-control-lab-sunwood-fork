@@ -58,7 +58,10 @@ function spawnedArgs() {
     .readFileSync(argsLog, "utf8")
     .split("\n")
     .filter(Boolean)
-    .map((line) => JSON.parse(line));
+    .map((line) => JSON.parse(line))
+    // The bridge asks the CLI once whether it accepts `--name`; that probe is
+    // not a turn, so it must not be mistaken for one.
+    .filter((args) => args[0] !== "--help");
 }
 
 function turnCompleted(client) {

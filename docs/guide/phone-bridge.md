@@ -132,6 +132,46 @@ Background thread-list polling suppresses repeated identical errors. A transient
 
 Claude mode is intentionally narrower than Codex mode. It has Claude Code session listing for the active workdir, but does not provide Codex app-server history sync, plugin lookup, or live tool approval callbacks. Use `CLAUDE_PERMISSION_MODE` or the UI permission mode to decide how much autonomy each spawned Claude run has.
 
+## Picking Up Phone Work on the Desktop
+
+The bridge records its turns exactly where Claude Code expects them:
+
+```text
+~/.claude/projects/<slugged workdir>/<session-id>.jsonl
+```
+
+When those sessions seem to be missing, they usually are not — you are looking somewhere else. `claude --resume` only offers sessions belonging to **the directory it was started from**. Launched anywhere but the bridge's workdir, work done from the phone will not appear in the picker.
+
+To see what exists and where:
+
+```bash
+npm run sessions                       # every workdir, grouped
+npm run sessions -- --cwd /path/to/project
+npm run sessions -- --json
+```
+
+It prints each session's id, title, and last activity per workdir, plus a resume command you can paste:
+
+Sessions are filed per working directory, so changing the bridge's workdir sends new work elsewhere and earlier sessions drop out of anything scoped to one folder. They are not lost, just filed under the previous workdir — which is why the default here spans all of them.
+
+```bash
+cd /Users/you/Prj/example && claude --resume 2bec35bc-1324-4b49-8a83-d550e9a9ba07
+```
+
+If you want the interactive picker instead, run `claude --resume` **from the bridge's workdir** — that directory is what scopes the list.
+
+### Naming
+
+A session created from the phone is named from its opening prompt, behind a marker showing where it came from:
+
+```text
+📱 レートリミットの表示を直して
+```
+
+That name is what the `/resume` picker, the prompt box, and the terminal title show, so a phone session is recognisable next to one you started yourself. It is set once, when the session is created — renaming it on the desktop sticks, and the phone sidebar picks up the new name too.
+
+Set `PHONE_SESSION_NAME_PREFIX` to change the marker, or to an empty string to drop it. The naming is skipped entirely if the installed `claude` is too old to accept `--name`.
+
 ## Claude Rate Limits
 
 Two sources feed the Claude rate-limit card, and they carry different things:

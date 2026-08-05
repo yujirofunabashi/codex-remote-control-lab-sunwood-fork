@@ -95,6 +95,46 @@ Claude の subscription limit は Anthropic API の rate-limit header とは別�
 
 background の thread 一覧 polling は、同じ error の連続表示を抑えます。app-server の短い再起動や token mismatch が起きても、同じ `/api/threads` failure が chat log に増え続けることは避けます。
 
+## スマホで進めた作業を PC から開く
+
+bridge の turn は、Claude Code が期待する場所にそのまま記録されます。
+
+```text
+~/.claude/projects/<workdir を slug 化した名前>/<session-id>.jsonl
+```
+
+見つからない場合、記録が無いのではなく**探している場所が違う**ことがほとんどです。`claude --resume` は **起動したディレクトリに属する session だけ** を候補に出します。bridge の workdir 以外から起動すると、スマホで進めた作業は候補に現れません。
+
+どこに何があるかは次で確認できます。
+
+```bash
+npm run sessions                       # すべての workdir を横断
+npm run sessions -- --cwd /path/to/project
+npm run sessions -- --json
+```
+
+session ID、タイトル、更新時刻と、そのまま貼れる resume command を workdir ごとに表示します。
+
+session は workdir ごとに分かれて保存されるため、bridge の作業場所を変えると新しい session は別の場所へ行き、以前の session は単一 workdir しか見ない画面から消えます。消えたのではなく別のフォルダにあります。既定で全 workdir を横断するのはこのためです。
+
+```bash
+cd /Users/you/Prj/example && claude --resume 2bec35bc-1324-4b49-8a83-d550e9a9ba07
+```
+
+`claude --resume` を ID なしで実行する場合は、**必ず bridge の workdir で実行してください**。そこが候補一覧の範囲になります。
+
+### session の名前
+
+スマホから始めた session には、最初の prompt から作った名前が、出どころを示す marker 付きで自動で付きます。
+
+```text
+📱 レートリミットの表示を直して
+```
+
+この名前は `/resume` の picker、prompt box、terminal のタイトルに表示されます。PC で自分が始めた session と並んでも、どれがスマホからのものか一目で分かります。名前が付くのは session 作成時の一度だけなので、PC 側で付け直した名前はそのまま残り、スマホの sidebar にもその名前が反映されます。
+
+marker を変えたいときは `PHONE_SESSION_NAME_PREFIX` を設定します。空文字にすれば marker なしになります。`--name` を受け付けない古い `claude` では、この命名は行われません。
+
 ## Claude のレート制限表示
 
 Claude mode のレート制限は 2 つの経路から入ります。得られる情報が違います。
