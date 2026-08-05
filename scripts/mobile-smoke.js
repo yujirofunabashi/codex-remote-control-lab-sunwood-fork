@@ -38,6 +38,14 @@ const threads = [
   // One Claude thread: only Claude sessions are resumed with `claude --resume`,
   // so the copy-command button belongs to them alone.
   { id: "thread-drawer", name: "Drawer and composer tuning", cwd: drawerRepo, updatedAt: Date.now() - 86_400_000, provider: "claude" },
+  // Enough in one project to pass the collapsed cap of 6, so the show-more
+  // control has something to reveal.
+  ...Array.from({ length: 8 }, (_, index) => ({
+    id: `thread-bulk-${index}`,
+    name: `Bulk thread ${index}`,
+    cwd: artifactRepo,
+    updatedAt: Date.now() - (index + 2) * 3600_000,
+  })),
 ];
 const threadsById = Object.fromEntries(threads.map((thread) => [thread.id, thread]));
 const staleThreadList = threads.filter((thread) => thread.id !== activeThread.id);
@@ -544,6 +552,35 @@ async function run() {
       () => document.querySelectorAll(".project-group:not(.current-thread-group)").length,
     );
     check("switching back restores the project headings", backToProjects >= 3, String(backToProjects));
+    // "もっと表示する" was a bare div with no handler, so the rows past the cap
+    // could not be reached and the label was decoration.
+    const beforeExpand = await page.evaluate(() => {
+      const group = Array.from(document.querySelectorAll(".project-group")).find((item) => item.querySelector(".project-more"));
+      const toggle = group?.querySelector(".project-more");
+      return { tag: toggle?.tagName || "", label: toggle?.textContent?.trim() || "", rows: group?.querySelectorAll(".thread-item").length ?? -1 };
+    });
+    check(
+      "showing more is a control, not a label",
+      beforeExpand.tag === "BUTTON" && beforeExpand.rows === 6 && beforeExpand.label.startsWith("もっと表示する"),
+      JSON.stringify(beforeExpand),
+    );
+    await page.locator(".project-more").first().click();
+    const afterExpand = await page.evaluate(() => {
+      const group = Array.from(document.querySelectorAll(".project-group")).find((item) => item.querySelector(".project-more"));
+      return { label: group?.querySelector(".project-more")?.textContent?.trim() || "", rows: group?.querySelectorAll(".thread-item").length ?? -1 };
+    });
+    check(
+      "it reveals the rows that were out of reach",
+      afterExpand.rows > beforeExpand.rows && afterExpand.label === "表示を減らす",
+      JSON.stringify(afterExpand),
+    );
+    await page.locator(".project-more").first().click();
+    const afterCollapse = await page.evaluate(() => {
+      const group = Array.from(document.querySelectorAll(".project-group")).find((item) => item.querySelector(".project-more"));
+      return { rows: group?.querySelectorAll(".thread-item").length ?? -1 };
+    });
+    // Expanding with no way back is its own trap.
+    check("and collapses again", afterCollapse.rows === 6, JSON.stringify(afterCollapse));
     // Tooling writes sessions into folders of its own, and which those are
     // differs per machine, so the sidebar has to be told rather than guess.
     await page.locator(".project-group", { hasText: "drawer-workspace" }).locator(".project-hide").click();
