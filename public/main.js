@@ -692,7 +692,7 @@ const threadInboxFilterStorageKey = "codexPhoneThreadInboxFilter:v1";
 const threadSortModeStorageKey = "codexPhoneThreadSortMode:v1";
 const expandedProjectsStorageKey = "codexPhoneExpandedProjects:v1";
 // Not a project name, so it cannot collide with one.
-const recentViewKey = " recent";
+const recentViewKey = "\u0000recent";
 const taskTemplateStorageKey = "codexPhoneLastTaskTemplate:v1";
 const serviceTierStorageKey = "codexPhoneServiceTier:v1";
 const terminalHistoryLimit = 300;
