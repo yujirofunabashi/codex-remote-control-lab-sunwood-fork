@@ -1230,9 +1230,16 @@ button.project-heading.active {
 
 .project-empty,
 .project-more {
-  padding: 6px 8px 6px 44px;
+  padding: 6px 8px;
   color: color-mix(in srgb, var(--muted) 62%, transparent);
   font-size: 15px;
+}
+
+/* The indent lines this up with the thread rows above it. The empty-state
+   message has no row to line up with, and the same indent left it wrapping
+   mid-phrase in a sidebar that had the width to spare. */
+.project-more {
+  padding-left: 44px;
 }
 
 /* A real button now: it was a bare div, so the rows past the cap had no way to
@@ -5641,8 +5648,11 @@ body[data-main-view="terminal"] .pwa-install-hint {
 
   .project-empty,
   .project-more {
-    padding-left: 36px;
     font-size: 13px;
+  }
+
+  .project-more {
+    padding-left: 36px;
   }
 
   body.show-sidebar .sidebar {
@@ -5999,8 +6009,11 @@ body[data-main-view="terminal"] .pwa-install-hint {
 
   .project-empty,
   .project-more {
-    padding-left: 36px;
     font-size: 14px;
+  }
+
+  .project-more {
+    padding-left: 36px;
   }
 
   .composer {

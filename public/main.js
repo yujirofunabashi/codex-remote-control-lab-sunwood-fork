@@ -2350,16 +2350,16 @@ function setWorkspaceMeta(meta = {}) {
   const location = displayMeta.workspaceLocation || "";
   const displayLocation = compactWorkspaceLocation(location);
   const branch = snapshot.bridge.gitBranch || displayMeta.gitBranch || currentWorkspace.gitBranch;
-  if (workspaceSourceTag) workspaceSourceTag.textContent = snapshot.agent ? "Agent cwd" : "Bridge repo";
-  if (workspaceBranchTag) workspaceBranchTag.textContent = snapshot.agent ? "Bridge branch" : "Branch";
+  if (workspaceSourceTag) workspaceSourceTag.textContent = snapshot.agent ? "実行中の場所" : "bridgeの場所";
+  if (workspaceBranchTag) workspaceBranchTag.textContent = snapshot.agent ? "bridgeのブランチ" : "ブランチ";
   workspaceRepo.textContent = repo || "--";
   if (sidebarProjectName) sidebarProjectName.textContent = repo || location.split(/[\\/]/).filter(Boolean).pop() || "作業場所";
   workspaceLocation.textContent = displayLocation || "--";
   branchName.textContent = branch || "--";
   const empty = !repo && !location && !branch;
   workspaceIndicator.classList.toggle("empty", empty);
-  const sourceLabel = snapshot.agent ? "Agent cwd" : "Bridge repo";
-  const label = empty ? "作業場所を取得できません" : `${sourceLabel}: ${repo || "--"} / 現在地: ${location || "--"} / branch: ${branch || "--"}`;
+  const sourceLabel = snapshot.agent ? "実行中の場所" : "bridgeの場所";
+  const label = empty ? "作業場所を取得できません" : `${sourceLabel}: ${repo || "--"} / 現在地: ${location || "--"} / ブランチ: ${branch || "--"}`;
   workspaceIndicator.title = label;
   workspaceIndicator.setAttribute("aria-label", label);
   workspaceIndicator.dataset.fullPath = location || repo || "";
@@ -5022,6 +5022,7 @@ function closePromptModal({ apply = false } = {}) {
 function clearPanel(title, tabName = "artifacts") {
   showRightPanel();
   setActivePanelTab(tabName);
+  setReviewTabsVisible(false);
   artifactTitle.textContent = title;
   artifactList.classList.remove("artifact-browser-list");
   artifactList.replaceChildren();
@@ -5088,6 +5089,14 @@ function setActiveReviewTab(tabName) {
     button.classList.toggle("active", active);
     button.setAttribute("aria-selected", String(active));
   }
+  setReviewTabsVisible(true);
+}
+
+// The strip belongs to the review center. It is markup that nothing ever hid, so
+// it also sat above 設定, 自動処理 and every other panel, offering Diff and Tests
+// for content that has neither.
+function setReviewTabsVisible(visible) {
+  document.querySelector(".review-tabs")?.classList.toggle("hidden", !visible);
 }
 
 function currentThreadTitle() {
@@ -5273,7 +5282,7 @@ function showReviewCenter(tabName = activeReviewTab) {
   showRightPanel();
   setActivePanelTab(tabName === "artifacts" ? "artifacts" : "status");
   setActiveReviewTab(tabName);
-  artifactTitle.textContent = "Review Center";
+  artifactTitle.textContent = "レビュー";
   activeArtifactPath = "";
   artifactPreview.className = "artifact-preview hidden";
   artifactPreview.textContent = "";
