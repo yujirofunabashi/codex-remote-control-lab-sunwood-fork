@@ -77,6 +77,12 @@
   padding: 0 10px 10px;
 }
 
+/* Sits directly under the filter tabs and reads as the same control family, so
+   it gets the tab styling and only loses the gap between the two rows. */
+.thread-sort-tabs {
+  padding-top: 0;
+}
+
 .thread-inbox-tabs button,
 .review-tabs button,
 .task-template,
@@ -5429,6 +5435,16 @@ body[data-main-view="terminal"] .pwa-install-hint {
     padding: 0 9px;
     font-size: 12px;
     font-weight: 650;
+  }
+
+  /* The header is a single flex row here, and a third group of pills would
+     squeeze the filter tabs off the edge. Let the sort row take its own line. */
+  .thread-section-header {
+    flex-wrap: wrap;
+  }
+
+  .thread-sort-tabs {
+    flex: 1 0 100%;
   }
 
   .composer-status-bar {

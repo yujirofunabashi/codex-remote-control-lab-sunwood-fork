@@ -498,6 +498,33 @@ async function run() {
       repoMarkerState.length >= 3 && repoMarkerColors.size >= 3,
       JSON.stringify(repoMarkerState),
     );
+    // Work spread across folders is only findable if the list can be read in
+    // the order it happened, not just grouped by where it lives.
+    const projectHeadings = await page.evaluate(() =>
+      Array.from(document.querySelectorAll(".project-group:not(.current-thread-group) .project-name")).map((node) => node.textContent?.trim() || ""),
+    );
+    check("project order is the default view", projectHeadings.length >= 3, JSON.stringify(projectHeadings));
+    await page.locator("[data-thread-sort='recent']").click();
+    const dateOrdered = await page.evaluate(() => {
+      const groups = Array.from(document.querySelectorAll(".project-group:not(.current-thread-group)"));
+      const rows = Array.from(document.querySelectorAll(".project-group:not(.current-thread-group) .thread-item"));
+      return {
+        groups: groups.length,
+        heading: groups[0]?.querySelector(".project-name")?.textContent?.trim() || "",
+        rows: rows.length,
+        workdirs: new Set(rows.map((row) => row.querySelector(".thread-workdir")?.textContent?.trim() || "")).size,
+      };
+    });
+    check(
+      "date order collapses every project into one list",
+      dateOrdered.groups === 1 && dateOrdered.heading === "日時順" && dateOrdered.workdirs >= 2,
+      JSON.stringify(dateOrdered),
+    );
+    await page.locator("[data-thread-sort='project']").click();
+    const backToProjects = await page.evaluate(
+      () => document.querySelectorAll(".project-group:not(.current-thread-group)").length,
+    );
+    check("switching back restores the project headings", backToProjects >= 3, String(backToProjects));
     if (wantShots) {
       fs.mkdirSync(shotsDir, { recursive: true });
       await page.screenshot({ path: path.join(shotsDir, "sidebar.png") });

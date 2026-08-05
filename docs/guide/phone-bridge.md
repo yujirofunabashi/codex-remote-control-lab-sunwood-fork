@@ -132,6 +132,21 @@ Background thread-list polling suppresses repeated identical errors. A transient
 
 Claude mode is intentionally narrower than Codex mode. It has Claude Code session listing for the active workdir, but does not provide Codex app-server history sync, plugin lookup, or live tool approval callbacks. Use `CLAUDE_PERMISSION_MODE` or the UI permission mode to decide how much autonomy each spawned Claude run has.
 
+## The Sidebar Spans Every Workdir
+
+Sessions are filed per working directory. While the sidebar read only the active one, **changing the workdir made every earlier session look deleted** — the display was scoped, the records were never lost.
+
+The sidebar now reads every workdir under `~/.claude/projects`, in one of two orders:
+
+- **プロジェクト別 (by project)** — grouped under a heading per folder. The original behaviour, and still the default.
+- **日時順 (by date)** — headings collapsed into one list across all folders, newest first. Each row carries its own `cwd:`, so nothing is lost by dropping the headings.
+
+The choice is remembered per device.
+
+Opening a session that belongs to another workdir **moves the bridge to the directory that session started in**. Otherwise the continuation would be filed under a different project and the original would look abandoned. If that folder is gone, or sits outside the home folder, the bridge stays where it is.
+
+The list is polled, so summaries are cached until a file changes underneath them, and each folder contributes its 20 newest sessions — raise or lower that with `PHONE_CLAUDE_SESSIONS_PER_PROJECT`.
+
 ## Picking Up Phone Work on the Desktop
 
 The bridge records its turns exactly where Claude Code expects them:

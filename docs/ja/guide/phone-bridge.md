@@ -95,6 +95,21 @@ Claude の subscription limit は Anthropic API の rate-limit header とは別�
 
 background の thread 一覧 polling は、同じ error の連続表示を抑えます。app-server の短い再起動や token mismatch が起きても、同じ `/api/threads` failure が chat log に増え続けることは避けます。
 
+## sidebar は全 workdir を横断する
+
+session は workdir ごとに分けて保存されます。sidebar が現在の workdir だけを読んでいた頃は、**作業場所を変えた瞬間に過去の session が全部消えたように見えていました**。消えていたのは表示だけで、記録はどこにも失われていません。
+
+sidebar は `~/.claude/projects` 配下の全 workdir を読みます。並び順は 2 通りから選べます。
+
+- **プロジェクト別**（既定）— フォルダごとの見出しでまとめる。従来の表示
+- **日時順** — 見出しを畳んで、全フォルダを更新時刻の新しい順に 1 本のリストで並べる。各行に `cwd:` が出るのでどのフォルダの作業かは分かります
+
+選択は端末ごとに保存されます。
+
+別の workdir の session を開くと、bridge は**その session が始まったディレクトリに移動します**。そうしないと続きが別のプロジェクト配下に記録され、元の session が放置されたように見えてしまいます。フォルダが削除済み、あるいはホーム配下でない場合は現在の workdir に留まります。
+
+一覧は polling されるため、要約は file が変わるまで cache されます。1 フォルダあたりの読み込み件数は既定で新しい方から 20 件、`PHONE_CLAUDE_SESSIONS_PER_PROJECT` で変更できます。
+
 ## スマホで進めた作業を PC から開く
 
 bridge の turn は、Claude Code が期待する場所にそのまま記録されます。
