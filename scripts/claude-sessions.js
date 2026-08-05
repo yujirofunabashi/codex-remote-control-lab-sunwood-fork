@@ -8,7 +8,11 @@
 // anywhere else, work done from the phone looks like it vanished. This prints
 // where each session actually lives so it can be picked up on the desktop.
 //
-//   npm run sessions            # sessions for the bridge's workdir
+// Sessions are filed per working directory, so changing the bridge's workdir
+// moves new work elsewhere and the old work stops showing up anywhere scoped to
+// one folder. The default here is therefore every workdir, grouped.
+//
+//   npm run sessions                          # every workdir
 //   npm run sessions -- --cwd /path/to/project
 //   npm run sessions -- --json
 const fs = require("fs");
@@ -119,6 +123,49 @@ function listSessions(cwd, limit = 20) {
   return { dir, sessions };
 }
 
+// Sessions are filed per working directory, so changing the workdir moves new
+// work to a different folder and the old work stops showing anywhere that looks
+// at only one. Scanning every project directory is what makes "where did my
+// sessions go" answerable without knowing the answer first.
+function listAllSessions(limit = 20) {
+  const projectsRoot = path.join(os.homedir(), ".claude", "projects");
+  let dirNames = [];
+  try {
+    dirNames = fs.readdirSync(projectsRoot);
+  } catch {
+    return { root: projectsRoot, groups: [] };
+  }
+
+  const groups = [];
+  for (const dirName of dirNames) {
+    const dir = path.join(projectsRoot, dirName);
+    let names = [];
+    try {
+      if (!fs.statSync(dir).isDirectory()) continue;
+      names = fs.readdirSync(dir);
+    } catch {
+      continue;
+    }
+    const sessions = names
+      .filter((name) => name.endsWith(".jsonl"))
+      .map((name) => summarize(path.join(dir, name)))
+      .filter(Boolean)
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+    if (!sessions.length) continue;
+    groups.push({
+      // The slug is lossy, so the cwd recorded inside the transcript is the
+      // only reliable way back to a real path.
+      cwd: sessions[0].cwd || dir,
+      dir,
+      updatedAt: sessions[0].updatedAt,
+      sessions: sessions.slice(0, limit),
+    });
+  }
+
+  groups.sort((a, b) => b.updatedAt - a.updatedAt);
+  return { root: projectsRoot, groups };
+}
+
 function formatWhen(ms) {
   const date = new Date(ms);
   if (!Number.isFinite(date.getTime())) return "";
@@ -137,38 +184,58 @@ function main() {
   }
 
   loadEnvFile(path.join(root, ".env"));
-  const cwd = path.resolve(args.cwd || process.env.PHONE_WORKDIR || process.env.CLAUDE_WORKDIR || root);
-  const { dir, sessions } = listSessions(cwd, args.limit);
+
+  // Narrowing to one workdir is opt-in. Defaulting to it is what made sessions
+  // look missing: change the bridge's workdir and the old ones stop appearing.
+  if (args.cwd) {
+    const cwd = path.resolve(args.cwd);
+    const { dir, sessions } = listSessions(cwd, args.limit);
+    if (args.json) {
+      console.log(JSON.stringify({ cwd, dir, sessions }, null, 2));
+      return;
+    }
+    printGroup({ cwd, dir, sessions });
+    if (!sessions.length) console.log("Run without --cwd to see every workdir.");
+    return;
+  }
+
+  const { root: projectsRoot, groups } = listAllSessions(args.limit);
 
   if (args.json) {
-    console.log(JSON.stringify({ cwd, dir, sessions }, null, 2));
+    console.log(JSON.stringify({ root: projectsRoot, groups }, null, 2));
     return;
   }
 
-  console.log(`Workdir : ${cwd}`);
-  console.log(`Records : ${dir}`);
+  if (!groups.length) {
+    console.log(`No Claude sessions recorded under ${projectsRoot} yet.`);
+    return;
+  }
+
+  for (const group of groups) printGroup(group);
+
+  console.log("`claude --resume` without an id only lists sessions for the directory it is started");
+  console.log("from, so run it from the workdir a session belongs to, or pass the id directly.");
+}
+
+function printGroup({ cwd, dir, sessions }) {
+  console.log(`■ ${cwd}`);
+  console.log(`  ${dir}`);
   console.log("");
-
   if (!sessions.length) {
-    console.log("No Claude sessions recorded for this workdir yet.");
-    console.log("Run a turn from the bridge first, or pass --cwd for a different project.");
+    console.log("  (no sessions recorded for this workdir yet)");
+    console.log("");
     return;
   }
-
   for (const session of sessions) {
     const label = session.title || session.firstPrompt.slice(0, 60) || "(untitled)";
-    console.log(`${formatWhen(session.updatedAt)}  ${label}`);
-    console.log(`  ${session.messages} messages  ${session.id}`);
-    console.log("");
+    console.log(`  ${formatWhen(session.updatedAt)}  ${label}`);
+    console.log(`    ${session.messages} messages  ${session.id}`);
   }
-
-  console.log("Resume one on this machine:");
+  console.log("");
   console.log(`  cd ${cwd} && claude --resume ${sessions[0].id}`);
   console.log("");
-  console.log("`claude --resume` without an id lists sessions for the directory it is started from,");
-  console.log("so run it from the workdir above to see these in the picker.");
 }
 
 if (require.main === module) main();
 
-module.exports = { listSessions, projectDirFor, summarize };
+module.exports = { listAllSessions, listSessions, projectDirFor, summarize };

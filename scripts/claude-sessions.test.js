@@ -4,7 +4,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
-const { listSessions, projectDirFor, summarize } = require("./claude-sessions");
+const { listAllSessions, listSessions, projectDirFor, summarize } = require("./claude-sessions");
 
 const workdir = fs.mkdtempSync(path.join(os.tmpdir(), "sessions-cwd-"));
 const projectDir = projectDirFor(workdir);
@@ -106,4 +106,51 @@ test("a malformed line does not discard the rest of the transcript", () => {
 
   const session = summarize(file);
   assert.equal(session.firstPrompt, "still here");
+});
+
+test("listing every workdir finds sessions the active one would hide", () => {
+  // The reported symptom: change the bridge's workdir and earlier sessions
+  // vanish from anything scoped to a single folder. They were never lost.
+  const other = fs.mkdtempSync(path.join(os.tmpdir(), "sessions-other-"));
+  const otherDir = projectDirFor(other);
+  fs.mkdirSync(otherDir, { recursive: true });
+  const id = "66666666-6666-6666-6666-666666666666";
+  fs.writeFileSync(
+    path.join(otherDir, `${id}.jsonl`),
+    JSON.stringify({
+      type: "user",
+      cwd: other,
+      sessionId: id,
+      timestamp: new Date().toISOString(),
+      message: { role: "user", content: [{ type: "text", text: "work from another folder" }] },
+    }) + "\n",
+  );
+
+  try {
+    // Scoped to the original workdir, the other folder's session is invisible.
+    assert.ok(!listSessions(workdir).sessions.some((session) => session.id === id));
+
+    const groups = listAllSessions().groups;
+    const group = groups.find((item) => item.cwd === other);
+    assert.ok(group, "every workdir with sessions must appear");
+    assert.ok(group.sessions.some((session) => session.id === id));
+  } finally {
+    fs.rmSync(otherDir, { recursive: true, force: true });
+    fs.rmSync(other, { recursive: true, force: true });
+  }
+});
+
+test("a group reports the real cwd from the transcript, not the slug", () => {
+  // The slug is lossy, so it cannot be turned back into a path to cd into.
+  const group = listAllSessions().groups.find((item) => item.cwd === workdir);
+  assert.ok(group);
+  assert.equal(group.cwd, workdir);
+  assert.notEqual(group.cwd, group.dir);
+});
+
+test("groups are ordered by most recent activity", () => {
+  const groups = listAllSessions().groups;
+  for (let i = 1; i < groups.length; i += 1) {
+    assert.ok(groups[i - 1].updatedAt >= groups[i].updatedAt);
+  }
 });

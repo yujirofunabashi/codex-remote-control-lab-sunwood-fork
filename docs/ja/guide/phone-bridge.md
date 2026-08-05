@@ -108,12 +108,14 @@ bridge の turn は、Claude Code が期待する場所にそのまま記録さ�
 どこに何があるかは次で確認できます。
 
 ```bash
-npm run sessions                       # bridge の workdir の session
+npm run sessions                       # すべての workdir を横断
 npm run sessions -- --cwd /path/to/project
 npm run sessions -- --json
 ```
 
-session ID、タイトル、更新時刻と、そのまま貼れる resume command を表示します。
+session ID、タイトル、更新時刻と、そのまま貼れる resume command を workdir ごとに表示します。
+
+session は workdir ごとに分かれて保存されるため、bridge の作業場所を変えると新しい session は別の場所へ行き、以前の session は単一 workdir しか見ない画面から消えます。消えたのではなく別のフォルダにあります。既定で全 workdir を横断するのはこのためです。
 
 ```bash
 cd /Users/you/Prj/example && claude --resume 2bec35bc-1324-4b49-8a83-d550e9a9ba07

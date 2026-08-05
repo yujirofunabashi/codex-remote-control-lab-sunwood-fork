@@ -145,12 +145,14 @@ When those sessions seem to be missing, they usually are not — you are looking
 To see what exists and where:
 
 ```bash
-npm run sessions                       # sessions for the bridge's workdir
+npm run sessions                       # every workdir, grouped
 npm run sessions -- --cwd /path/to/project
 npm run sessions -- --json
 ```
 
-It prints each session's id, title, and last activity, plus a resume command you can paste:
+It prints each session's id, title, and last activity per workdir, plus a resume command you can paste:
+
+Sessions are filed per working directory, so changing the bridge's workdir sends new work elsewhere and earlier sessions drop out of anything scoped to one folder. They are not lost, just filed under the previous workdir — which is why the default here spans all of them.
 
 ```bash
 cd /Users/you/Prj/example && claude --resume 2bec35bc-1324-4b49-8a83-d550e9a9ba07
