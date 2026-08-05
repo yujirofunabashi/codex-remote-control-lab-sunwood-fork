@@ -729,6 +729,10 @@ let liveOutputGroup = "";
 let statusGroup = null;
 let reconnectTimer = null;
 let threadCache = [];
+// Which project folders the sidebar is keeping out of the list. Kept on the
+// bridge rather than in this browser: it is a property of the machine's folders,
+// and the same choice should hold from any phone.
+let hiddenProjects = [];
 let liveTurnActive = false;
 let connectionReady = false;
 let pendingSubmission = null;
@@ -3053,6 +3057,52 @@ function selectedThreadVisibleInGroups(groups) {
   return false;
 }
 
+// Hiding a project removes its heading, so without this there is no way back to
+// it from the sidebar that stopped listing it.
+function renderHiddenProjects() {
+  if (!hiddenProjects.length) return;
+  const section = document.createElement("section");
+  section.className = "project-group hidden-projects";
+  const heading = document.createElement("div");
+  heading.className = "project-heading";
+  const folder = document.createElement("span");
+  folder.className = "project-folder";
+  const name = document.createElement("span");
+  name.className = "project-name";
+  name.textContent = `非表示のプロジェクト (${hiddenProjects.length})`;
+  heading.append(folder, name);
+  section.appendChild(heading);
+  for (const workdir of hiddenProjects) {
+    const project = projectForThread({ cwd: workdir });
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "hidden-project";
+    row.title = `${workdir} を一覧に戻す`;
+    const label = document.createElement("span");
+    label.className = "hidden-project-name";
+    label.textContent = project;
+    const action = document.createElement("span");
+    action.className = "hidden-project-action";
+    action.textContent = "戻す";
+    row.append(label, action);
+    row.addEventListener("click", () => setProjectHidden(workdir, false, project));
+    section.appendChild(row);
+  }
+  threadList.appendChild(section);
+}
+
+async function setProjectHidden(workdir, hidden, project = "") {
+  if (!workdir) return;
+  try {
+    const result = await apiPost("/api/workspaces/hidden", { path: workdir, hidden });
+    hiddenProjects = Array.isArray(result.hiddenProjects) ? result.hiddenProjects : hiddenProjects;
+    renderThreadList();
+    showToast(hidden ? `${project || workdir} を隠しました。` : `${project || workdir} を戻しました。`);
+  } catch (error) {
+    showToast(`変更できませんでした: ${error.message}`, "warn");
+  }
+}
+
 function renderThreadList() {
   threadList.replaceChildren();
   renderThreadInboxTabs();
@@ -3136,6 +3186,20 @@ function renderThreadList() {
         startNewThread({ workdir: projectWorkdir, project });
       });
       heading.appendChild(createButton);
+      // Tooling writes sessions too — memory hooks, summarisers — and which
+      // folders those are differs per machine, so this is a choice rather than
+      // a rule the bridge can infer.
+      const hideButton = document.createElement("button");
+      hideButton.type = "button";
+      hideButton.className = "project-hide";
+      hideButton.title = `${project} を一覧から隠す`;
+      hideButton.setAttribute("aria-label", `${project} を一覧から隠す`);
+      hideButton.textContent = "×";
+      hideButton.addEventListener("click", (event) => {
+        event.stopPropagation();
+        setProjectHidden(projectWorkdir, true, project);
+      });
+      heading.appendChild(hideButton);
     }
     group.appendChild(heading);
 
@@ -3169,6 +3233,7 @@ function renderThreadList() {
           : `${providerLabel(provider)}のチャットはありません`;
     threadList.appendChild(empty);
   }
+  renderHiddenProjects();
   updateThreadNavigation();
   renderThreadSwitcher();
   renderContextMismatch();
@@ -4465,6 +4530,7 @@ async function loadThreads({ background = false, provider = "" } = {}) {
       selectedThreadByProvider.set(resultProvider, selectedThread);
     }
     threadCache = nextThreads;
+    hiddenProjects = Array.isArray(result.hiddenProjects) ? result.hiddenProjects : [];
     const state = getBridgeState(activeBridgeId);
     state.threadCache = threadCache;
     state.activeProvider = activeProvider;

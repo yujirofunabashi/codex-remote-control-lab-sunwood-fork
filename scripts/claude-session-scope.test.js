@@ -14,7 +14,14 @@ const otherWorkdir = fs.mkdtempSync(path.join(home, "scope-other-"));
 process.env.PHONE_AGENT_PROVIDER_DEFAULT = "claude";
 process.env.PHONE_WORKDIR = activeWorkdir;
 
-const { ClaudeBridge, claudeSessionFilePath, claudeSessionWorkdir, claudeThreadListPayload } = require("./start-phone");
+const {
+  ClaudeBridge,
+  claudeSessionFilePath,
+  claudeSessionWorkdir,
+  claudeThreadListPayload,
+  hiddenWorkspaces,
+  setWorkspaceHidden,
+} = require("./start-phone");
 
 const projectsRoot = path.join(home, ".claude", "projects");
 
@@ -94,10 +101,71 @@ test("a session whose folder is gone falls back instead of failing to open", () 
   assert.equal(claudeSessionWorkdir(null, activeWorkdir), activeWorkdir);
 });
 
-test("a session recorded outside the home folder is not adopted as a workdir", () => {
-  // validateWorkdir's home rule is the guard; a transcript is data from disk,
-  // so it must not be able to point the bridge anywhere it likes.
-  assert.equal(claudeSessionWorkdir({ summary: { cwd: "/etc" } }, activeWorkdir), activeWorkdir);
+test("a session kept outside the home folder still opens where it lives", () => {
+  // An external volume is an ordinary place to keep a repo. Falling back to the
+  // configured workdir made the answer describe a different folder than the row
+  // the session was opened from — `git remote -v` reporting the wrong repo.
+  const volume = fs.mkdtempSync("/tmp/scope-volume-");
+  try {
+    assert.equal(claudeSessionWorkdir({ summary: { cwd: volume } }, activeWorkdir), volume);
+  } finally {
+    fs.rmSync(volume, { recursive: true, force: true });
+  }
+});
+
+test("a folder that is not a folder any more falls back", () => {
+  const file = path.join(activeWorkdir, "not-a-directory");
+  fs.writeFileSync(file, "");
+  try {
+    assert.equal(claudeSessionWorkdir({ summary: { cwd: file } }, activeWorkdir), activeWorkdir);
+  } finally {
+    fs.rmSync(file, { force: true });
+  }
+});
+
+test("a project can be kept out of the list, and put back", async () => {
+  // Which folders hold tooling rather than work differs per machine — the home
+  // folder is real work for some people and only memory hooks for others — so
+  // this is a choice rather than a rule the bridge can infer.
+  try {
+    setWorkspaceHidden(otherWorkdir, true);
+    const hiddenList = await claudeThreadListPayload();
+    assert.ok(!hiddenList.data.some((thread) => thread.id === otherId), "a hidden project's sessions are not listed");
+    assert.ok(hiddenList.data.some((thread) => thread.id === activeId), "everything else stays");
+    assert.ok(hiddenList.hiddenProjects.includes(otherWorkdir), "the list is reported so there is a way back");
+
+    setWorkspaceHidden(otherWorkdir, false);
+    const shownList = await claudeThreadListPayload();
+    assert.ok(shownList.data.some((thread) => thread.id === otherId));
+    assert.deepEqual(shownList.hiddenProjects, []);
+  } finally {
+    setWorkspaceHidden(otherWorkdir, false);
+  }
+});
+
+test("the workdir the bridge is running in cannot be hidden away", async () => {
+  // There would be no way back to it from a sidebar that no longer lists it.
+  try {
+    setWorkspaceHidden(activeWorkdir, true);
+    const payload = await claudeThreadListPayload();
+    assert.ok(payload.data.some((thread) => thread.id === activeId));
+    assert.ok(!payload.hiddenProjects.includes(activeWorkdir));
+  } finally {
+    setWorkspaceHidden(activeWorkdir, false);
+  }
+});
+
+test("hiding accepts folders validateWorkdir would refuse", () => {
+  // A folder worth keeping out of the list can sit on an external volume, or be
+  // gone entirely. This is about the sidebar, not about where work may run.
+  const volume = "/Volumes/SSD/archive";
+  try {
+    assert.equal(setWorkspaceHidden(`${volume}/`, true).path, volume);
+    assert.ok(hiddenWorkspaces().includes(volume));
+    assert.throws(() => setWorkspaceHidden("", true), /required/);
+  } finally {
+    setWorkspaceHidden(volume, false);
+  }
 });
 
 test("each session's bridge holds its own directory, so opening one leaves the others alone", () => {
@@ -128,4 +196,13 @@ test("an unusable requested folder falls back rather than failing to open a chat
 test("an existing session ignores a requested folder and stays home", () => {
   // The session's own cwd is the one that keeps its transcript in one file.
   assert.equal(new ClaudeBridge(otherId, `${otherId}::k`, { workdir: activeWorkdir }).workdir, otherWorkdir);
+});
+
+test("the header is told the folder the turn will actually run in", () => {
+  // It reported the configured workdir regardless, so opening a session from
+  // another project left the header naming one folder while the turn ran in
+  // another — and the answer described a repo the header did not name.
+  const ready = new ClaudeBridge(otherId, `${otherId}::k`).readyPayload();
+  assert.equal(ready.workdir, otherWorkdir);
+  assert.notEqual(ready.workdir, activeWorkdir);
 });
