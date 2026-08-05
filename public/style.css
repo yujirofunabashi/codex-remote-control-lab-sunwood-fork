@@ -62,6 +62,9 @@
   --icon-workflow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.65' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='6.2' cy='6.2' r='2'/%3E%3Ccircle cx='17.8' cy='6.2' r='2'/%3E%3Ccircle cx='17.8' cy='17.8' r='2'/%3E%3Cpath d='M8.2 6.2h7.6M6.2 8.2v3.3a5.8 5.8 0 0 0 5.8 5.8h3.8'/%3E%3C/svg%3E");
   --icon-gear: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 3.2v2.1M12 18.7v2.1M4.2 12H2.1M21.9 12h-2.1M6.5 6.5 5 5M19 19l-1.5-1.5M17.5 6.5 19 5M5 19l1.5-1.5'/%3E%3Ccircle cx='12' cy='12' r='5.1'/%3E%3Ccircle cx='12' cy='12' r='1.9'/%3E%3C/svg%3E");
   --icon-stop: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='6.5' y='6.5' width='11' height='11' rx='2.8'/%3E%3C/svg%3E");
+  --icon-file: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14.1 3.4H7.9A2.4 2.4 0 0 0 5.5 5.8v12.4a2.4 2.4 0 0 0 2.4 2.4h8.2a2.4 2.4 0 0 0 2.4-2.4V7.7Z'/%3E%3Cpath d='M14.1 3.4v4.3h4.4'/%3E%3C/svg%3E");
+  --icon-signal: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 18.6h.01'/%3E%3Cpath d='M8.4 15.1a5.1 5.1 0 0 1 7.2 0'/%3E%3Cpath d='M5.2 11.8a9.6 9.6 0 0 1 13.6 0'/%3E%3C/svg%3E");
+  --icon-globe: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='8.4'/%3E%3Cpath d='M3.6 12h16.8'/%3E%3Cpath d='M12 3.6c2.5 2.3 3.9 5.3 3.9 8.4s-1.4 6.1-3.9 8.4c-2.5-2.3-3.9-5.3-3.9-8.4S9.5 5.9 12 3.6Z'/%3E%3C/svg%3E");
   /* Stacking order, low to high. Every z-index in this file comes from here, so
      the order is decided in one place instead of by whoever picked the larger
      number last. Hints sit below the drawer on purpose: a dismissible
@@ -4094,41 +4097,6 @@ body.prompt-modal-open {
   color: inherit;
 }
 
-.panel-tab.file::before {
-  width: 17px;
-  height: 22px;
-  border: 2px solid currentColor;
-  border-radius: 3px;
-}
-
-.panel-tab.file::after {
-  top: 14px;
-  right: calc(50% - 10px);
-  width: 7px;
-  height: 7px;
-  border-left: 2px solid currentColor;
-  border-bottom: 2px solid currentColor;
-  background: var(--soft);
-  transform: rotate(-45deg);
-}
-
-.panel-tab.folder::before {
-  width: 26px;
-  height: 18px;
-  border: 2px solid currentColor;
-  border-radius: 4px;
-}
-
-.panel-tab.folder::after {
-  top: 14px;
-  left: calc(50% - 13px);
-  width: 11px;
-  height: 6px;
-  border: 2px solid currentColor;
-  border-bottom: 0;
-  border-radius: 4px 4px 0 0;
-}
-
 .compose-icon,
 .sidebar-project-folder,
 .project-folder,
@@ -4163,7 +4131,11 @@ body.prompt-modal-open {
 .automation-icon::after,
 .interrupt-icon::before,
 .interrupt-icon::after,
-.panel-tab.folder::after {
+.panel-tab.folder::after,
+.panel-tab.file::after,
+.panel-tab.branch::after,
+.panel-tab.terminal::after,
+.panel-tab.globe::after {
   content: none !important;
 }
 
@@ -4191,13 +4163,6 @@ body.prompt-modal-open {
   height: 21px;
 }
 
-.panel-tab.folder::before {
-  width: 24px;
-  height: 24px;
-  border: 0;
-  border-radius: 0;
-  background: currentColor;
-}
 
 .plus-icon {
   -webkit-mask: var(--icon-plus) center / contain no-repeat;
@@ -4229,53 +4194,43 @@ body.prompt-modal-open {
   mask: var(--icon-stop) center / contain no-repeat;
 }
 
-.panel-tab.branch::before {
-  width: 20px;
-  height: 22px;
-  border-left: 2px solid currentColor;
-  border-top: 2px solid currentColor;
-  border-radius: 9px 0 0 0;
-  transform: translate(4px, 2px);
+/* The last four tabs drawn from borders and radial gradients, now masked SVG
+   like the rest. Two of them were also drawing the wrong thing: the status tab
+   was a rounded box with a rotated tick, which reads as a checkbox, and the web
+   tab's circle and bar read as a minus sign. The automation tab borrows the
+   icon the sidebar's 自動処理 button already uses, so the same action looks the
+   same in both places. */
+.panel-tab.file::before,
+.panel-tab.folder::before,
+.panel-tab.branch::before,
+.panel-tab.terminal::before,
+.panel-tab.globe::before {
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 0;
+  background: currentColor;
+  transform: none;
 }
 
-.panel-tab.branch::after {
-  width: 28px;
-  height: 26px;
-  background:
-    radial-gradient(circle at 6px 20px, currentColor 0 3px, transparent 3px),
-    radial-gradient(circle at 6px 5px, currentColor 0 3px, transparent 3px),
-    radial-gradient(circle at 24px 5px, currentColor 0 3px, transparent 3px);
+.panel-tab.file::before {
+  -webkit-mask: var(--icon-file) center / contain no-repeat;
+  mask: var(--icon-file) center / contain no-repeat;
+}
+
+.panel-tab.branch::before {
+  -webkit-mask: var(--icon-workflow) center / contain no-repeat;
+  mask: var(--icon-workflow) center / contain no-repeat;
 }
 
 .panel-tab.terminal::before {
-  width: 24px;
-  height: 20px;
-  border: 2px solid currentColor;
-  border-radius: 4px;
-}
-
-.panel-tab.terminal::after {
-  width: 12px;
-  height: 8px;
-  border-left: 2px solid currentColor;
-  border-bottom: 2px solid currentColor;
-  transform: translate(-3px, -1px) rotate(-45deg);
+  -webkit-mask: var(--icon-signal) center / contain no-repeat;
+  mask: var(--icon-signal) center / contain no-repeat;
 }
 
 .panel-tab.globe::before {
-  width: 25px;
-  height: 25px;
-  border: 2px solid currentColor;
-  border-radius: 50%;
-}
-
-.panel-tab.globe::after {
-  width: 17px;
-  height: 25px;
-  border-left: 2px solid currentColor;
-  border-right: 2px solid currentColor;
-  border-radius: 50%;
-  background: linear-gradient(currentColor, currentColor) center / 25px 2px no-repeat;
+  -webkit-mask: var(--icon-globe) center / contain no-repeat;
+  mask: var(--icon-globe) center / contain no-repeat;
 }
 
 .artifact-row,
@@ -6644,64 +6599,12 @@ body[data-main-view="terminal"] .pwa-install-hint {
     border-radius: 8px;
   }
 
-  .panel-tab.file::before {
-    width: 11px;
-    height: 15px;
-  }
-
-  .panel-tab.file::after {
-    top: 8px;
-    right: calc(50% - 7px);
-    width: 5px;
-    height: 5px;
-  }
-
-  .panel-tab.folder::before {
-    width: 18px;
-    height: 12px;
-  }
-
-  .panel-tab.folder::after {
-    top: 9px;
-    left: calc(50% - 9px);
-    width: 7px;
-    height: 4px;
-  }
-
-  .panel-tab.branch::before {
-    width: 13px;
-    height: 15px;
-    transform: translate(2px, 2px);
-  }
-
-  .panel-tab.branch::after {
-    width: 19px;
-    height: 18px;
-    background:
-      radial-gradient(circle at 4px 14px, currentColor 0 2px, transparent 2px),
-      radial-gradient(circle at 4px 4px, currentColor 0 2px, transparent 2px),
-      radial-gradient(circle at 17px 4px, currentColor 0 2px, transparent 2px);
-  }
-
-  .panel-tab.terminal::before {
-    width: 16px;
-    height: 13px;
-  }
-
-  .panel-tab.terminal::after {
-    width: 8px;
-    height: 6px;
-  }
-
-  .panel-tab.globe::before {
+  /* One size for all five now that they are square masks. The old rules gave
+     each half of each icon its own width and height, and some of those boxes
+     were not square, so the artwork squashed as well as shrank. */
+  .panel-tab::before {
     width: 18px;
     height: 18px;
-  }
-
-  .panel-tab.globe::after {
-    width: 11px;
-    height: 18px;
-    background: linear-gradient(currentColor, currentColor) center / 18px 2px no-repeat;
   }
 
   .extension-switch {
