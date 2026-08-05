@@ -1971,12 +1971,68 @@ function compactBridgeError(raw) {
   }
 
   const shortened = text.length > 900 ? `${text.slice(0, 900)}\n...` : text;
+  const known = knownConnectionFailure(text);
+  if (known) {
+    return {
+      text: [known.headline, known.hint, shortened].filter(Boolean).join("\n"),
+      label: known.label,
+      retrying: false,
+      signature: `${known.label}:${shortened.slice(0, 120)}`,
+    };
+  }
   return {
     text: shortened || "エラー",
     label: "エラー",
     retrying: false,
     signature: shortened.slice(0, 180),
   };
+}
+
+// Connection failures reach the chat as the raw Node error: a syscall, an errno
+// and a port, which says nothing a person can act on and reads as a crash. Each
+// entry here replaces the headline with what broke and what to do; the original
+// line stays underneath, where it is useful without being the message.
+const connectionFailures = [
+  {
+    match: /ECONNREFUSED/,
+    label: "接続できません",
+    headline: "エージェントのプロセスに接続できませんでした。",
+    hint: "PC側でbridgeが動いているか確認し、必要なら起動し直してください。",
+  },
+  {
+    match: /spawn .*ENOENT|ENOENT.*spawn/,
+    label: "実行ファイルなし",
+    headline: "エージェントの実行ファイルが見つかりませんでした。",
+    hint: "PC側で依存関係を入れ直すと復帰します。",
+  },
+  {
+    match: /ENOTFOUND|EAI_AGAIN/,
+    label: "宛先不明",
+    headline: "接続先のホスト名を解決できませんでした。",
+    hint: "接続先の設定と、PCとの経路を確認してください。",
+  },
+  {
+    match: /ETIMEDOUT|ESOCKETTIMEDOUT/,
+    label: "応答なし",
+    headline: "エージェントから応答がありませんでした。",
+    hint: "処理が長引いているか、経路が切れています。少し待ってから再試行してください。",
+  },
+  {
+    match: /ECONNRESET|EPIPE/,
+    label: "接続が切れました",
+    headline: "エージェントとの接続が切れました。",
+    hint: "再接続すると続きから操作できます。",
+  },
+  {
+    match: /EADDRINUSE/,
+    label: "ポート使用中",
+    headline: "使おうとしたポートが既に使われています。",
+    hint: "PC側で別のbridgeが動いていないか確認してください。",
+  },
+];
+
+function knownConnectionFailure(text) {
+  return connectionFailures.find((entry) => entry.match.test(text)) || null;
 }
 
 function showBridgeError(rawText) {
@@ -2080,11 +2136,47 @@ function addStatusGroupItem(text) {
 
     el.append(avatar, details, tools);
     log.appendChild(el);
+    syncLogEmptyState();
     statusGroup = { items: [], summaryText, count, list };
   }
   statusGroup.items.push(text);
   updateStatusGroup(statusGroup);
   log.scrollTop = log.scrollHeight;
+}
+
+// An empty thread used to be an empty scroll area: most of the screen blank,
+// with nothing saying whether that was the state of the chat or a failure to
+// load it. Removed again the moment anything real is appended.
+function syncLogEmptyState() {
+  if (!log) return;
+  const existing = log.querySelector(".log-empty");
+  // A collapsed "作業ログ" group is bookkeeping, not conversation. A thread that
+  // has only that is exactly the screen this is for: one grey row at the top and
+  // the rest of the height blank.
+  const hasConversation = [...log.children].some(
+    (child) => child !== existing && !child.classList.contains("status"),
+  );
+  if (hasConversation) {
+    existing?.remove();
+    log.classList.remove("has-empty-state");
+    return;
+  }
+  log.classList.add("has-empty-state");
+  if (existing) {
+    log.appendChild(existing);
+    return;
+  }
+  const empty = document.createElement("div");
+  empty.className = "log-empty";
+  const title = document.createElement("strong");
+  title.textContent = "まだやり取りはありません";
+  const lead = document.createElement("p");
+  lead.textContent = "下の入力欄から依頼を送ると、ここに応答が表示されます。";
+  const hint = document.createElement("p");
+  hint.className = "log-empty-hint";
+  hint.textContent = "よく使う依頼は、入力欄の上のボタンから選べます。";
+  empty.append(title, lead, hint);
+  log.appendChild(empty);
 }
 
 function addEntry(kind, text, images = [], options = {}) {
@@ -2117,6 +2209,7 @@ function addEntry(kind, text, images = [], options = {}) {
 
   el.append(avatar, body, tools);
   log.appendChild(el);
+  syncLogEmptyState();
   log.scrollTop = log.scrollHeight;
   return body;
 }
@@ -2810,6 +2903,7 @@ function renderHistory(history) {
       showBulkCopy,
     });
   }
+  syncLogEmptyState();
   if (!liveText || !liveTurnActive) return;
   // Unless the history being drawn already ends with what was streamed, in
   // which case re-adding it would show the same answer twice.

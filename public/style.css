@@ -1974,6 +1974,42 @@ body.terminal-focus-mode .composer-footer {
   -webkit-overflow-scrolling: touch;
 }
 
+/* Fills the height the log would otherwise leave blank, so an empty thread
+   reads as empty rather than as something that failed to load. The log turns
+   into a column for this so the block takes whatever height is left below the
+   status row, instead of guessing at one and floating in the middle. */
+.log.has-empty-state {
+  display: flex;
+  flex-direction: column;
+}
+
+.log-empty {
+  display: grid;
+  flex: 1 1 auto;
+  align-content: center;
+  justify-items: start;
+  gap: 6px;
+  min-height: 180px;
+  max-width: 42ch;
+  color: var(--muted);
+}
+
+.log-empty strong {
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.log-empty p {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.log-empty-hint {
+  color: color-mix(in srgb, var(--muted) 78%, transparent);
+}
+
 .terminal-view {
   position: relative;
   flex: 1 1 auto;
