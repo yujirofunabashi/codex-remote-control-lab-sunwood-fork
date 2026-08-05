@@ -8,7 +8,7 @@ const { spawn } = require("child_process");
 
 process.env.PHONE_AGENT_PROVIDER = "claude";
 
-const { ClaudeBridge, approvalMcpConfig, claudeModeCanPrompt, claudePermissionMode } = require("./start-phone");
+const { ClaudeBridge, approvalMcpConfig, claudePermissionMode } = require("./start-phone");
 
 const approvalMcpScript = path.join(__dirname, "claude-approval-mcp.js");
 
@@ -90,10 +90,58 @@ function decisionFrom(reply) {
 
 test("確認モード keeps the run in a permission mode that can prompt", () => {
   assert.equal(claudePermissionMode({ approvalPolicy: "on-request", sandboxMode: "workspace-write" }), "default");
-  assert.ok(claudeModeCanPrompt("default"));
-
   assert.equal(claudePermissionMode({ approvalPolicy: "never", sandboxMode: "danger-full-access" }), "bypassPermissions");
-  assert.ok(!claudeModeCanPrompt("bypassPermissions"));
+});
+
+test("フルアクセス is given an approval channel too", async () => {
+  // bypassPermissions does not mean nothing can ask: a PreToolUse hook
+  // answering "ask" still stops the tool call. With no prompt tool to route it
+  // to, headless Claude records a permission denial and says it needs
+  // confirmation - which reached the phone as a run that never finished.
+  const bridge = new ClaudeBridge(null, "bridge-bypass");
+  const spawned = [];
+  bridge.spawnTurn = (...args) => spawned.push(args);
+  try {
+    bridge.startPrompt("フルアクセスで実行", [], { approvalPolicy: "never", sandboxMode: "danger-full-access" });
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    assert.equal(spawned.length, 1);
+    const [, , , , permissionMode, approvalSocketPath] = spawned[0];
+    assert.equal(permissionMode, "bypassPermissions");
+    assert.ok(approvalSocketPath, "the turn is handed a socket to ask over");
+    assert.ok(fs.existsSync(approvalSocketPath));
+  } finally {
+    bridge.closeApprovalServer();
+  }
+});
+
+test("a phone that reconnects mid-approval is handed the question back", async () => {
+  // The turn is still active while it waits, so the run reported itself as
+  // 処理中 and carried nothing to answer with: reloading the page left a
+  // spinner and no card, and the only way on was another client.
+  const bridge = new ClaudeBridge(null, "bridge-reconnect");
+  const client = fakeClient();
+  bridge.clients.add(client);
+  bridge.activeTurnId = "claude-turn:waiting";
+  try {
+    const socketPath = await bridge.ensureApprovalServer();
+    const pending = connectAndAsk(socketPath, { toolName: "Bash", input: { command: "npm test" } });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const [approval] = client.messagesOfType("approval");
+
+    const run = bridge.runPayload();
+    assert.equal(run.state, "approval");
+    assert.equal(run.label, "承認待ち");
+    assert.equal(run.pendingApproval?.id, approval.request.id, "the arriving phone is told what is being asked");
+    assert.equal(bridge.readyPayload().run.pendingApproval?.id, approval.request.id);
+
+    bridge.approval(approval.request, "accept");
+    assert.deepEqual(await pending, { decision: "accept" });
+    assert.equal(bridge.pendingApproval, null, "an answered question is not handed back");
+    assert.notEqual(bridge.runPayload().state, "approval");
+  } finally {
+    bridge.closeApprovalServer();
+  }
 });
 
 test("approval mcp config points Claude at this process's socket without binding a port", () => {

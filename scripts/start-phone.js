@@ -3304,11 +3304,17 @@ function claudePermissionMode(options = {}) {
   return process.env.CLAUDE_PERMISSION_MODE || "acceptEdits";
 }
 
-// bypassPermissions approves everything before the prompt tool is consulted, so
-// there is nothing for the approval socket to do in that mode.
-function claudeModeCanPrompt(permissionMode) {
-  return permissionMode !== "bypassPermissions";
-}
+// The approval channel is attached in every permission mode, フルアクセス
+// included. It used to be left off there, on the reading that bypassPermissions
+// approves everything before the prompt tool is consulted. It does not: a
+// PreToolUse hook answering "ask", and Claude Code's own residual prompts, still
+// stop the tool call. Without a prompt tool to route them to, headless Claude
+// records a permission denial and narrates that it needs confirmation - the
+// phone showed a spinner and no way to answer, and the only way through was the
+// desktop or the official app.
+//
+// Attaching it costs nothing when nothing asks: in bypassPermissions an ordinary
+// tool call never reaches the prompt tool, so full access stays full access.
 
 // A Unix socket per bridge, never a port: the fleet runs several bridges at once
 // and a fixed-port approval channel would collide on the second one.
@@ -3521,6 +3527,20 @@ class ClaudeBridge {
   }
 
   runPayload() {
+    // A question outranks the turn waiting on it. The turn is still active, so
+    // this used to report "Agent 処理中" and carry nothing to answer with: a
+    // phone that reconnected mid-approval was shown a spinner for a run that had
+    // already stopped to ask it something.
+    if (this.pendingApproval) {
+      return {
+        state: "approval",
+        label: "承認待ち",
+        turnId: this.activeTurnId,
+        pendingApproval: this.pendingApproval,
+        updatedAt: Date.now(),
+        ...currentWorkspaceMeta(),
+      };
+    }
     if (this.activeTurnId || this.activeProcess) {
       if (this.runState?.state === "interrupting") return { ...this.runState, ...currentWorkspaceMeta() };
       return {
@@ -3665,10 +3685,6 @@ class ClaudeBridge {
 
   startPrompt(text, attachments = [], options = {}, clientMessageId = null) {
     const permissionMode = claudePermissionMode(options);
-    if (!claudeModeCanPrompt(permissionMode)) {
-      this.spawnTurn(text, attachments, options, clientMessageId, permissionMode, null);
-      return;
-    }
     // Reserve the slot before awaiting so a second prompt still queues.
     this.activeTurnId = `claude-turn:pending:${crypto.randomUUID()}`;
     this.ensureApprovalServer()
@@ -3991,6 +4007,7 @@ class ClaudeBridge {
       if (!this.pendingApprovals.has(id)) return;
       clearTimeout(timer);
       this.pendingApprovals.delete(id);
+      if (this.pendingApproval?.id === id) this.pendingApproval = null;
       if (!socket.destroyed) socket.end(`${JSON.stringify({ decision, message })}\n`);
     };
 
@@ -4013,7 +4030,12 @@ class ClaudeBridge {
       return;
     }
 
+    // Held, not just broadcast. A phone that reloads or drops its socket while
+    // the question is open has no card left to answer, and `ready` has to be
+    // able to hand it back. Set after the run state, which clears this on any
+    // state that is not an approval.
     this.setBridgeRunState("approval", "承認待ち", this.activeTurnId);
+    this.pendingApproval = request;
     this.emit("approval", { request });
     notifyBridgeEvent("approval_required", {
       provider: this.provider,
@@ -5196,7 +5218,6 @@ module.exports = {
   claudeAcceptsNameFlag,
   claudeEffortLevel,
   claudeHistoryHoldsSameConversation,
-  claudeModeCanPrompt,
   claudePermissionMode,
   claudeSessionFilePath,
   claudeSessionName,

@@ -1211,6 +1211,14 @@ function applyServerRunState(run = {}) {
     approval.classList.add("hidden");
     renderApprovalStrip(null);
   }
+  // The bridge holds the open question, so a phone that reloaded or dropped its
+  // socket while one was waiting gets the card back with the run state instead
+  // of watching a spinner it cannot answer.
+  if (state === "approval" && run.pendingApproval && run.pendingApproval.id !== pendingApproval?.id) {
+    pendingApproval = run.pendingApproval;
+    getBridgeState().pendingApproval = run.pendingApproval;
+    renderApprovalRequest(run.pendingApproval);
+  }
   const activeStates = new Set(["running", "streaming", "approval", "syncing", "interrupting"]);
   liveTurnActive = activeStates.has(state);
   if (liveTurnActive && run.turnId) liveOutputGroup = run.turnId;
