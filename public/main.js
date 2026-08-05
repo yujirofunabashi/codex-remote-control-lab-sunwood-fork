@@ -423,8 +423,31 @@ function showPwaInstallHint() {
   hint.querySelector("[data-pwa-dismiss]")?.addEventListener("click", () => {
     safeWriteStorage(localStorage, pwaInstallHintStorageKey, "dismissed");
     hint.remove();
+    resumeDeferredSwipeHint();
   });
   document.body.appendChild(hint);
+  deferSwipeHint();
+}
+
+// The hint is fixed-position and has to hang below the header stack, whose
+// height moves when the title wraps or the workspace strip is hidden. Publishing
+// the measured bottom edge keeps the CSS off a guessed pixel offset.
+function trackHeaderBlockEnd() {
+  const titlebar = document.querySelector(".titlebar");
+  if (!titlebar) return;
+  const strip = document.querySelector(".workspace-strip");
+  const update = () => {
+    const anchor = strip && strip.getBoundingClientRect().height > 0 ? strip : titlebar;
+    const bottom = Math.round(anchor.getBoundingClientRect().bottom);
+    if (bottom > 0) document.documentElement.style.setProperty("--app-header-block-end", `${bottom}px`);
+  };
+  if (typeof ResizeObserver === "function") {
+    const observer = new ResizeObserver(update);
+    observer.observe(titlebar);
+    if (strip) observer.observe(strip);
+  }
+  window.addEventListener("resize", update);
+  update();
 }
 
 async function unregisterStaleServiceWorkersIfNeeded() {
@@ -2007,7 +2030,9 @@ function summarizeStatus(items) {
   if (reads) parts.push(`${reads}個のファイルを調査`);
   if (commands) parts.push(`${commands}件のコマンドを実行`);
   if (files && !reads) parts.push(`${files}件のファイル操作`);
-  return parts.length ? parts.join("、") : `${items.length}件の作業ログ`;
+  // No count here: the row already carries one in its own badge, and spelling it
+  // out twice read as "4件の作業ログ 4件".
+  return parts.length ? parts.join("、") : "作業ログ";
 }
 
 function updateStatusGroup(group) {
@@ -4197,10 +4222,40 @@ function selectAdjacentThread(direction, source = "button") {
   if (source === "swipe") addStatus(`${direction > 0 ? "左" : "右"}スワイプでチャットを切り替えました。`);
 }
 
+let swipeHintTimer = 0;
+let swipeHintDeferred = false;
+
+// One first-run hint at a time. This one and the install card land in the same
+// strip and fire from independent async chains, so whichever arrives second
+// waits instead of stacking on top of the other.
 function showInitialSwipeHint() {
   if (localStorage.getItem(swipeHintStorageKey) || !window.matchMedia("(max-width: 820px)").matches) return;
-  localStorage.setItem(swipeHintStorageKey, "1");
-  window.setTimeout(() => showSwipeFeedback("左右スワイプで同じ作業場所内の前後へ移動できます。"), 800);
+  if (document.querySelector(".pwa-install-hint")) {
+    swipeHintDeferred = true;
+    return;
+  }
+  swipeHintDeferred = false;
+  window.clearTimeout(swipeHintTimer);
+  // Marked seen only once it is actually on screen, so a hint that yielded to
+  // the install card still gets its turn rather than being spent unshown.
+  swipeHintTimer = window.setTimeout(() => {
+    swipeHintTimer = 0;
+    localStorage.setItem(swipeHintStorageKey, "1");
+    showSwipeFeedback("左右スワイプで同じ作業場所内の前後へ移動できます。");
+  }, 800);
+}
+
+function deferSwipeHint() {
+  if (localStorage.getItem(swipeHintStorageKey)) return;
+  window.clearTimeout(swipeHintTimer);
+  swipeHintTimer = 0;
+  swipeHintDeferred = true;
+}
+
+function resumeDeferredSwipeHint() {
+  if (!swipeHintDeferred) return;
+  swipeHintDeferred = false;
+  showInitialSwipeHint();
 }
 
 function renderThreadSwitcher() {
@@ -5328,11 +5383,21 @@ function renderArtifactIndex(items) {
   hideArtifactPreview();
 }
 
+// The row already shows the file name, so the second line carries the folder it
+// sits in rather than the whole path. A file at the repo root used to print its
+// own name twice; a nested one repeated the name at the end of the path.
+function artifactRowFolder(item = {}) {
+  const path = String(item.path || "");
+  const name = String(item.name || "");
+  if (!name || !path.endsWith(name)) return path;
+  return path.slice(0, -name.length).replace(/\/+$/, "");
+}
+
 function renderArtifactRows() {
   artifactList.replaceChildren();
   for (const item of artifactItems) {
     const icon = item.kind === "image" ? "IMG" : item.kind === "markdown" ? "MD" : "FILE";
-    const row = addPanelRow(item.name, item.path, () => showArtifact(item.path), { badge: icon });
+    const row = addPanelRow(item.name, artifactRowFolder(item), () => showArtifact(item.path), { badge: icon });
     row.classList.toggle("active", item.path === activeArtifactPath);
   }
   if (!artifactItems.length) addPanelRow("ファイルは見つかりませんでした");
@@ -6444,7 +6509,10 @@ function connect({ preserveHistory = false, freshThread = false, workdir = "" } 
       syncReadyThread(msg.threadId);
       renderHistoryIfChanged(msg.history || []);
       handleTerminalMessage(msg);
-      meta.textContent = `${msg.model}  •  ${msg.clients}端末  •  ${msg.workdir}`;
+      // The workspace strip directly below already names the folder, and it does
+      // it with the home directory collapsed. Repeating the absolute path here
+      // only pushed the line under the pills to its right.
+      meta.textContent = `${msg.model}  •  ${msg.clients}端末`;
       applyServerRunState(msg.run || { state: "ready" });
       applyCurrentThreadAccent();
       updateThreadNavigation();
@@ -7071,6 +7139,7 @@ refreshBridgeState(activeBridgeId, { force: true })
 refreshFleet({ force: true }).catch(() => {});
 unregisterStaleServiceWorkersIfNeeded().finally(() => {
   if (params.get("pwaDiagnostics") === "1") safeWriteStorage(localStorage, pwaDiagnosticsStorageKey, "1");
+  trackHeaderBlockEnd();
   showPwaInstallHint();
   renderViewportDebug();
 });

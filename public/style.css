@@ -62,6 +62,24 @@
   --icon-workflow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.65' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='6.2' cy='6.2' r='2'/%3E%3Ccircle cx='17.8' cy='6.2' r='2'/%3E%3Ccircle cx='17.8' cy='17.8' r='2'/%3E%3Cpath d='M8.2 6.2h7.6M6.2 8.2v3.3a5.8 5.8 0 0 0 5.8 5.8h3.8'/%3E%3C/svg%3E");
   --icon-gear: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 3.2v2.1M12 18.7v2.1M4.2 12H2.1M21.9 12h-2.1M6.5 6.5 5 5M19 19l-1.5-1.5M17.5 6.5 19 5M5 19l1.5-1.5'/%3E%3Ccircle cx='12' cy='12' r='5.1'/%3E%3Ccircle cx='12' cy='12' r='1.9'/%3E%3C/svg%3E");
   --icon-stop: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='6.5' y='6.5' width='11' height='11' rx='2.8'/%3E%3C/svg%3E");
+  /* Stacking order, low to high. Every z-index in this file comes from here, so
+     the order is decided in one place instead of by whoever picked the larger
+     number last. Hints sit below the drawer on purpose: a dismissible
+     suggestion must never cover navigation, and it must never swallow the taps
+     meant for the scrim behind it. */
+  --layer-terminal-jump: 3;
+  --layer-terminal-helper: 8;
+  --layer-hint: 12;
+  --layer-terminal-sheet: 18;
+  --layer-scrim: 19;
+  --layer-drawer: 20;
+  --layer-panel: 24;
+  --layer-popover: 28;
+  --layer-sheet: 32;
+  --layer-composer: 36;
+  --layer-modal: 40;
+  --layer-toast: 60;
+  --layer-debug: 70;
 }
 
 .thread-inbox-tabs,
@@ -208,7 +226,12 @@
   color: var(--error);
 }
 
+/* Six tabs never fit the panel in one row, and the shared strip style hides its
+   scrollbar — so the overflowing tabs were reachable but invisible, the last
+   label cut mid-word at the panel edge. Wrapping shows all of them instead. */
 .review-tabs {
+  flex-wrap: wrap;
+  row-gap: 6px;
   padding: 8px;
   border-bottom: 1px solid var(--line);
 }
@@ -1490,7 +1513,7 @@ p {
   position: fixed;
   top: 60px;
   right: 14px;
-  z-index: 32;
+  z-index: var(--layer-sheet);
   width: min(420px, calc(100vw - 28px));
   max-height: min(70vh, 520px);
   overflow: auto;
@@ -2133,7 +2156,7 @@ body.terminal-focus-mode .composer-footer {
   left: 8px;
   right: 8px;
   top: calc(100% + 6px);
-  z-index: 18;
+  z-index: var(--layer-terminal-sheet);
   display: grid;
   gap: 9px;
   max-height: min(58dvh, 430px);
@@ -2443,7 +2466,7 @@ body.terminal-nowrap .terminal-detail {
   position: absolute;
   right: 16px;
   bottom: 14px;
-  z-index: 3;
+  z-index: var(--layer-terminal-jump);
   min-height: 34px;
   border: 1px solid color-mix(in srgb, var(--thread-accent) 44%, var(--terminal-border));
   border-radius: 999px;
@@ -2523,7 +2546,7 @@ body[data-main-view="terminal"].terminal-quickbar-visible .terminal-ops {
   position: absolute;
   left: 50%;
   bottom: 154px;
-  z-index: 8;
+  z-index: var(--layer-terminal-helper);
   max-width: min(520px, calc(100% - 28px));
   transform: translateX(-50%);
   border: 1px solid color-mix(in srgb, var(--thread-accent) 28%, var(--line));
@@ -3616,7 +3639,7 @@ html[data-provider="claude"] .model-button {
   position: absolute;
   right: 52px;
   bottom: calc(100% + 12px);
-  z-index: 28;
+  z-index: var(--layer-popover);
   width: min(420px, calc(100vw - 30px));
   max-height: min(640px, calc(100dvh - 160px));
   overflow-y: auto;
@@ -3883,7 +3906,7 @@ body.prompt-modal-open {
 .prompt-modal {
   position: fixed;
   inset: 0;
-  z-index: 40;
+  z-index: var(--layer-modal);
   display: grid;
   place-items: center;
   padding: max(18px, env(safe-area-inset-top)) 18px max(18px, env(safe-area-inset-bottom));
@@ -4995,7 +5018,7 @@ body.prompt-modal-open {
   position: fixed;
   left: 50%;
   bottom: max(18px, env(safe-area-inset-bottom));
-  z-index: 60;
+  z-index: var(--layer-toast);
   display: grid;
   gap: 8px;
   width: min(420px, calc(100vw - 28px));
@@ -5035,7 +5058,7 @@ body.prompt-modal-open {
   position: fixed;
   right: 12px;
   bottom: max(12px, env(safe-area-inset-bottom));
-  z-index: 52;
+  z-index: var(--layer-hint);
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 10px;
@@ -5087,7 +5110,7 @@ body[data-main-view="terminal"] .pwa-install-hint {
   position: fixed;
   left: 8px;
   bottom: max(8px, env(safe-area-inset-bottom));
-  z-index: 70;
+  z-index: var(--layer-debug);
   max-width: min(300px, calc(100vw - 16px));
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -5179,7 +5202,7 @@ body[data-main-view="terminal"] .pwa-install-hint {
   body.show-panel .artifact-panel {
     position: fixed;
     inset: 62px 12px max(12px, env(safe-area-inset-bottom)) 12px;
-    z-index: 24;
+    z-index: var(--layer-panel);
     display: flex;
     flex-direction: column;
     align-content: stretch;
@@ -5230,8 +5253,11 @@ body[data-main-view="terminal"] .pwa-install-hint {
     grid-column: auto;
   }
 
+  /* Hangs off the measured bottom of the header stack rather than a guessed
+     108px, so it stays put when the title wraps or the workspace strip is
+     hidden. The fallback only matters for the frame before the first measure. */
   .pwa-install-hint {
-    top: max(108px, env(safe-area-inset-top));
+    top: calc(var(--app-header-block-end, 108px) + 8px);
     right: 8px;
     bottom: auto;
     left: 8px;
@@ -5277,7 +5303,7 @@ body[data-main-view="terminal"] .pwa-install-hint {
   .sidebar-scrim {
     position: fixed;
     inset: 0;
-    z-index: 19;
+    z-index: var(--layer-scrim);
     display: block;
     border: 0;
     background: transparent;
@@ -5295,7 +5321,7 @@ body[data-main-view="terminal"] .pwa-install-hint {
   .sidebar {
     position: fixed;
     inset: 0 auto 0 0;
-    z-index: 20;
+    z-index: var(--layer-drawer);
     width: min(78vw, 310px);
     gap: 9px;
     padding: 10px 10px 12px;
@@ -6007,7 +6033,7 @@ body[data-main-view="terminal"] .pwa-install-hint {
 
   body.composer-focused .composer {
     position: fixed;
-    z-index: 36;
+    z-index: var(--layer-composer);
     right: 9px;
     bottom: max(4px, env(safe-area-inset-bottom));
     left: 9px;
@@ -6498,12 +6524,18 @@ body[data-main-view="terminal"] .pwa-install-hint {
     padding-bottom: 2px;
   }
 
+  /* Anchored to the bottom of the view toggle it belongs to, so it follows that
+     row instead of a guessed 50px from the top of the titlebar. */
+  .main-view-bar {
+    position: relative;
+  }
+
   .swipe-feedback {
     position: absolute;
-    top: 50px;
-    right: 9px;
-    z-index: 6;
-    max-width: calc(100% - 18px);
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: var(--layer-hint);
+    max-width: min(calc(100vw - 18px), 320px);
     box-shadow: 0 10px 24px color-mix(in srgb, var(--text) 12%, transparent);
   }
 
