@@ -14,7 +14,14 @@ const otherWorkdir = fs.mkdtempSync(path.join(home, "scope-other-"));
 process.env.PHONE_AGENT_PROVIDER_DEFAULT = "claude";
 process.env.PHONE_WORKDIR = activeWorkdir;
 
-const { ClaudeBridge, claudeSessionFilePath, claudeSessionWorkdir, claudeThreadListPayload } = require("./start-phone");
+const {
+  ClaudeBridge,
+  claudeSessionFilePath,
+  claudeSessionWorkdir,
+  claudeThreadListPayload,
+  hiddenWorkspaces,
+  setWorkspaceHidden,
+} = require("./start-phone");
 
 const projectsRoot = path.join(home, ".claude", "projects");
 
@@ -116,21 +123,48 @@ test("a folder that is not a folder any more falls back", () => {
   }
 });
 
-test("sessions filed against the home folder are left out of the list", async () => {
-  // `claude` run from a bare shell lands there, and so does the tooling that
-  // spawns it — memory hooks and summarisers whose opening message is a system
-  // prompt. Listing them buried the sessions the phone is actually for.
-  const homeDir = projectDirFor(home);
-  const homeId = "dddddddd-0000-0000-0000-000000000004";
-  const existed = fs.existsSync(homeDir);
-  writeSession(home, homeId, "You are a Claude-Mem summariser…");
+test("a project can be kept out of the list, and put back", async () => {
+  // Which folders hold tooling rather than work differs per machine — the home
+  // folder is real work for some people and only memory hooks for others — so
+  // this is a choice rather than a rule the bridge can infer.
   try {
-    const ids = (await claudeThreadListPayload()).data.map((thread) => thread.id);
-    assert.ok(!ids.includes(homeId), "the home folder is not a project");
-    assert.ok(ids.includes(otherId), "other workdirs are still listed");
+    setWorkspaceHidden(otherWorkdir, true);
+    const hiddenList = await claudeThreadListPayload();
+    assert.ok(!hiddenList.data.some((thread) => thread.id === otherId), "a hidden project's sessions are not listed");
+    assert.ok(hiddenList.data.some((thread) => thread.id === activeId), "everything else stays");
+    assert.ok(hiddenList.hiddenProjects.includes(otherWorkdir), "the list is reported so there is a way back");
+
+    setWorkspaceHidden(otherWorkdir, false);
+    const shownList = await claudeThreadListPayload();
+    assert.ok(shownList.data.some((thread) => thread.id === otherId));
+    assert.deepEqual(shownList.hiddenProjects, []);
   } finally {
-    fs.rmSync(path.join(homeDir, `${homeId}.jsonl`), { force: true });
-    if (!existed) fs.rmSync(homeDir, { recursive: true, force: true });
+    setWorkspaceHidden(otherWorkdir, false);
+  }
+});
+
+test("the workdir the bridge is running in cannot be hidden away", async () => {
+  // There would be no way back to it from a sidebar that no longer lists it.
+  try {
+    setWorkspaceHidden(activeWorkdir, true);
+    const payload = await claudeThreadListPayload();
+    assert.ok(payload.data.some((thread) => thread.id === activeId));
+    assert.ok(!payload.hiddenProjects.includes(activeWorkdir));
+  } finally {
+    setWorkspaceHidden(activeWorkdir, false);
+  }
+});
+
+test("hiding accepts folders validateWorkdir would refuse", () => {
+  // A folder worth keeping out of the list can sit on an external volume, or be
+  // gone entirely. This is about the sidebar, not about where work may run.
+  const volume = "/Volumes/SSD/archive";
+  try {
+    assert.equal(setWorkspaceHidden(`${volume}/`, true).path, volume);
+    assert.ok(hiddenWorkspaces().includes(volume));
+    assert.throws(() => setWorkspaceHidden("", true), /required/);
+  } finally {
+    setWorkspaceHidden(volume, false);
   }
 });
 

@@ -76,6 +76,10 @@ function startServer() {
   });
 }
 
+// Which folders hold tooling rather than work is a per-machine choice, so the
+// bridge stores it and the sidebar reads it back.
+let hiddenProjects = [];
+
 async function mockApi(page, origin) {
   await page.route("**/*", async (route) => {
     const url = new URL(route.request().url());
@@ -99,7 +103,14 @@ async function mockApi(page, origin) {
       });
     }
     if (url.pathname === "/api/threads") {
-      return route.fulfill({ json: { data: artifactBridge ? threads : staleThreadList } });
+      const listed = (artifactBridge ? threads : staleThreadList).filter((thread) => !hiddenProjects.includes(thread.cwd));
+      return route.fulfill({ json: { data: listed, hiddenProjects: [...hiddenProjects] } });
+    }
+    if (url.pathname === "/api/workspaces/hidden") {
+      const body = JSON.parse(route.request().postData() || "{}");
+      const target = String(body.path || "").replace(/\/+$/, "");
+      hiddenProjects = body.hidden === false ? hiddenProjects.filter((item) => item !== target) : [...new Set([...hiddenProjects, target])];
+      return route.fulfill({ json: { ok: true, path: target, hidden: hiddenProjects.includes(target), hiddenProjects: [...hiddenProjects] } });
     }
     if (url.pathname === "/api/thread") return route.fulfill({ json: { threadId: url.searchParams.get("thread") || "thread-mobile-compact", history } });
     if (url.pathname === "/api/artifacts") return route.fulfill({ json: { data: [] } });
@@ -533,6 +544,43 @@ async function run() {
       () => document.querySelectorAll(".project-group:not(.current-thread-group)").length,
     );
     check("switching back restores the project headings", backToProjects >= 3, String(backToProjects));
+    // Tooling writes sessions into folders of its own, and which those are
+    // differs per machine, so the sidebar has to be told rather than guess.
+    await page.locator(".project-group", { hasText: "drawer-workspace" }).locator(".project-hide").click();
+    const afterHide = await page
+      .waitForFunction(
+        () => {
+          const headings = Array.from(document.querySelectorAll(".project-group:not(.hidden-projects) .project-name")).map((n) => n.textContent?.trim() || "");
+          if (headings.some((text) => text === "drawer-workspace")) return null;
+          return {
+            headings,
+            hiddenSection: document.querySelector(".hidden-projects .project-name")?.textContent?.trim() || "",
+            restoreRows: document.querySelectorAll(".hidden-project").length,
+          };
+        },
+        null,
+        { timeout: 4000 },
+      )
+      .then((handle) => handle.jsonValue())
+      .catch(() => null);
+    check(
+      "hiding a project drops it from the list and offers a way back",
+      afterHide?.hiddenSection?.includes("非表示のプロジェクト") && afterHide.restoreRows === 1,
+      JSON.stringify(afterHide),
+    );
+    await page.locator(".hidden-project").click();
+    const afterRestore = await page
+      .waitForFunction(
+        () =>
+          Array.from(document.querySelectorAll(".project-group:not(.hidden-projects) .project-name")).some((n) => n.textContent?.trim() === "drawer-workspace")
+            ? { hiddenRows: document.querySelectorAll(".hidden-project").length }
+            : null,
+        null,
+        { timeout: 4000 },
+      )
+      .then((handle) => handle.jsonValue())
+      .catch(() => null);
+    check("restoring puts the project back and clears the section", afterRestore?.hiddenRows === 0, JSON.stringify(afterRestore));
     // Picking a session back up on the PC needs both the id and the folder it
     // belongs to, so the row hands over the whole command rather than the id.
     const resumeCopy = await page.evaluate(() => {

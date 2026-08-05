@@ -157,7 +157,13 @@ A session opened from another workdir **runs in the directory it started in**. O
 
 That includes folders **outside the home directory**, such as an external volume. `validateWorkdir`'s home rule exists to constrain what a phone may ask for over the network; a `cwd` read back out of a transcript is not that — it is where the local `claude` already ran. Falling back there is the real hazard: `git remote -v` then answers for a different repository than the row it was opened from. The workspace shown in the header follows the folder the turn will actually run in.
 
-Sessions filed against the home folder itself are left out of the list. That is where `claude` run from a bare shell lands, and with it the tooling that spawns it — memory hooks, summarisers, anything whose opening message is a system prompt rather than something a person typed. Set `PHONE_CLAUDE_LIST_HOME_SESSIONS=1` to include them. The exclusion never applies to the workdir the bridge is itself running in.
+### Keeping a project out of the list
+
+Tooling writes sessions too — memory hooks, summarisers, anything whose opening message is a system prompt rather than something a person typed. Which folders those land in differs per machine, and the home folder in particular is real work for some people and only tooling for others, so the sidebar is told rather than left to guess: press **×** on a project heading to drop it from the list.
+
+Hidden projects collect under **非表示のプロジェクト** at the bottom of the sidebar; tapping one puts it back. The choice lives on the bridge, in `.phone-workspaces.json` beside the workspace bookmarks, so it holds from any phone.
+
+Hiding is about the sidebar, not about where work may run, so it accepts folders `validateWorkdir` would refuse — an external volume, or one that has since been deleted. The workdir the bridge is itself running in is never hidden: there would be no way back to it from a sidebar that no longer lists it.
 
 The one exception is asking for a folder explicitly. The per-project "new chat" button sends the project it belongs to, and Claude honours it now; while the sidebar showed one workdir that button could only ever mean the folder the bridge was already in, so the request was dropped. A folder that is gone, or outside the home folder, falls back to the configured workdir rather than failing to open the chat.
 

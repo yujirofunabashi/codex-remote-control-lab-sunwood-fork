@@ -923,16 +923,41 @@ function validateModel(input) {
 }
 
 function readWorkspacePrefs() {
-  if (!fs.existsSync(workspacePrefsPath)) return { recent: [], bookmarks: [] };
+  if (!fs.existsSync(workspacePrefsPath)) return { recent: [], bookmarks: [], hiddenProjects: [] };
   try {
     const prefs = JSON.parse(fs.readFileSync(workspacePrefsPath, "utf8"));
     return {
       recent: Array.isArray(prefs.recent) ? prefs.recent : [],
       bookmarks: Array.isArray(prefs.bookmarks) ? prefs.bookmarks : [],
+      hiddenProjects: Array.isArray(prefs.hiddenProjects) ? prefs.hiddenProjects : [],
     };
   } catch {
-    return { recent: [], bookmarks: [] };
+    return { recent: [], bookmarks: [], hiddenProjects: [] };
   }
+}
+
+function normalizeWorkspacePath(value) {
+  return String(value || "")
+    .trim()
+    .replace(/\/+$/, "");
+}
+
+// Which projects the sidebar shows, not where work may run — so deliberately not
+// validateWorkdir. A folder worth keeping out of the list can sit on an external
+// volume, or be gone entirely, and the home folder is not a special case: it
+// holds real work for some people and only tooling for others.
+function setWorkspaceHidden(workspacePath, hidden) {
+  const target = normalizeWorkspacePath(workspacePath);
+  if (!target) throw new Error("Workspace path is required");
+  const prefs = readWorkspacePrefs();
+  const without = prefs.hiddenProjects.map(normalizeWorkspacePath).filter((item) => item && item !== target);
+  const hiddenProjects = (hidden ? [target, ...without] : without).slice(0, 200);
+  writeWorkspacePrefs({ ...prefs, hiddenProjects });
+  return { path: target, hidden: hiddenProjects.includes(target) };
+}
+
+function hiddenWorkspaces() {
+  return readWorkspacePrefs().hiddenProjects.map(normalizeWorkspacePath).filter(Boolean);
 }
 
 function writeWorkspacePrefs(prefs) {
@@ -2506,33 +2531,25 @@ async function claudeProjectSessionFiles(dir, limit = claudeSessionsPerProject) 
   return files.slice(0, limit).map((file) => file.filePath);
 }
 
-// The home folder is not a project. What lands there is `claude` run from a bare
-// shell and, mostly, tooling that spawns it — memory hooks, summarisers — whose
-// opening message is a system prompt rather than anything a person typed. Listing
-// them buries the sessions the phone is actually for.
-const listHomeSessions = /^(1|true|yes|on)$/i.test(process.env.PHONE_CLAUDE_LIST_HOME_SESSIONS || "");
-
-function claudeListedProjectDirs() {
-  const dirs = claudeProjectDirs();
-  if (listHomeSessions) return dirs;
-  const home = path.resolve(claudeProjectDirFor(os.homedir()));
-  // Never hide the workdir the bridge is actually running in, even if that is
-  // the home folder itself.
-  const active = path.resolve(claudeProjectDirFor());
-  return dirs.filter((dir) => dir !== home || dir === active);
-}
-
 async function claudeThreadListPayload() {
   const byId = new Map();
-  const files = (await Promise.all(claudeListedProjectDirs().map((dir) => claudeProjectSessionFiles(dir)))).flat();
+  const files = (await Promise.all(claudeProjectDirs().map((dir) => claudeProjectSessionFiles(dir)))).flat();
   const summaries = await Promise.all(files.map((filePath) => claudeSessionSummary(filePath)));
+  const hidden = new Set(hiddenWorkspaces());
+  const active = normalizeWorkspacePath(workdir);
   for (const summary of summaries) {
-    // The active workdir is listed first, so it wins a duplicate id.
-    if (summary && !byId.has(summary.id)) byId.set(summary.id, summary);
+    if (!summary) continue;
+    // Never hide the workdir the bridge is running in: there would be no way
+    // back to it from a sidebar that no longer lists it.
+    const cwd = normalizeWorkspacePath(summary.cwd);
+    if (cwd !== active && hidden.has(cwd)) continue;
+    // The active workdir is scanned first, so it wins a duplicate id.
+    if (!byId.has(summary.id)) byId.set(summary.id, summary);
   }
   return {
     provider: "claude",
     activeProvider: "claude",
+    hiddenProjects: hiddenWorkspaces().filter((item) => item !== active),
     data: mergeThreadListData(Array.from(byId.values()), localThreadList("claude")),
   };
 }
@@ -3623,7 +3640,10 @@ class ClaudeBridge {
       // Per-bridge workdir: the fleet pins each slot to its own worktree, so the
       // module-level workdir would send every slot's turns to the same tree.
       cwd: this.workdir || workdir,
-      env: process.env,
+      // Recorded verbatim on every turn, so a transcript says which surface
+      // started it. Nothing reads it yet; it is what makes "sessions from the
+      // phone" answerable later without guessing from shape.
+      env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: process.env.CLAUDE_CODE_ENTRYPOINT || "phone_bridge" },
       stdio: ["pipe", "pipe", "pipe"],
     });
     child.stdin.on("error", (error) => {
@@ -4636,6 +4656,21 @@ async function main() {
       }
       return;
     }
+    if (url.pathname === "/api/workspaces/hidden") {
+      if (!requireToken(url, phoneToken, res)) return;
+      if (req.method !== "POST") {
+        sendJson(res, 405, { error: "method not allowed" });
+        return;
+      }
+      try {
+        const body = await readJsonBody(req);
+        const result = setWorkspaceHidden(body.path || body.workdir, body.hidden !== false);
+        sendJson(res, 200, { ok: true, ...result, hiddenProjects: hiddenWorkspaces() });
+      } catch (error) {
+        sendJson(res, error.statusCode || 400, { error: error.message });
+      }
+      return;
+    }
     if (url.pathname === "/api/local-settings") {
       if (!requireToken(url, phoneToken, res)) return;
       if (req.method === "GET") {
@@ -5049,6 +5084,8 @@ module.exports = {
   bindBrowser,
   browseWorkspaceDirectories,
   setWorkspaceBookmark,
+  setWorkspaceHidden,
+  hiddenWorkspaces,
   workspaceBookmarks,
   claudeAcceptsNameFlag,
   claudeEffortLevel,
