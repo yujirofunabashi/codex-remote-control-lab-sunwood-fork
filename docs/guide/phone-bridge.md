@@ -157,6 +157,8 @@ A session opened from another workdir **runs in the directory it started in**. O
 
 That includes folders **outside the home directory**, such as an external volume. `validateWorkdir`'s home rule exists to constrain what a phone may ask for over the network; a `cwd` read back out of a transcript is not that — it is where the local `claude` already ran. Falling back there is the real hazard: `git remote -v` then answers for a different repository than the row it was opened from. The workspace shown in the header follows the folder the turn will actually run in.
 
+Each project shows its 6 newest rows (30 in date order); **もっと表示する (残りN件)** opens the rest, and **表示を減らす** puts it back. The expanded state is remembered per device.
+
 ### Keeping a project out of the list
 
 Tooling writes sessions too — memory hooks, summarisers, anything whose opening message is a system prompt rather than something a person typed. Which folders those land in differs per machine, and the home folder in particular is real work for some people and only tooling for others, so the sidebar is told rather than left to guess: press **×** on a project heading to drop it from the list.

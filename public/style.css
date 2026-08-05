@@ -1209,8 +1209,29 @@ button.project-heading.active {
   font-size: 15px;
 }
 
+/* A real button now: it was a bare div, so the rows past the cap had no way to
+   be reached and the label was decoration. */
 .project-more {
+  display: block;
+  width: 100%;
+  min-height: 34px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
   color: var(--muted);
+  font: inherit;
+  font-size: 15px;
+  text-align: left;
+}
+
+.project-more:hover {
+  background: var(--hover);
+  color: var(--nav-text);
+}
+
+.project-more:focus-visible {
+  outline: 2px solid var(--thread-accent);
+  outline-offset: -2px;
 }
 
 .settings {

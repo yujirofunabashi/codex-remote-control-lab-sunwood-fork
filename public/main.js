@@ -228,6 +228,15 @@ function readJsonStorage(key, fallback) {
   }
 }
 
+function readStringListStorage(key) {
+  try {
+    const raw = JSON.parse(localStorage.getItem(key) || "[]");
+    return Array.isArray(raw) ? raw.filter((item) => typeof item === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
 function writeJsonStorage(key, value) {
   try {
     localStorage.setItem(key, uiUtils.safeJsonStringify ? uiUtils.safeJsonStringify(value) : JSON.stringify(value));
@@ -681,6 +690,9 @@ const bridgeSessionTokensStorageKey = "codexPhoneBridgeSessionTokens:v1";
 const bridgeViewStateStorageKey = "codexPhoneBridgeViewState:v1";
 const threadInboxFilterStorageKey = "codexPhoneThreadInboxFilter:v1";
 const threadSortModeStorageKey = "codexPhoneThreadSortMode:v1";
+const expandedProjectsStorageKey = "codexPhoneExpandedProjects:v1";
+// Not a project name, so it cannot collide with one.
+const recentViewKey = " recent";
 const taskTemplateStorageKey = "codexPhoneLastTaskTemplate:v1";
 const serviceTierStorageKey = "codexPhoneServiceTier:v1";
 const terminalHistoryLimit = 300;
@@ -710,6 +722,10 @@ let threadInboxFilter = localStorage.getItem(threadInboxFilterStorageKey) || "at
 // done; date order is the view that answers "what was I just doing" when the
 // work is spread across several folders.
 let threadSortMode = localStorage.getItem(threadSortModeStorageKey) === "recent" ? "recent" : "project";
+// Which projects are showing every row. A view preference, so it stays on the
+// device rather than following the bridge like the hidden list does.
+// readJsonStorage is objectOnly, which would reject this array outright.
+let expandedProjects = new Set(readStringListStorage(expandedProjectsStorageKey));
 let quickActionState = uiUtils.safeJsonParse
   ? uiUtils.safeJsonParse(localStorage.getItem(quickActionsStorageKey), {}, { objectOnly: true })
   : {};
@@ -3040,9 +3056,10 @@ function visibleThreadsInListOrder() {
     const current = currentThreadListRecord();
     if (current && isSameCurrentWorkspaceThread(current, baseKey)) threads.push(current);
   }
-  for (const groupThreads of groups.values()) {
+  for (const [project, groupThreads] of groups) {
     const scopedThreads = groupThreads.filter((thread) => isSameCurrentWorkspaceThread(thread, baseKey));
-    threads.push(...limitedVisibleThreads(scopedThreads, 6));
+    // Follows the sidebar: a row you can see is a row the arrows should reach.
+    threads.push(...limitedVisibleThreads(scopedThreads, projectVisibleLimit(project, scopedThreads.length)));
   }
   return threads;
 }
@@ -3055,6 +3072,38 @@ function selectedThreadVisibleInGroups(groups) {
     if (limitedVisibleThreads(scopedThreads, 6).some((thread) => thread.id === selectedThread)) return true;
   }
   return false;
+}
+
+const collapsedProjectRows = 6;
+const collapsedRecentRows = 30;
+
+function projectVisibleLimit(project, total) {
+  return expandedProjects.has(project) ? total : collapsedProjectRows;
+}
+
+function setProjectExpanded(project, expanded) {
+  if (expanded) expandedProjects.add(project);
+  else expandedProjects.delete(project);
+  localStorage.setItem(expandedProjectsStorageKey, JSON.stringify(Array.from(expandedProjects)));
+  renderThreadList();
+}
+
+// "もっと表示する" was a bare <div> with no handler from the day it was added, so
+// the rows past the cap were unreachable and the label was decoration. Both
+// directions now, because expanding with no way back is its own trap.
+function appendThreadListToggle(group, project, shown, total) {
+  if (total <= collapsedProjectRows) return;
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "project-more";
+  const expanded = expandedProjects.has(project);
+  toggle.textContent = expanded ? "表示を減らす" : `もっと表示する (残り${total - shown}件)`;
+  toggle.setAttribute("aria-expanded", String(expanded));
+  toggle.addEventListener("click", (event) => {
+    event.stopPropagation();
+    setProjectExpanded(project, !expanded);
+  });
+  group.appendChild(toggle);
 }
 
 // Hiding a project removes its heading, so without this there is no way back to
@@ -3097,6 +3146,10 @@ async function setProjectHidden(workdir, hidden, project = "") {
     const result = await apiPost("/api/workspaces/hidden", { path: workdir, hidden });
     hiddenProjects = Array.isArray(result.hiddenProjects) ? result.hiddenProjects : hiddenProjects;
     renderThreadList();
+    // Hiding drops the project's threads from what the bridge sends, so putting
+    // it back needs the list fetched again — redrawing the cache we already have
+    // would leave the project empty until the next poll happened to come round.
+    await loadThreads({ background: true });
     showToast(hidden ? `${project || workdir} を隠しました。` : `${project || workdir} を戻しました。`);
   } catch (error) {
     showToast(`変更できませんでした: ${error.message}`, "warn");
@@ -3147,7 +3200,20 @@ function renderThreadList() {
     name.textContent = "日時順";
     heading.append(folder, name);
     group.appendChild(heading);
-    for (const thread of limitedVisibleThreads(flat, 30)) group.appendChild(createThreadListItem(thread));
+    // Same cap and the same way past it: without one, work older than the
+    // newest 30 is unreachable in this view.
+    const shown = limitedVisibleThreads(flat, expandedProjects.has(recentViewKey) ? flat.length : collapsedRecentRows);
+    for (const thread of shown) group.appendChild(createThreadListItem(thread));
+    if (flat.length > collapsedRecentRows) {
+      const expanded = expandedProjects.has(recentViewKey);
+      const toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.className = "project-more";
+      toggle.textContent = expanded ? "表示を減らす" : `もっと表示する (残り${flat.length - shown.length}件)`;
+      toggle.setAttribute("aria-expanded", String(expanded));
+      toggle.addEventListener("click", () => setProjectExpanded(recentViewKey, !expanded));
+      group.appendChild(toggle);
+    }
     threadList.appendChild(group);
     updateThreadNavigation();
     renderThreadSwitcher();
@@ -3203,16 +3269,13 @@ function renderThreadList() {
     }
     group.appendChild(heading);
 
-    const visibleThreads = limitedVisibleThreads(threads, 6);
+    const visibleThreads = limitedVisibleThreads(threads, projectVisibleLimit(project, threads.length));
     for (const thread of visibleThreads) {
       group.appendChild(createThreadListItem(thread));
     }
 
-    if (threads.length > visibleThreads.length) {
-      const more = document.createElement("div");
-      more.className = "project-more";
-      more.textContent = "もっと表示する";
-      group.appendChild(more);
+    if (threads.length > collapsedProjectRows) {
+      appendThreadListToggle(group, project, visibleThreads.length, threads.length);
     } else if (!visibleThreads.length) {
       const empty = document.createElement("div");
       empty.className = "project-empty";
