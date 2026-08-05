@@ -140,6 +140,66 @@ test("a turn of our own is left to its own stream", async () => {
   }
 });
 
+// Resuming a session whose last turn never finished - the bridge was restarted,
+// or the Mac went down mid-answer - makes Claude Code write a synthetic pair to
+// bridge the gap. It is written to the same transcript the phone follows, and
+// with entrypoint "phone_bridge": the bridge's own next turn triggers it.
+function syntheticResumePair(id) {
+  const stamp = new Date().toISOString();
+  return (
+    `${JSON.stringify({
+      type: "user",
+      cwd: workdir,
+      sessionId: id,
+      timestamp: stamp,
+      isMeta: true,
+      message: { role: "user", content: [{ type: "text", text: "Continue from where you left off." }] },
+    })}\n` +
+    `${JSON.stringify({
+      type: "assistant",
+      cwd: workdir,
+      sessionId: id,
+      timestamp: stamp,
+      message: { role: "assistant", model: "<synthetic>", content: [{ type: "text", text: "No response requested." }] },
+    })}\n`
+  );
+}
+
+test("the pair written to resume a session is not mistaken for the newest answer", async () => {
+  const id = "66666666-6666-6666-6666-aaaaaaaaaaaa";
+  const { bridge, seen, file } = openSession(id, record("user", "質問", id) + record("assistant", "本当の回答", id));
+  try {
+    fs.appendFileSync(file, syntheticResumePair(id));
+    await assert.rejects(historyChanged(seen, 900), /never reached the phone/);
+    assert.equal(bridge.history.length, 2);
+    assert.equal(bridge.history.at(-1).text, "本当の回答", "the answer the user is reading stays the last thing they see");
+  } finally {
+    bridge.unwatchSession();
+  }
+});
+
+test("a transcript that has not caught up cannot redraw the newest answer away", async () => {
+  const id = "77777777-7777-7777-7777-aaaaaaaaaaaa";
+  const { bridge, seen, file } = openSession(id, record("user", "質問", id));
+  try {
+    // What a finished turn of our own leaves behind: streamed, appended here,
+    // not yet in the file.
+    bridge.appendHistory({ type: "assistant", text: "いま流し終えた回答", outputGroup: "claude-turn:local" });
+
+    // The file grows, but with somebody else's turn rather than ours.
+    fs.appendFileSync(file, record("user", "別のところで足された発言", id) + record("assistant", "別のところの答え", id));
+    await assert.rejects(historyChanged(seen, 900), /never reached the phone/);
+    assert.equal(bridge.history.at(-1).text, "いま流し終えた回答");
+
+    // Once the file carries our answer too, following it is safe again.
+    fs.appendFileSync(file, record("assistant", "いま流し終えた回答", id));
+    await historyChanged(seen);
+    assert.ok(bridge.history.some((entry) => entry.text === "いま流し終えた回答"));
+  } finally {
+    bridge.unwatchSession();
+  }
+});
+
 test("the last phone to close stops the watch", () => {
   const id = "55555555-5555-5555-5555-aaaaaaaaaaaa";
   fs.writeFileSync(path.join(projectDir, `${id}.jsonl`), record("user", "見ている人はいない", id));

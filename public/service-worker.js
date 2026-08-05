@@ -1,4 +1,4 @@
-const CACHE_NAME = "codex-phone-shell-v3";
+const CACHE_NAME = "codex-phone-shell-v4";
 const APP_SHELL = [
   "./",
   "./style.css",
@@ -36,12 +36,36 @@ self.addEventListener("activate", (event) => {
   );
 });
 
+// The shell used to be answered from the cache whenever it was there at all, so
+// a phone kept running the JS it had installed no matter how many times the
+// bridge was updated and restarted: fixes shipped, the phone never saw them, and
+// nothing about it looked like caching. The bridge is a machine on the same LAN,
+// so the network is the fast path. Ask it first, keep the cache fresh from what
+// comes back, and fall back to the cache only when it cannot be reached - which
+// is the case the cache was added for.
+async function networkFirst(request) {
+  try {
+    const response = await fetch(request);
+    if (response && response.ok) {
+      const copy = response.clone();
+      caches
+        .open(CACHE_NAME)
+        .then((cache) => cache.put(request, copy))
+        .catch(() => {});
+    }
+    return response;
+  } catch (error) {
+    const cached = await caches.match(request, { ignoreSearch: true });
+    if (cached) return cached;
+    throw error;
+  }
+}
+
 self.addEventListener("fetch", (event) => {
   if (!isSafeShellRequest(event.request)) return;
-  const url = new URL(event.request.url);
   if (event.request.mode === "navigate") {
-    event.respondWith(fetch(event.request).catch(() => caches.match("./")));
+    event.respondWith(networkFirst(event.request).catch(() => caches.match("./")));
     return;
   }
-  event.respondWith(caches.match(event.request, { ignoreSearch: true }).then((cached) => cached || fetch(event.request)));
+  event.respondWith(networkFirst(event.request));
 });

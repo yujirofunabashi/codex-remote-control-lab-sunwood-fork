@@ -456,7 +456,11 @@ async function unregisterStaleServiceWorkersIfNeeded() {
   const canRegister = Boolean(window.isSecureContext || isLocalhost);
   try {
     if (canRegister) {
-      await navigator.serviceWorker.register(appPath("/service-worker.js"), { scope: appPath("/") });
+      const registration = await navigator.serviceWorker.register(appPath("/service-worker.js"), { scope: appPath("/") });
+      // Ask on every load rather than waiting for the browser to decide it is
+      // time. A phone that has the app on its home screen is the last place a
+      // stale build should be able to sit unnoticed.
+      registration.update?.().catch(() => {});
       return;
     }
     const registrations = await navigator.serviceWorker.getRegistrations();
