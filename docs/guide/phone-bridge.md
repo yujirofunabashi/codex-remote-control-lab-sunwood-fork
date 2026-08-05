@@ -143,7 +143,9 @@ The sidebar now reads every workdir under `~/.claude/projects`, in one of two or
 
 The choice is remembered per device.
 
-Opening a session that belongs to another workdir **moves the bridge to the directory that session started in**. Otherwise the continuation would be filed under a different project and the original would look abandoned. If that folder is gone, or sits outside the home folder, the bridge stays where it is.
+A session opened from another workdir **runs in the directory it started in**. Otherwise the continuation would be filed under a different project and the original would look abandoned. Nothing is moved and nothing accumulates: bridges are keyed per session, each takes its directory once at construction, and the configured workdir is untouched — a new chat still starts there.
+
+The one exception is asking for a folder explicitly. The per-project "new chat" button sends the project it belongs to, and Claude honours it now; while the sidebar showed one workdir that button could only ever mean the folder the bridge was already in, so the request was dropped. A folder that is gone, or outside the home folder, falls back to the configured workdir rather than failing to open the chat.
 
 The list is polled, so summaries are cached until a file changes underneath them, and each folder contributes its 20 newest sessions — raise or lower that with `PHONE_CLAUDE_SESSIONS_PER_PROJECT`.
 

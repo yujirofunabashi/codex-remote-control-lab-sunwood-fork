@@ -2427,6 +2427,15 @@ function claudeHistoryForSession(sessionId) {
 // lists every workdir, resuming one from wherever the bridge happens to be
 // pointing would file the continuation under a different project and leave the
 // original looking abandoned.
+function requestedWorkdirOr(requested, fallback = workdir) {
+  if (!requested) return fallback;
+  try {
+    return validateWorkdir(requested);
+  } catch {
+    return fallback;
+  }
+}
+
 function claudeSessionWorkdir(session, fallback = workdir) {
   const cwd = String(session?.summary?.cwd || "").trim();
   if (!cwd || path.resolve(cwd) === path.resolve(fallback)) return fallback;
@@ -3305,7 +3314,7 @@ function summarizeClaudeAttachmentPrompt(text, savedAttachments) {
 }
 
 class ClaudeBridge {
-  constructor(requestedThreadId, baseBridgeKey) {
+  constructor(requestedThreadId, baseBridgeKey, options = {}) {
     this.provider = "claude";
     this.model = modelForProvider(this.provider);
     this.requestedThreadId = requestedThreadId;
@@ -3321,7 +3330,9 @@ class ClaudeBridge {
     const session = this.claudeSessionId ? readClaudeSession(this.claudeSessionId) : null;
     this.history = session?.history || [];
     // Follow the session home rather than dragging it into the active workdir.
-    this.workdir = claudeSessionWorkdir(session);
+    // A new chat has no session to follow, so a folder asked for by the caller
+    // decides instead, and the configured workdir is the last word.
+    this.workdir = claudeSessionWorkdir(session, requestedWorkdirOr(options.workdir));
     this.terminalHistory = terminalHistoryFromChatHistory(this.history);
     this.pendingApproval = null;
     this.turnQueue = [];
@@ -3895,7 +3906,10 @@ class ClaudeBridge {
 
 function getBridge(threadId, provider = agentProvider, connectionId = crypto.randomUUID(), options = {}) {
   const requestedProvider = normalizeProvider(provider);
-  const requestedWorkdir = requestedProvider === "codex" && options.workdir ? validateWorkdir(options.workdir) : "";
+  // Claude honours this too now. While the sidebar showed only the active
+  // workdir, the per-project "new chat" button could only ever mean the folder
+  // the bridge was already in; listing every project made it a real request.
+  const requestedWorkdir = options.workdir ? validateWorkdir(options.workdir) : "";
   const requestedServiceTier = requestedProvider === "codex" && Object.prototype.hasOwnProperty.call(options, "serviceTier") ? normalizeServiceTier(options.serviceTier) : null;
   const bridgeOptions = { ...options, ...(requestedWorkdir ? { workdir: requestedWorkdir } : {}), serviceTier: requestedServiceTier };
   const bridgeHasActiveWork = (bridge) => Boolean(typeof bridge?.hasActiveWork === "function" && bridge.hasActiveWork());
@@ -3940,7 +3954,7 @@ function getBridge(threadId, provider = agentProvider, connectionId = crypto.ran
     existing = null;
   }
   if (!existing && !bridges.has(key)) {
-    bridges.set(key, requestedProvider === "claude" ? new ClaudeBridge(threadId, baseKey) : new SharedBridge(threadId, baseKey, bridgeOptions));
+    bridges.set(key, requestedProvider === "claude" ? new ClaudeBridge(threadId, baseKey, bridgeOptions) : new SharedBridge(threadId, baseKey, bridgeOptions));
   }
   return bridges.get(key);
 }

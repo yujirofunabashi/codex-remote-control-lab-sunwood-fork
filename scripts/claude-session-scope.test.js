@@ -14,7 +14,7 @@ const otherWorkdir = fs.mkdtempSync(path.join(home, "scope-other-"));
 process.env.PHONE_AGENT_PROVIDER_DEFAULT = "claude";
 process.env.PHONE_WORKDIR = activeWorkdir;
 
-const { claudeSessionFilePath, claudeSessionWorkdir, claudeThreadListPayload } = require("./start-phone");
+const { ClaudeBridge, claudeSessionFilePath, claudeSessionWorkdir, claudeThreadListPayload } = require("./start-phone");
 
 const projectsRoot = path.join(home, ".claude", "projects");
 
@@ -98,4 +98,34 @@ test("a session recorded outside the home folder is not adopted as a workdir", (
   // validateWorkdir's home rule is the guard; a transcript is data from disk,
   // so it must not be able to point the bridge anywhere it likes.
   assert.equal(claudeSessionWorkdir({ summary: { cwd: "/etc" } }, activeWorkdir), activeWorkdir);
+});
+
+test("each session's bridge holds its own directory, so opening one leaves the others alone", () => {
+  // Nothing is moved and nothing accumulates: bridges are keyed per session, and
+  // a bridge takes its directory once, at construction.
+  const openA = () => new ClaudeBridge(activeId, `${activeId}::k`);
+  const openB = () => new ClaudeBridge(otherId, `${otherId}::k`);
+
+  for (let round = 0; round < 3; round += 1) {
+    assert.equal(openA().workdir, activeWorkdir);
+    assert.equal(openB().workdir, otherWorkdir);
+    assert.equal(new ClaudeBridge(null, `new:${round}`).workdir, activeWorkdir, "a new chat still starts where the bridge is configured");
+  }
+});
+
+test("a new chat started from another project's heading opens in that project", () => {
+  // While the sidebar showed one workdir this button could only mean the folder
+  // the bridge was already in, so the request was dropped. Listing every project
+  // turned it into a real one.
+  assert.equal(new ClaudeBridge(null, "new:cross", { fresh: true, workdir: otherWorkdir }).workdir, otherWorkdir);
+});
+
+test("an unusable requested folder falls back rather than failing to open a chat", () => {
+  assert.equal(new ClaudeBridge(null, "new:gone", { workdir: path.join(home, "no-such-folder-here") }).workdir, activeWorkdir);
+  assert.equal(new ClaudeBridge(null, "new:outside", { workdir: "/etc" }).workdir, activeWorkdir);
+});
+
+test("an existing session ignores a requested folder and stays home", () => {
+  // The session's own cwd is the one that keeps its transcript in one file.
+  assert.equal(new ClaudeBridge(otherId, `${otherId}::k`, { workdir: activeWorkdir }).workdir, otherWorkdir);
 });
