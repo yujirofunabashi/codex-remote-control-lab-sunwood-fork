@@ -132,6 +132,32 @@ Background thread-list polling suppresses repeated identical errors. A transient
 
 Claude mode is intentionally narrower than Codex mode. It has Claude Code session listing for the active workdir, but does not provide Codex app-server history sync, plugin lookup, or live tool approval callbacks. Use `CLAUDE_PERMISSION_MODE` or the UI permission mode to decide how much autonomy each spawned Claude run has.
 
+## Picking Up Phone Work on the Desktop
+
+The bridge records its turns exactly where Claude Code expects them:
+
+```text
+~/.claude/projects/<slugged workdir>/<session-id>.jsonl
+```
+
+When those sessions seem to be missing, they usually are not — you are looking somewhere else. `claude --resume` only offers sessions belonging to **the directory it was started from**. Launched anywhere but the bridge's workdir, work done from the phone will not appear in the picker.
+
+To see what exists and where:
+
+```bash
+npm run sessions                       # sessions for the bridge's workdir
+npm run sessions -- --cwd /path/to/project
+npm run sessions -- --json
+```
+
+It prints each session's id, title, and last activity, plus a resume command you can paste:
+
+```bash
+cd /Users/you/Prj/example && claude --resume 2bec35bc-1324-4b49-8a83-d550e9a9ba07
+```
+
+If you want the interactive picker instead, run `claude --resume` **from the bridge's workdir** — that directory is what scopes the list.
+
 ## Claude Rate Limits
 
 Two sources feed the Claude rate-limit card, and they carry different things:

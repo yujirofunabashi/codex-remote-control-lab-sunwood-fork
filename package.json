@@ -16,12 +16,13 @@
     "smoke:mobile": "node scripts/mobile-smoke.js",
     "phone:loop": "sh -c 'while :; do PHONE_SUPERVISED=1 npm run phone; code=$?; [ \"$code\" = 42 ] || exit \"$code\"; sleep 1; done'",
     "test": "node --test scripts/*.test.js",
-    "check": "node --check scripts/start-phone.js && node --check scripts/claude-approval-mcp.js && node --check scripts/remote-url.js && node --check scripts/start-fleet.js && node --check scripts/probe-ws.js && node --check scripts/read-desktop-rate-limits.js && node --check scripts/capture-claude-rate-limits.js && node --check scripts/mobile-smoke.js && node --check public/phone-ui-utils.js && node --check public/main.js",
+    "check": "node --check scripts/start-phone.js && node --check scripts/claude-approval-mcp.js && node --check scripts/remote-url.js && node --check scripts/claude-sessions.js && node --check scripts/start-fleet.js && node --check scripts/probe-ws.js && node --check scripts/read-desktop-rate-limits.js && node --check scripts/capture-claude-rate-limits.js && node --check scripts/mobile-smoke.js && node --check public/phone-ui-utils.js && node --check public/main.js",
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",
     "docs:preview": "vitepress preview docs",
     "url:remote": "node scripts/remote-url.js",
-    "phone:loop:claude": "PHONE_AGENT_PROVIDER_DEFAULT=claude npm run phone:loop"
+    "phone:loop:claude": "PHONE_AGENT_PROVIDER_DEFAULT=claude npm run phone:loop",
+    "sessions": "node scripts/claude-sessions.js"
   },
   "keywords": [
     "codex",

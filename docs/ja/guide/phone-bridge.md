@@ -95,6 +95,32 @@ Claude の subscription limit は Anthropic API の rate-limit header とは別�
 
 background の thread 一覧 polling は、同じ error の連続表示を抑えます。app-server の短い再起動や token mismatch が起きても、同じ `/api/threads` failure が chat log に増え続けることは避けます。
 
+## スマホで進めた作業を PC から開く
+
+bridge の turn は、Claude Code が期待する場所にそのまま記録されます。
+
+```text
+~/.claude/projects/<workdir を slug 化した名前>/<session-id>.jsonl
+```
+
+見つからない場合、記録が無いのではなく**探している場所が違う**ことがほとんどです。`claude --resume` は **起動したディレクトリに属する session だけ** を候補に出します。bridge の workdir 以外から起動すると、スマホで進めた作業は候補に現れません。
+
+どこに何があるかは次で確認できます。
+
+```bash
+npm run sessions                       # bridge の workdir の session
+npm run sessions -- --cwd /path/to/project
+npm run sessions -- --json
+```
+
+session ID、タイトル、更新時刻と、そのまま貼れる resume command を表示します。
+
+```bash
+cd /Users/you/Prj/example && claude --resume 2bec35bc-1324-4b49-8a83-d550e9a9ba07
+```
+
+`claude --resume` を ID なしで実行する場合は、**必ず bridge の workdir で実行してください**。そこが候補一覧の範囲になります。
+
 ## Claude のレート制限表示
 
 Claude mode のレート制限は 2 つの経路から入ります。得られる情報が違います。
