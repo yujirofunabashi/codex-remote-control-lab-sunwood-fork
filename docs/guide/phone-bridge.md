@@ -160,6 +160,20 @@ cd /Users/you/Prj/example && claude --resume 2bec35bc-1324-4b49-8a83-d550e9a9ba0
 
 If you want the interactive picker instead, run `claude --resume` **from the bridge's workdir** — that directory is what scopes the list.
 
+### When the picker still does not show it
+
+`claude -c` continues that directory's newest conversation **without going through the picker**, which separates the two things that look identical from the outside:
+
+```bash
+cd "$(the ■ path from npm run sessions)"
+claude -c
+```
+
+- **It opens the phone conversation** — the session is reachable, so you were either in the wrong directory before, or the row was in the picker under a label you did not recognise. Sessions created before naming existed are labelled by their opening message, not by anything that says "phone".
+- **It finds nothing** — you are not in the directory the session belongs to. Re-check the `■` line.
+
+Either way `claude --resume <id>` works: the id is the one label that cannot be misread, and `npm run sessions` prints the whole command per row.
+
 ### Naming
 
 A session created from the phone is named from its opening prompt, behind a marker showing where it came from:

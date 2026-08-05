@@ -123,6 +123,20 @@ cd /Users/you/Prj/example && claude --resume 2bec35bc-1324-4b49-8a83-d550e9a9ba0
 
 `claude --resume` を ID なしで実行する場合は、**必ず bridge の workdir で実行してください**。そこが候補一覧の範囲になります。
 
+### picker に出てこないとき
+
+`claude -c` は **picker を通さずに** そのディレクトリの最新の会話を開きます。外から見ると同じに見える2つの原因を切り分けられます。
+
+```bash
+cd "npm run sessions の ■ の行のパス"
+claude -c
+```
+
+- **スマホの会話が開く** → session には到達できている。さっきはディレクトリが違ったか、picker には出ていたのに気づかなかったかのどちらか。命名機能が入る前の session は、最初のメッセージがそのままラベルになっているので「スマホのやつ」とは分かりません
+- **何も見つからない** → その session が属するディレクトリにいない。`■` の行を確認し直してください
+
+どちらの場合も `claude --resume <id>` は効きます。ID だけは読み間違えようがないので、`npm run sessions` は行ごとにコマンドをそのまま出します。
+
 ### session の名前
 
 スマホから始めた session には、最初の prompt から作った名前が、出どころを示す marker 付きで自動で付きます。
