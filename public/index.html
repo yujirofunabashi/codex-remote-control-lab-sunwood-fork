@@ -339,8 +339,9 @@
                   <span id="runStateLabel">接続準備中</span>
                 </div>
                 <div id="quickActions" class="quick-actions" role="group" aria-label="ワンタップ入力"></div>
+                <button type="button" id="taskTemplatesToggle" class="task-templates-toggle" aria-controls="taskTemplates" aria-expanded="false">下書き</button>
               </div>
-              <div id="taskTemplates" class="task-templates" role="group" aria-label="タスクテンプレート"></div>
+              <div id="taskTemplates" class="task-templates hidden" role="group" aria-label="下書きテンプレート"></div>
               <div id="attachments" class="attachments" aria-live="polite"></div>
               <textarea id="prompt" rows="3" placeholder="フォローアップの変更を求める"></textarea>
               <div class="composer-footer">
@@ -384,10 +385,10 @@
                 </button>
                 <div class="model-menu-separator" data-service-tier-separator></div>
                 <div class="model-menu-label">思考の深さ</div>
-                <button type="button" class="model-menu-row" data-reasoning="L" title="軽め" aria-label="Low">Low</button>
-                <button type="button" class="model-menu-row" data-reasoning="M" title="標準" aria-label="Medium">Medium<span class="checkmark">✓</span></button>
-                <button type="button" class="model-menu-row" data-reasoning="H" title="深め" aria-label="High">High</button>
-                <button type="button" class="model-menu-row" data-reasoning="XH" title="最大" aria-label="Extra High">Extra High</button>
+                <button type="button" class="model-menu-row" data-reasoning="L">軽め</button>
+                <button type="button" class="model-menu-row" data-reasoning="M">標準<span class="checkmark">✓</span></button>
+                <button type="button" class="model-menu-row" data-reasoning="H">深め</button>
+                <button type="button" class="model-menu-row" data-reasoning="XH">最大</button>
                 <div class="model-menu-separator" data-reasoning-separator></div>
                 <button type="button" class="model-menu-row submenu-row" data-model-choice="gpt-5.5">GPT-5.5<span class="chevron">›</span></button>
                 <button type="button" class="model-menu-row submenu-row" data-model-choice="gpt-5.4">GPT-5.4<span class="chevron">›</span></button>
@@ -423,12 +424,12 @@
                 <button type="button" class="panel-tab globe" id="webSearchButton" data-panel-tab="web" title="Web調査を追加" aria-label="Web調査を追加"></button>
               </div>
               <div class="review-tabs" role="tablist" aria-label="レビュー">
-                <button type="button" class="active" data-review-tab="summary" aria-selected="true">Summary</button>
-                <button type="button" data-review-tab="diff" aria-selected="false">Diff</button>
-                <button type="button" data-review-tab="tests" aria-selected="false">Tests</button>
-                <button type="button" data-review-tab="terminal" aria-selected="false">Terminal</button>
-                <button type="button" data-review-tab="artifacts" aria-selected="false">Artifacts</button>
-                <button type="button" data-review-tab="actions" aria-selected="false">Actions</button>
+                <button type="button" class="active" data-review-tab="summary" aria-selected="true">概要</button>
+                <button type="button" data-review-tab="diff" aria-selected="false">差分</button>
+                <button type="button" data-review-tab="tests" aria-selected="false">テスト</button>
+                <button type="button" data-review-tab="terminal" aria-selected="false">ターミナル</button>
+                <button type="button" data-review-tab="artifacts" aria-selected="false">ファイル</button>
+                <button type="button" data-review-tab="actions" aria-selected="false">操作</button>
               </div>
               <div id="artifactList">
                 <button type="button" class="artifact-row has-badge" data-artifact="README.md">

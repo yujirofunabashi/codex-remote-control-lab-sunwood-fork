@@ -149,6 +149,7 @@ const threadInboxTabButtons = document.querySelectorAll("[data-thread-filter]");
 const threadSortTabButtons = document.querySelectorAll("[data-thread-sort]");
 const approvalStrip = document.querySelector("#approvalStrip");
 const taskTemplates = document.querySelector("#taskTemplates");
+const taskTemplatesToggle = document.querySelector("#taskTemplatesToggle");
 const reviewTabButtons = document.querySelectorAll("[data-review-tab]");
 
 const tokenStorageKey = "codexPhoneToken:v1";
@@ -1375,11 +1376,27 @@ function setActiveProvider(provider) {
   updateModelButton();
 }
 
+// "M" was the only thing on screen saying how hard the model was being asked to
+// think, and it says nothing. The menu already carried these words as tooltips;
+// now the button, the menu rows and the tooltip all use the same four.
+const reasoningDisplayLabels = new Map([
+  ["L", "軽め"],
+  ["M", "標準"],
+  ["H", "深め"],
+  ["XH", "最大"],
+]);
+
+function reasoningDisplayLabel(value) {
+  return reasoningDisplayLabels.get(String(value || "").toUpperCase()) || String(value || "");
+}
+
 function updateModelButton() {
   const showReasoning = providerSupportsReasoning();
   const showServiceTier = providerSupportsServiceTier();
   const serviceTierSuffix = showServiceTier && selectedServiceTier === "fast" ? " ⚡" : "";
-  modelButton.textContent = showReasoning ? `${selectedModelLabel}-${selectedReasoning}${serviceTierSuffix}` : selectedModelLabel;
+  modelButton.textContent = showReasoning
+    ? `${selectedModelLabel}・${reasoningDisplayLabel(selectedReasoning)}${serviceTierSuffix}`
+    : selectedModelLabel;
   thinkingButton.hidden = !showReasoning;
   modelMenu.classList.toggle("no-reasoning", !showReasoning);
   renderInlineModelChoices();
@@ -2191,7 +2208,9 @@ function addEntry(kind, text, images = [], options = {}) {
 
   const avatar = document.createElement("div");
   avatar.className = "entry-avatar";
-  avatar.textContent = kind === "user" ? "U" : kind === "assistant" ? "C" : "›";
+  // "U" and "C" meant nothing in a Japanese interface, and the letters were the
+  // last text-as-icon left in the message list. Status rows keep their chevron.
+  avatar.textContent = kind === "user" || kind === "assistant" ? "" : "›";
 
   const body = document.createElement("div");
   body.className = "entry-body";
@@ -3107,7 +3126,8 @@ function markThreadViewed(thread, provider = currentThreadProvider()) {
 function createThreadListItem(thread, options = {}) {
   const displayTitle = options.displayTitle || titleForThread(thread);
   const repoColor = repoColorForThread(thread);
-  const repoLabel = repoLabelForContext(thread);
+  const repoLabel = repoLabelForContext(thread, "");
+  const colorSubject = repoLabel ? `${repoLabel} のリポ色` : "リポ色";
   const item = document.createElement("div");
   item.className = thread.id === selectedThread ? "thread-item active" : "thread-item";
   item.title = displayTitle;
@@ -3115,8 +3135,8 @@ function createThreadListItem(thread, options = {}) {
   const colorButton = document.createElement("button");
   colorButton.type = "button";
   colorButton.className = "thread-color-button";
-  colorButton.title = `${repoLabel} のリポ色を変更`;
-  colorButton.setAttribute("aria-label", `${repoLabel} のリポ色を変更`);
+  colorButton.title = `${colorSubject}を変更`;
+  colorButton.setAttribute("aria-label", `${colorSubject}を変更`);
   colorButton.style.backgroundColor = repoColor;
   colorButton.addEventListener("click", (event) => {
     event.stopPropagation();
@@ -4487,13 +4507,16 @@ function renderThreadColorSettings(thread = null, options = {}) {
   const key = repoColorKeyForContext(target);
   const activeColor = repoColorForKey(key);
   const customColor = sanitizeHexColor(repoColorOverrides[key]);
-  const repoLabel = repoLabelForContext(target, "現在のリポ");
+  // Without a repo name the fallback used to be a name too, so the heading read
+  // "現在のリポ のリポ色". One subject, built once, for the heading and the toasts.
+  const repoLabel = repoLabelForContext(target, "");
+  const colorSubject = repoLabel ? `${repoLabel} のリポ色` : "リポ色";
   const group = document.createElement("section");
   group.className = "thread-color-settings";
 
   const title = document.createElement("div");
   title.className = "theme-settings-title";
-  title.textContent = `${repoLabel} のリポ色`;
+  title.textContent = colorSubject;
   group.appendChild(title);
 
   const current = document.createElement("div");
@@ -4501,8 +4524,17 @@ function renderThreadColorSettings(thread = null, options = {}) {
   const swatch = document.createElement("span");
   swatch.className = "thread-color-current-swatch";
   swatch.style.backgroundColor = activeColor;
+  // "自動 #db2777" ran the mode and the value together as one grey string. The
+  // swatch beside it already carries the colour, so the word leads and the hex
+  // follows as the value it is - still there, still copyable.
   const label = document.createElement("span");
-  label.textContent = customColor ? `カスタム ${customColor}` : `自動 ${activeColor}`;
+  label.className = "thread-color-current-label";
+  const mode = document.createElement("strong");
+  mode.textContent = customColor ? "カスタム" : "自動";
+  const hex = document.createElement("code");
+  hex.className = "thread-color-current-hex";
+  hex.textContent = customColor || activeColor;
+  label.append(mode, hex);
   current.append(swatch, label);
   group.appendChild(current);
 
@@ -4519,7 +4551,7 @@ function renderThreadColorSettings(thread = null, options = {}) {
     button.addEventListener("click", () => {
       setRepoColorOverride(key, color);
       if (!thread || thread.id === selectedThread) applyCurrentThreadAccent();
-      showToast(`${repoLabel} のリポ色を ${color} に変更しました。`);
+      showToast(`${colorSubject}を ${color} に変更しました。`);
       if (options.inline) openThreadColorPopover(thread);
       else openThreadColorPanel(thread);
     });
@@ -4538,7 +4570,7 @@ function renderThreadColorSettings(thread = null, options = {}) {
   applyButton.textContent = "適用";
   applyButton.addEventListener("click", () => {
     setRepoColorOverride(key, input.value);
-    showToast(`${repoLabel} のリポ色を ${sanitizeHexColor(input.value)} に変更しました。`);
+    showToast(`${colorSubject}を ${sanitizeHexColor(input.value)} に変更しました。`);
     if (options.inline) openThreadColorPopover(thread);
     else openThreadColorPanel(thread);
   });
@@ -4548,7 +4580,7 @@ function renderThreadColorSettings(thread = null, options = {}) {
   resetButton.textContent = "自動色に戻す";
   resetButton.addEventListener("click", () => {
     resetRepoColorOverride(key);
-    showToast(`${repoLabel} のリポ色を自動に戻しました。`);
+    showToast(`${colorSubject}を自動に戻しました。`);
     if (options.inline) openThreadColorPopover(thread);
     else openThreadColorPanel(thread);
   });
@@ -5256,13 +5288,13 @@ function renderReviewActions() {
   artifactList.replaceChildren();
   artifactList.classList.remove("artifact-browser-list");
   const actions = [
-    { label: "Approve", disabled: !pendingApproval, run: () => approveButton?.click() },
-    { label: "Decline", disabled: !pendingApproval, run: () => declineButton?.click(), secondary: true },
-    { label: "Retry", run: () => insertPromptText("直前の失敗を踏まえて、原因を確認してから小さく再試行してください。") },
-    { label: "Stop", disabled: !interruptibleRunStates.has(currentRunState), run: () => interruptButton?.click(), secondary: true },
-    { label: "Continue", run: () => insertPromptText("続けてください。") },
-    { label: "Refresh", run: () => recoverFromPageResume("Review Center refresh") },
-    { label: "Open thread", disabled: !selectedThread, run: () => selectThread(selectedThread) },
+    { label: "承認", disabled: !pendingApproval, run: () => approveButton?.click() },
+    { label: "却下", disabled: !pendingApproval, run: () => declineButton?.click(), secondary: true },
+    { label: "再試行", run: () => insertPromptText("直前の失敗を踏まえて、原因を確認してから小さく再試行してください。") },
+    { label: "停止", disabled: !interruptibleRunStates.has(currentRunState), run: () => interruptButton?.click(), secondary: true },
+    { label: "続けて", run: () => insertPromptText("続けてください。") },
+    { label: "再取得", run: () => recoverFromPageResume("Review Center refresh") },
+    { label: "チャットを開く", disabled: !selectedThread, run: () => selectThread(selectedThread) },
   ];
   const grid = document.createElement("div");
   grid.className = "review-action-grid";
@@ -5515,10 +5547,25 @@ function artifactRowFolder(item = {}) {
   return path.slice(0, -name.length).replace(/\/+$/, "");
 }
 
+// Every row that was not an image or markdown said "FILE", which is what the
+// list is made of. The extension is already in the name and tells them apart.
+function artifactTypeBadge(item = {}) {
+  const extension = String(item.path || item.name || "")
+    .split(/[\\/]/)
+    .pop()
+    .split(".")
+    .slice(1)
+    .pop();
+  if (extension && extension.length <= 4) return extension.toUpperCase();
+  if (item.kind === "image") return "IMG";
+  if (item.kind === "markdown") return "MD";
+  return "FILE";
+}
+
 function renderArtifactRows() {
   artifactList.replaceChildren();
   for (const item of artifactItems) {
-    const icon = item.kind === "image" ? "IMG" : item.kind === "markdown" ? "MD" : "FILE";
+    const icon = artifactTypeBadge(item);
     const row = addPanelRow(item.name, artifactRowFolder(item), () => showArtifact(item.path), { badge: icon });
     row.classList.toggle("active", item.path === activeArtifactPath);
   }
@@ -6290,6 +6337,28 @@ function renderTaskTemplates() {
     });
     taskTemplates.appendChild(button);
   }
+}
+
+// Fourteen chips stood above the input in two rows. These six are the long ones
+// - they paste a multi-line scaffold rather than a sentence - and they are not
+// what you reach for on every turn, so they fold away behind their own button
+// and the row above stays the one-tap row it was meant to be.
+const taskTemplatesOpenStorageKey = "codexPhoneTaskTemplatesOpen:v1";
+
+function setTaskTemplatesOpen(open, { persist = true } = {}) {
+  if (!taskTemplates || !taskTemplatesToggle) return;
+  taskTemplates.classList.toggle("hidden", !open);
+  taskTemplatesToggle.classList.toggle("active", open);
+  taskTemplatesToggle.setAttribute("aria-expanded", String(open));
+  if (persist) safeWriteStorage(localStorage, taskTemplatesOpenStorageKey, open ? "1" : "0");
+}
+
+function initTaskTemplatesToggle() {
+  if (!taskTemplatesToggle) return;
+  setTaskTemplatesOpen(localStorage.getItem(taskTemplatesOpenStorageKey) === "1", { persist: false });
+  taskTemplatesToggle.addEventListener("click", () => {
+    setTaskTemplatesOpen(taskTemplates.classList.contains("hidden"));
+  });
 }
 
 function autoGrowPrompt() {
@@ -7243,6 +7312,7 @@ setTerminalInputMode(terminalInputMode, { silent: true });
 updateTerminalFilterControls();
 renderQuickActions();
 renderTaskTemplates();
+initTaskTemplatesToggle();
 restoreDraftForCurrentThread();
 setMainView(mainViewMode);
 try {
