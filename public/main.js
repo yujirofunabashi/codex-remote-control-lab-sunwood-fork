@@ -6091,6 +6091,23 @@ function startVoiceInput() {
   recognition.start();
 }
 
+// The server reports these as machine states. Translating them here keeps the
+// panel in one language without the server having to know what it is read in.
+const healthStateLabels = new Map([
+  ["alive", "正常"],
+  ["degraded", "不安定"],
+  ["error", "異常"],
+  ["connected", "接続済み"],
+  ["disconnected", "未接続"],
+  ["local-process", "ローカル実行"],
+]);
+
+function healthStateLabel(value) {
+  const key = String(value || "").trim();
+  if (!key) return "不明";
+  return healthStateLabels.get(key) || key;
+}
+
 async function showStatus() {
   clearPanel("接続状態", "status");
   try {
@@ -6100,9 +6117,11 @@ async function showStatus() {
     ]);
     const result = statusResult;
     const health = healthResult || result.health || {};
-    addPanelRow("bridge", health.bridge || "不明", null, { badge: "HLT" });
-    addPanelRow("アプリサーバー", health.appServer || "不明");
-    addPanelRow("WebSocket", health.websocket || "不明");
+    // No badge: "HLT" was an abbreviation of "health" on the one row in a panel
+    // titled 接続状態, where every row is a health reading.
+    addPanelRow("bridge", healthStateLabel(health.bridge));
+    addPanelRow("アプリサーバー", healthStateLabel(health.appServer));
+    addPanelRow("WebSocket", healthStateLabel(health.websocket));
     addPanelRow("接続中の端末", `${health.activeClients ?? 0}台`);
     addPanelRow("履歴同期", `${health.historySync?.enabled ? "有効" : "無効"} / 最終成功 ${health.historySync?.lastSuccessAt || "なし"} / 最終失敗 ${health.historySync?.lastFailureAt || "なし"}`);
     addPanelRow("接続キー", health.token?.present ? `${health.token.masked} / ${health.token.ageMs === null ? "経過時間は不明" : `${Math.round(health.token.ageMs / 60000)}分前`}` : "なし");

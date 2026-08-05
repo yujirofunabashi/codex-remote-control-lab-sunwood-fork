@@ -1475,6 +1475,14 @@ p {
   color: var(--thread-accent);
 }
 
+/* Position and run state are different readings, and at one weight with only a
+   gap between them they ran together as one phrase: "新規 接続中". */
+.thread-position-pill span + span {
+  border-left: 1px solid color-mix(in srgb, currentColor 24%, transparent);
+  padding-left: 7px;
+  font-weight: 560;
+}
+
 .thread-position-pill[data-state="running"],
 .thread-position-pill[data-state="streaming"],
 .thread-position-pill[data-state="syncing"] {
