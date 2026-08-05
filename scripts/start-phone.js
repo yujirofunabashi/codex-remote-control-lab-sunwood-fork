@@ -454,6 +454,45 @@ function claudeEffortLevel(options = {}) {
   const configured = String(process.env.CLAUDE_EFFORT || "").trim().toLowerCase();
   return claudeEffortLevels.has(configured) ? configured : "";
 }
+
+// `claude --name` is what labels a session in the /resume picker, the prompt
+// box, and the terminal title. Without it a bridge session shows up there as a
+// bare uuid, which is why work started from the phone was impossible to
+// recognise on the desktop. The prefix marks where the session came from.
+const claudeSessionNamePrefix =
+  process.env.PHONE_SESSION_NAME_PREFIX === undefined ? "📱" : process.env.PHONE_SESSION_NAME_PREFIX;
+
+function claudeSessionName(text, prefix = claudeSessionNamePrefix) {
+  const body = String(text || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 60);
+  // The marker alone would label every session identically, which is no more
+  // findable than the uuid it replaces. An attachment-only turn lands here.
+  if (!body) return "";
+  return [String(prefix || "").trim(), body].filter(Boolean).join(" ").slice(0, 80);
+}
+
+// Older CLIs reject an unknown option outright, so guessing wrong would break
+// every turn rather than merely lose the label. Ask once and remember.
+let claudeSupportsNameFlag = null;
+
+function claudeAcceptsNameFlag(probe) {
+  // A supplied probe is the test seam, so it always runs; the cache only exists
+  // to keep the real binary from being asked once per turn.
+  if (!probe && claudeSupportsNameFlag !== null) return claudeSupportsNameFlag;
+  let supported = false;
+  try {
+    const help = probe
+      ? probe()
+      : execFileSync(claudeBin, ["--help"], { encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "ignore"] });
+    supported = /(^|\s)--name[\s<,=]/.test(String(help || ""));
+  } catch {
+    supported = false;
+  }
+  if (!probe) claudeSupportsNameFlag = supported;
+  return supported;
+}
 const modelOptions = isClaudeProvider ? claudeModelOptions : codexModelOptions;
 const bridges = new Map();
 const bridgeStartedAt = Date.now();
@@ -2269,6 +2308,9 @@ function parseClaudeSessionFile(filePath, stat, text) {
   const sessionId = path.basename(filePath, ".jsonl");
   const history = [];
   let title = "";
+  // `claude --name` and a desktop rename both write this. It is deliberate, so
+  // it outranks the title Claude generated on its own.
+  let customTitle = "";
   let firstUserText = "";
   let lastUserText = "";
   let cwd = workdir;
@@ -2285,6 +2327,7 @@ function parseClaudeSessionFile(filePath, stat, text) {
     }
     if (item.cwd) cwd = item.cwd;
     if (item.type === "ai-title" && item.aiTitle) title = String(item.aiTitle);
+    if (item.type === "custom-title" && item.customTitle) customTitle = String(item.customTitle);
     const timestamp = Date.parse(item.timestamp || "");
     if (Number.isFinite(timestamp)) {
       createdAt = Math.min(createdAt, timestamp);
@@ -2310,7 +2353,7 @@ function parseClaudeSessionFile(filePath, stat, text) {
   return {
     summary: {
       id: sessionId,
-      name: title || fallbackTitle,
+      name: customTitle || title || fallbackTitle,
       preview: lastUserText || fallbackTitle,
       cwd,
       provider: "claude",
@@ -3438,6 +3481,13 @@ class ClaudeBridge {
       );
     }
     if (this.claudeSessionId) args.push("--resume", this.claudeSessionId);
+    else {
+      // Only when the session is created. Passing it on every turn would keep
+      // overwriting the title with the newest prompt, including one the user
+      // renamed by hand on the desktop.
+      const sessionName = claudeSessionName(text);
+      if (sessionName && claudeAcceptsNameFlag()) args.push("--name", sessionName);
+    }
 
     const child = spawn(claudeBin, args, {
       // Per-bridge workdir: the fleet pins each slot to its own worktree, so the
@@ -4847,9 +4897,11 @@ module.exports = {
   browseWorkspaceDirectories,
   setWorkspaceBookmark,
   workspaceBookmarks,
+  claudeAcceptsNameFlag,
   claudeEffortLevel,
   claudeModeCanPrompt,
   claudePermissionMode,
+  claudeSessionName,
   executeTerminalCommand,
   launchSettingsFromFleetOrEnv,
   manifestHrefForRequest,
@@ -4857,6 +4909,7 @@ module.exports = {
   maskTokenValue,
   mergeThreadListData,
   normalizeClaudeRateLimitPayload,
+  readClaudeSessionFile,
   readFleetConfigBridgeSettings,
   requestTokenFromHeaders,
   safeProxyBasePath,

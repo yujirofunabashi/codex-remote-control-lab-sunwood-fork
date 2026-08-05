@@ -62,11 +62,16 @@ test("a session reports its title, prompt, and message count", () => {
   assert.equal(session.cwd, workdir);
 });
 
-test("a transcript with no exchange is not offered as a session", () => {
+test("a transcript with no exchange is still listed", () => {
+  // The phone shows these rows as 名前未設定のチャット. Dropping them here
+  // produced exactly the mismatch being reported: a row visible on the phone
+  // with nothing matching it on the desktop.
   const file = path.join(projectDir, "22222222-2222-2222-2222-222222222222.jsonl");
   fs.writeFileSync(file, `${JSON.stringify({ type: "queue-operation", sessionId: "22222222" })}\n`);
 
-  assert.equal(summarize(file), null);
+  const session = summarize(file);
+  assert.equal(session.id, "22222222-2222-2222-2222-222222222222");
+  assert.equal(session.messages, 0);
 });
 
 test("sessions are listed newest first", () => {
@@ -153,4 +158,34 @@ test("groups are ordered by most recent activity", () => {
   for (let i = 1; i < groups.length; i += 1) {
     assert.ok(groups[i - 1].updatedAt >= groups[i].updatedAt);
   }
+});
+
+test("a name set with --name or renamed on the desktop is carried", () => {
+  // This is the label the /resume picker shows, so matching it here is what
+  // lets a row be recognised from either side.
+  const id = "88888888-8888-8888-8888-888888888888";
+  const file = path.join(projectDir, `${id}.jsonl`);
+  fs.writeFileSync(
+    file,
+    [
+      JSON.stringify({ type: "custom-title", customTitle: "📱 レートリミット", sessionId: id }),
+      JSON.stringify({ type: "ai-title", aiTitle: "Rate limit investigation", sessionId: id }),
+      JSON.stringify({ type: "user", cwd: workdir, message: { role: "user", content: [{ type: "text", text: "hello" }] } }),
+    ].join("\n") + "\n",
+  );
+
+  const session = summarize(file);
+  assert.equal(session.customTitle, "📱 レートリミット");
+  assert.equal(session.title, "Rate limit investigation");
+});
+
+test("both the first and the latest prompt are carried", () => {
+  // The phone labels a row by its latest message; this labelled it by its
+  // first, so one session looked like two different ones.
+  const id = "77777777-7777-7777-7777-777777777777";
+  const file = writeSession(id, { prompts: ["first thing", "second thing", "latest thing"] });
+  const session = summarize(file);
+
+  assert.equal(session.firstPrompt, "first thing");
+  assert.equal(session.lastPrompt, "latest thing");
 });

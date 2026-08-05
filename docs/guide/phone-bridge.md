@@ -160,6 +160,18 @@ cd /Users/you/Prj/example && claude --resume 2bec35bc-1324-4b49-8a83-d550e9a9ba0
 
 If you want the interactive picker instead, run `claude --resume` **from the bridge's workdir** — that directory is what scopes the list.
 
+### Naming
+
+A session created from the phone is named from its opening prompt, behind a marker showing where it came from:
+
+```text
+📱 レートリミットの表示を直して
+```
+
+That name is what the `/resume` picker, the prompt box, and the terminal title show, so a phone session is recognisable next to one you started yourself. It is set once, when the session is created — renaming it on the desktop sticks, and the phone sidebar picks up the new name too.
+
+Set `PHONE_SESSION_NAME_PREFIX` to change the marker, or to an empty string to drop it. The naming is skipped entirely if the installed `claude` is too old to accept `--name`.
+
 ## Claude Rate Limits
 
 Two sources feed the Claude rate-limit card, and they carry different things:

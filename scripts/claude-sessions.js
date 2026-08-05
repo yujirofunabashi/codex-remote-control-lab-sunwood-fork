@@ -76,7 +76,9 @@ function summarize(filePath) {
   const session = {
     id: path.basename(filePath, ".jsonl"),
     title: "",
+    customTitle: "",
     firstPrompt: "",
+    lastPrompt: "",
     cwd: "",
     messages: 0,
     updatedAt: stat.mtimeMs,
@@ -93,17 +95,24 @@ function summarize(filePath) {
     }
     if (item.cwd) session.cwd = item.cwd;
     if (item.type === "ai-title" && item.aiTitle) session.title = String(item.aiTitle);
+    // `claude --name` and a desktop rename both write this, and it is what the
+    // /resume picker shows. Deliberate, so it outranks the generated title.
+    if (item.type === "custom-title" && item.customTitle) session.customTitle = String(item.customTitle);
     const timestamp = Date.parse(item.timestamp || "");
     if (Number.isFinite(timestamp)) session.updatedAt = Math.max(session.updatedAt, timestamp);
     if (item.type !== "user" && item.type !== "assistant") continue;
     const content = textFromContent(item.message?.content);
     if (!content) continue;
     session.messages += 1;
-    if (!session.firstPrompt && (item.message?.role || item.type) === "user") session.firstPrompt = content;
+    if ((item.message?.role || item.type) !== "user") continue;
+    if (!session.firstPrompt) session.firstPrompt = content;
+    // The phone sidebar labels a row by its latest message while this labelled
+    // it by the first, so the same session read as two different ones. Carry
+    // both and the rows can be matched from either side.
+    session.lastPrompt = content;
   }
 
-  // A transcript with no exchange in it is a session that never got going.
-  return session.messages ? session : null;
+  return session;
 }
 
 function listSessions(cwd, limit = 20) {
@@ -227,8 +236,13 @@ function printGroup({ cwd, dir, sessions }) {
     return;
   }
   for (const session of sessions) {
-    const label = session.title || session.firstPrompt.slice(0, 60) || "(untitled)";
+    const label =
+      session.customTitle || session.title || session.firstPrompt.replace(/\s+/g, " ").slice(0, 60) || "(名前未設定のチャット)";
     console.log(`  ${formatWhen(session.updatedAt)}  ${label}`);
+    // The phone shows this one, so print it whenever it differs.
+    if (session.lastPrompt && session.lastPrompt !== session.firstPrompt) {
+      console.log(`    最新: ${session.lastPrompt.replace(/\s+/g, " ").slice(0, 60)}`);
+    }
     console.log(`    ${session.messages} messages  ${session.id}`);
   }
   console.log("");

@@ -123,6 +123,18 @@ cd /Users/you/Prj/example && claude --resume 2bec35bc-1324-4b49-8a83-d550e9a9ba0
 
 `claude --resume` を ID なしで実行する場合は、**必ず bridge の workdir で実行してください**。そこが候補一覧の範囲になります。
 
+### session の名前
+
+スマホから始めた session には、最初の prompt から作った名前が、出どころを示す marker 付きで自動で付きます。
+
+```text
+📱 レートリミットの表示を直して
+```
+
+この名前は `/resume` の picker、prompt box、terminal のタイトルに表示されます。PC で自分が始めた session と並んでも、どれがスマホからのものか一目で分かります。名前が付くのは session 作成時の一度だけなので、PC 側で付け直した名前はそのまま残り、スマホの sidebar にもその名前が反映されます。
+
+marker を変えたいときは `PHONE_SESSION_NAME_PREFIX` を設定します。空文字にすれば marker なしになります。`--name` を受け付けない古い `claude` では、この命名は行われません。
+
 ## Claude のレート制限表示
 
 Claude mode のレート制限は 2 つの経路から入ります。得られる情報が違います。
