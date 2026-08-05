@@ -377,7 +377,7 @@ function persistClaudeRateLimitMessage(message) {
   return merged;
 }
 
-const codexBin = path.join(root, "node_modules", ".bin", "codex");
+const codexBin = process.env.CODEX_BIN || path.join(root, "node_modules", ".bin", "codex");
 const claudeBin = process.env.CLAUDE_BIN || "claude";
 const envPath = path.join(root, ".env");
 const fleetConfigPath = process.env.PHONE_FLEET_CONFIG_PATH ? path.resolve(process.env.PHONE_FLEET_CONFIG_PATH) : "";
