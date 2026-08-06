@@ -7,6 +7,7 @@ const path = require("path");
 const { execFileSync, spawn } = require("child_process");
 const WebSocket = require("ws");
 const { bridgeKeyForRequest, bridgeMatchesWorkdir, shouldDisposeIdleBridge, shouldPromoteBridgeKey, shouldReplaceBridgeForWorkdir } = require("./bridge-state");
+const { debugLog, debugLogPath, debugTimer, isDebugEnabled, redactSensitiveText } = require("./debug-log");
 const { isHistorySyncEnabled, runHistorySync } = require("./history-sync");
 const { bridgeUrls, eventTypeLabel, notificationTargets, notifyBridgeUrls, notifyEvent, notifyTaskEvent, stripTokenFromUrl } = require("./phone-notify");
 const { defaultCodexAppServerPort, settingEnvKeysForSlot, slotEnvKey, slotSettingValue } = require("./phone-slot-settings");
@@ -795,14 +796,6 @@ function requestTokenFromHeaders(headers = {}) {
 
 function requestToken(url) {
   return url.searchParams.get("token") || requestTokenFromHeaders(url._phoneHeaders || {});
-}
-
-function redactSensitiveText(value) {
-  return String(value || "")
-    .replace(/([?&](?:token|key)=)[^&\s]+/gi, "$1[redacted]")
-    .replace(/\b(PHONE_TOKEN=)[^\s]+/gi, "$1[redacted]")
-    .replace(/\b(authorization:\s*bearer\s+)[A-Za-z0-9._~+/=-]{12,}/gi, "$1[redacted]")
-    .replace(/\b(token:\s*)[A-Za-z0-9._~+/=-]{12,}/gi, "$1[redacted]");
 }
 
 function parseEnvValues(filePath) {
@@ -3697,6 +3690,9 @@ class ClaudeBridge {
   }
 
   spawnTurn(text, attachments = [], options = {}, clientMessageId = null, permissionMode = "acceptEdits", approvalSocketPath = null) {
+    // Kept on the bridge because an approval raised mid-turn has to be able to
+    // report the mode it was raised under; フルアクセス behaves differently here.
+    this.activePermissionMode = permissionMode;
     this.interruptRequested = false;
     const savedAttachments = [];
     const savedImages = [];
@@ -3786,6 +3782,18 @@ class ClaudeBridge {
     let stdoutBuffer = "";
     let stderrBuffer = "";
     let assistantText = "";
+    let deltaCount = 0;
+    let deltaBytes = 0;
+    let lineCount = 0;
+    let unhandledCount = 0;
+    const finishTurnDebug = debugTimer("claude.turn", {
+      turnId,
+      threadId: this.threadId,
+      model: this.model,
+      permissionMode,
+      workdir: this.workdir || workdir,
+      approvalSocket: Boolean(approvalSocketPath),
+    });
 
     const clearActiveProcess = () => {
       if (this.activeProcess !== child && this.activeTurnId !== turnId) return false;
@@ -3796,19 +3804,24 @@ class ClaudeBridge {
       return true;
     };
 
-    const handleLine = (line) => {
-      if (!line.trim()) return;
+    // Every branch below names itself, so the debug log says which one claimed
+    // a line - and, when none did, says that too. A stream message that
+    // silently matches nothing is what "the newest reply never showed up"
+    // looks like from the phone, and it is invisible from the outside.
+    const routeLine = (line) => {
+      if (!line.trim()) return null;
       let msg;
       try {
         msg = JSON.parse(line);
       } catch {
         this.emit("status", { text: line.slice(0, 500) });
-        return;
+        return { handled: "unparsed", type: "", raw: line.slice(0, 500) };
       }
+      const routed = { handled: "unhandled", type: msg.type || "", subtype: msg.subtype || "" };
       const rateLimitUpdate = persistClaudeRateLimitMessage(msg);
       if (rateLimitUpdate) {
         this.emit("rateLimits", { rateLimits: rateLimitUpdate });
-        return;
+        return { ...routed, handled: "rateLimits" };
       }
       if (msg.session_id) {
         this.claudeSessionId = msg.session_id;
@@ -3816,11 +3829,11 @@ class ClaudeBridge {
       }
       if (msg.type === "system" && msg.subtype === "init") {
         this.emit("status", { text: `Claude session ready: ${msg.session_id || this.threadId}` });
-        return;
+        return { ...routed, handled: "systemInit", sessionId: msg.session_id || this.threadId };
       }
       if (msg.type === "system" && msg.subtype === "api_retry") {
         this.emit("status", { text: `Claude API retry ${msg.attempt}/${msg.max_retries}` });
-        return;
+        return { ...routed, handled: "apiRetry", attempt: msg.attempt, maxRetries: msg.max_retries };
       }
       const delta = msg.type === "stream_event" && msg.event?.delta?.type === "text_delta" ? msg.event.delta.text : "";
       if (delta) {
@@ -3830,28 +3843,39 @@ class ClaudeBridge {
         }
         assistantText += delta;
         this.emit("assistantDelta", { text: delta });
-        return;
+        deltaCount += 1;
+        deltaBytes += delta.length;
+        return { ...routed, handled: "delta" };
       }
       if (msg.type === "assistant") {
+        let summaries = 0;
         for (const block of msg.message?.content || []) {
           const summary = summarizeClaudeToolUse(block, this.workdir || workdir);
-          if (summary) this.emit("status", { text: summary });
+          if (summary) {
+            this.emit("status", { text: summary });
+            summaries += 1;
+          }
         }
-        return;
+        return { ...routed, handled: "assistant", blocks: (msg.message?.content || []).length, summaries };
       }
       if (msg.type === "user") {
+        let summaries = 0;
         for (const block of msg.message?.content || []) {
           const summary = summarizeClaudeToolResult(block);
-          if (summary) this.emit("status", { text: summary });
+          if (summary) {
+            this.emit("status", { text: summary });
+            summaries += 1;
+          }
         }
-        return;
+        return { ...routed, handled: "user", blocks: (msg.message?.content || []).length, summaries };
       }
       if (msg.type === "result") {
         if (msg.session_id) {
           this.claudeSessionId = msg.session_id;
           this.promoteBridgeKey();
         }
-        if (!assistantText && msg.result) {
+        const recovered = Boolean(!assistantText && msg.result);
+        if (recovered) {
           if (!this.streamingStarted) {
             this.streamingStarted = true;
             this.setBridgeRunState("streaming", "回答生成中", this.activeTurnId);
@@ -3859,7 +3883,27 @@ class ClaudeBridge {
           assistantText = String(msg.result);
           this.emit("assistantDelta", { text: assistantText });
         }
+        return { ...routed, handled: "result", recoveredFromResult: recovered, subtypeResult: msg.subtype || "" };
       }
+      return routed;
+    };
+
+    const handleLine = (line) => {
+      const routed = routeLine(line);
+      if (!routed) return;
+      lineCount += 1;
+      if (routed.handled === "unhandled") unhandledCount += 1;
+      // Deltas arrive per token. Logging each one would bury the entries that
+      // explain anything, so they are counted here and reported once per turn.
+      if (routed.handled === "delta") return;
+      debugLog("claude.stream.line", {
+        turnId,
+        threadId: this.threadId,
+        sessionId: this.claudeSessionId || null,
+        streamingStarted: this.streamingStarted,
+        assistantChars: assistantText.length,
+        ...routed,
+      });
     };
 
     child.stdout.setEncoding("utf8");
@@ -3898,6 +3942,22 @@ class ClaudeBridge {
       if (!clearActiveProcess()) return;
       if (stdoutBuffer.trim()) handleLine(stdoutBuffer);
       this.interruptRequested = false;
+      // An empty `assistantText` on a clean exit is the whole bug in one field:
+      // the turn ran, and nothing was appended for the phone to show.
+      finishTurnDebug({
+        code,
+        signal,
+        wasInterrupted,
+        lineCount,
+        deltaCount,
+        deltaBytes,
+        unhandledCount,
+        assistantChars: assistantText.length,
+        willAppendHistory: Boolean(assistantText.trim()),
+        historyLength: this.history.length,
+        clientCount: this.clients.size,
+        stderrTail: stderrBuffer.trim().slice(-500),
+      });
       if (code === 0 && !wasInterrupted) {
         if (assistantText.trim()) this.appendHistory({ type: "assistant", text: assistantText, outputGroup: turnId });
         const question = latestAssistantQuestion(this);
@@ -4003,11 +4063,33 @@ class ClaudeBridge {
       },
     };
 
+    debugLog("claude.approval.opened", {
+      id,
+      threadId: this.threadId,
+      turnId: this.activeTurnId,
+      toolName: request.params.toolName,
+      toolUseId: request.params.toolUseId,
+      inputKeys: Object.keys(request.params.input || {}),
+      clientCount: this.clients.size,
+      permissionMode: this.activePermissionMode || null,
+      runState: this.runState?.state || null,
+    });
+
     const settle = (decision, message) => {
-      if (!this.pendingApprovals.has(id)) return;
+      if (!this.pendingApprovals.has(id)) {
+        debugLog("claude.approval.settleIgnored", { id, decision, threadId: this.threadId });
+        return;
+      }
       clearTimeout(timer);
       this.pendingApprovals.delete(id);
       if (this.pendingApproval?.id === id) this.pendingApproval = null;
+      debugLog("claude.approval.settled", {
+        id,
+        decision,
+        message,
+        threadId: this.threadId,
+        socketDestroyed: socket.destroyed,
+      });
       if (!socket.destroyed) socket.end(`${JSON.stringify({ decision, message })}\n`);
     };
 
@@ -4037,6 +4119,15 @@ class ClaudeBridge {
     this.setBridgeRunState("approval", "承認待ち", this.activeTurnId);
     this.pendingApproval = request;
     this.emit("approval", { request });
+    // Split "never sent" from "sent but never drawn": past this line the card
+    // is the phone UI's problem, not the bridge's.
+    debugLog("claude.approval.broadcast", {
+      id,
+      threadId: this.threadId,
+      clientCount: this.clients.size,
+      runState: this.runState?.state || null,
+      pendingApprovalId: this.pendingApproval?.id || null,
+    });
     notifyBridgeEvent("approval_required", {
       provider: this.provider,
       threadId: this.threadId,
@@ -5199,6 +5290,7 @@ async function main() {
     console.log(`Fleet registry entry: ${JSON.stringify({ id: phoneBridgeId, label: phoneBridgeLabel, group: phoneBridgeGroup, baseUrl: `http://LAN-IP:${uiPort}`, token: "***", port: uiPort })}`);
     console.log("Open the private tokenized bridge URL from your protected startup channel to share one bridge thread.");
     console.log("The terminal output masks the local access key by default.");
+    if (isDebugEnabled()) console.log(`Debug log: ${debugLogPath()} (PHONE_DEBUG is on)`);
     console.log("Press Ctrl+C to stop.");
 
     notifyBridgeUrls(urls).then((results) => {
