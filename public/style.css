@@ -78,6 +78,9 @@
   --layer-terminal-jump: 3;
   --layer-terminal-helper: 8;
   --layer-hint: 12;
+  /* Above the conversation, below the scrim: the sidebar covers the bar and its
+     own settings button stays reachable. */
+  --layer-bottom-nav: 16;
   --layer-terminal-sheet: 18;
   --layer-scrim: 19;
   --layer-drawer: 20;
@@ -6242,7 +6245,7 @@ body[data-main-view="terminal"] .pwa-install-hint {
 
   .bottom-nav {
     position: relative;
-    z-index: var(--layer-composer);
+    z-index: var(--layer-bottom-nav);
     display: grid;
     grid-template-columns: repeat(5, minmax(0, 1fr));
     flex: 0 0 auto;
