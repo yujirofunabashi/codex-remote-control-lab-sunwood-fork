@@ -71,6 +71,11 @@ const terminalViewButton = document.querySelector("#terminalViewButton");
 const chatUnreadBadge = document.querySelector("#chatUnreadBadge");
 const chatViewLabel = document.querySelector("#chatViewLabel");
 const terminalUnreadBadge = document.querySelector("#terminalUnreadBadge");
+const bottomNav = document.querySelector("#bottomNav");
+const bottomNavChatLabel = document.querySelector("#bottomNavChatLabel");
+const bottomNavChatBadge = document.querySelector("#bottomNavChatBadge");
+const bottomNavTerminalBadge = document.querySelector("#bottomNavTerminalBadge");
+const bottomNavApprovalBadge = document.querySelector("#bottomNavApprovalBadge");
 const prevThreadButton = document.querySelector("#prevThread");
 const nextThreadButton = document.querySelector("#nextThread");
 const threadPositionPill = document.querySelector("#threadPositionPill");
@@ -1090,12 +1095,69 @@ function updateUnreadBadges() {
   for (const [badge, count] of [
     [chatUnreadBadge, unreadChatCount],
     [terminalUnreadBadge, unreadTerminalCount],
+    [bottomNavChatBadge, unreadChatCount],
+    [bottomNavTerminalBadge, unreadTerminalCount],
   ]) {
     if (!badge) continue;
     badge.textContent = count > 9 ? "9+" : count ? String(count) : "";
     badge.classList.toggle("hidden", !count);
   }
 }
+
+// The bar mirrors controls that already exist in the titlebar rather than
+// owning behaviour of its own, so there is one implementation of each action
+// and the two stay in step by construction.
+function syncBottomNav() {
+  if (!bottomNav) return;
+  const approvalPending = Boolean(pendingApproval);
+  for (const item of bottomNav.querySelectorAll(".bottom-nav-item")) {
+    const nav = item.dataset.nav;
+    const current = (nav === "chat" && mainViewMode === "chat") || (nav === "terminal" && mainViewMode === "terminal");
+    if (current) item.setAttribute("aria-current", "page");
+    else item.removeAttribute("aria-current");
+    if (nav === "approval") {
+      item.dataset.pending = String(approvalPending);
+      item.disabled = !approvalPending;
+    }
+  }
+  if (bottomNavChatLabel && chatViewLabel) bottomNavChatLabel.textContent = chatViewLabel.textContent || "チャット";
+  if (bottomNavApprovalBadge) {
+    bottomNavApprovalBadge.textContent = approvalPending ? "1" : "";
+    bottomNavApprovalBadge.classList.toggle("hidden", !approvalPending);
+  }
+}
+
+function revealPendingApproval() {
+  if (!pendingApproval) return;
+  if (mainViewMode !== "chat") chatViewButton?.click();
+  const target = approval && !approval.classList.contains("hidden") ? approval : document.querySelector("#approvalStrip");
+  target?.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+bottomNav?.addEventListener("click", (event) => {
+  const item = event.target.closest(".bottom-nav-item");
+  if (!item || item.disabled) return;
+  switch (item.dataset.nav) {
+    case "chat":
+      chatViewButton?.click();
+      break;
+    case "terminal":
+      terminalViewButton?.click();
+      break;
+    case "approval":
+      revealPendingApproval();
+      break;
+    case "threads":
+      mobileThreadsButton?.click();
+      break;
+    case "menu":
+      menuButton?.click();
+      break;
+    default:
+      break;
+  }
+  syncBottomNav();
+});
 
 function currentThreadIndexInfo() {
   const threads = visibleThreadsInListOrder();
@@ -1127,6 +1189,7 @@ function updateComposerState() {
     if (pendingSubmission) sendLabel.textContent = "送信中";
     else sendLabel.textContent = mainViewMode === "terminal" ? (state === "approval" ? "承認へ" : state === "disconnected" ? "切断" : state === "running" || state === "streaming" ? "送信" : "Enter ↵") : "送信";
   }
+  syncBottomNav();
 }
 
 function shortId(value) {

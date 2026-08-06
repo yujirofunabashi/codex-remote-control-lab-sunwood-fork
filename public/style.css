@@ -1938,6 +1938,27 @@ body.terminal-focus-mode .composer-footer {
   overflow: hidden;
 }
 
+/* Wide layouts keep every one of these controls in the titlebar, where they are
+   easy to reach with a pointer. The bar is turned on at phone widths only. */
+.bottom-nav {
+  display: none;
+}
+
+.bottom-nav-icon svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.bottom-nav-item[data-nav="menu"] .bottom-nav-icon svg {
+  fill: currentColor;
+  stroke: none;
+}
+
 .main-view-bar {
   display: flex;
   align-items: center;
@@ -6212,12 +6233,89 @@ body[data-main-view="terminal"] .pwa-install-hint {
     max-width: calc(100% - 18px);
     min-width: 0;
     min-height: 84px;
-    /* The focused composer below clears the home indicator; this is the resting
-       state, and it has to clear it too. Without the inset here the composer
-       jumps back under the indicator the moment the prompt loses focus, which
-       is what sending a message does. */
-    margin-bottom: max(4px, env(safe-area-inset-bottom));
+    /* The bar below carries the home-indicator inset for the resting composer.
+       While the prompt has focus the bar is hidden and the composer goes fixed,
+       and that rule asks for the inset itself. */
+    margin-bottom: 4px;
     border-radius: 18px;
+  }
+
+  .bottom-nav {
+    position: relative;
+    z-index: var(--layer-composer);
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    flex: 0 0 auto;
+    border-top: 1px solid var(--composer-border);
+    /* Padding rather than margin: the background has to reach the bottom edge,
+       or the reserved strip reads as a gap under the bar. */
+    padding-bottom: env(safe-area-inset-bottom);
+    background: var(--composer-bg);
+    backdrop-filter: blur(14px);
+  }
+
+  /* The keyboard covers this space anyway, and the composer goes fixed over it. */
+  body.composer-focused .bottom-nav,
+  body.terminal-command-focused .bottom-nav,
+  body.terminal-focus-mode .bottom-nav {
+    display: none;
+  }
+
+  .bottom-nav-item {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    min-width: 0;
+    padding: 7px 2px 6px;
+    border: 0;
+    border-radius: 12px;
+    background: none;
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1.1;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .bottom-nav-item[aria-current="page"] {
+    background: var(--soft);
+    color: var(--text);
+  }
+
+  .bottom-nav-item[data-nav="approval"][data-pending="true"] {
+    color: var(--accent);
+  }
+
+  .bottom-nav-item:disabled {
+    opacity: 0.42;
+  }
+
+  .bottom-nav-label {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .bottom-nav-badge {
+    position: absolute;
+    top: 3px;
+    right: max(6px, 22%);
+    min-width: 15px;
+    padding: 0 4px;
+    border-radius: 999px;
+    background: var(--accent);
+    color: var(--button-text, #fff);
+    font-size: 9px;
+    line-height: 15px;
+    text-align: center;
+  }
+
+  .bottom-nav-badge.hidden {
+    display: none;
   }
 
   body.composer-focused .app-shell,
