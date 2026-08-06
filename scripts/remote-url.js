@@ -8,6 +8,12 @@
 //   node scripts/remote-url.js --qr         # scan it from the phone
 //   node scripts/remote-url.js --host mac.tailnet.ts.net --qr
 //
+// When `tailscale serve` already publishes this bridge over HTTPS, that address
+// is the one handed over. It is the origin the phone will keep coming back to,
+// so the token it was given stays in that origin's storage and the app can
+// install itself; reaching the same bridge by address and port is a different
+// origin, where none of that survives. `--host` names an address instead.
+//
 // The token is only ever written to the clipboard or the QR image. Plain output
 // stays masked so a screenshot or a shared terminal does not leak access.
 const fs = require("fs");
@@ -80,10 +86,61 @@ function magicDnsName() {
   }
 }
 
-function buildUrl(host, port, token) {
-  const url = new URL(`http://${host}:${port}/`);
+function buildUrl(host, port, token, protocol = "http") {
+  const url = new URL(`${protocol}://${host}:${port}/`);
   if (token) url.searchParams.set("token", token);
   return url.toString();
+}
+
+// `tailscale serve status --json` keys each published site by "host:port" and
+// lists what every path proxies to. The bridge is the site whose root goes to
+// the port the bridge is listening on — matching on the target rather than on
+// the site keeps a second site on the same machine, serving something else,
+// from being handed over as if it were this one.
+function servedHttpsEndpoint(status, bridgePort) {
+  const port = Number(bridgePort);
+  if (!status || typeof status !== "object" || !Number.isInteger(port)) return null;
+  const sites = status.Web && typeof status.Web === "object" ? status.Web : {};
+
+  const matches = [];
+  for (const [site, entry] of Object.entries(sites)) {
+    const separator = site.lastIndexOf(":");
+    if (separator <= 0) continue;
+    const host = site.slice(0, separator);
+    const sitePort = Number(site.slice(separator + 1));
+    if (!host || !Number.isInteger(sitePort)) continue;
+    // Without TLS terminated here the address would be plain HTTP over the
+    // tailnet, which is what we already have and not worth swapping to.
+    if (status.TCP?.[String(sitePort)]?.HTTPS !== true) continue;
+    const proxy = entry?.Handlers?.["/"]?.Proxy;
+    if (!proxy || proxyPort(proxy) !== port) continue;
+    matches.push({ host, port: sitePort });
+  }
+
+  // Several can fit; the lowest port gives the shortest address, and 443 drops
+  // out of the URL entirely.
+  matches.sort((a, b) => a.port - b.port);
+  return matches[0] || null;
+}
+
+function proxyPort(target) {
+  try {
+    const url = new URL(String(target));
+    if (url.port) return Number(url.port);
+    return url.protocol === "https:" ? 443 : 80;
+  } catch {
+    return NaN;
+  }
+}
+
+function tailscaleServeStatus() {
+  const result = spawnSync("tailscale", ["serve", "status", "--json"], { encoding: "utf8" });
+  if (result.status !== 0 || !result.stdout) return null;
+  try {
+    return JSON.parse(result.stdout);
+  } catch {
+    return null;
+  }
 }
 
 function maskUrl(url) {
@@ -116,6 +173,8 @@ function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     console.log("Usage: node scripts/remote-url.js [--host <name>] [--port <n>] [--copy] [--qr] [--reveal]");
+    console.log("A bridge published by `tailscale serve` is handed over at its HTTPS address.");
+    console.log("--host names an address instead; --port names the bridge's own port.");
     return;
   }
 
@@ -131,8 +190,11 @@ function main() {
 
   const port = args.port || Number(process.env.PHONE_UI_PORT || 45214);
   const addresses = candidateAddresses();
+  // Naming a host is a decision to reach the bridge that way, so no published
+  // address is substituted for it.
+  const served = args.host ? null : servedHttpsEndpoint(tailscaleServeStatus(), port);
   const magicDns = args.host || magicDnsName();
-  const host = magicDns || addresses.find((entry) => entry.mesh)?.address || addresses[0]?.address || "";
+  const host = served?.host || magicDns || addresses.find((entry) => entry.mesh)?.address || addresses[0]?.address || "";
 
   if (!host) {
     console.error("No reachable address found. Is Tailscale (or your VPN) connected?");
@@ -140,7 +202,9 @@ function main() {
     return;
   }
 
-  const url = buildUrl(host, port, token);
+  const publicPort = served?.port || port;
+  const url = buildUrl(host, publicPort, token, served ? "https" : "http");
+  const route = served ? "  (tailscale serve, HTTPS)" : magicDns ? "  (MagicDNS)" : "";
 
   if (args.copy) {
     const via = copyToClipboard(url);
@@ -150,7 +214,7 @@ function main() {
       return;
     }
     console.log(`Copied to clipboard via ${via}. Nothing was printed.`);
-    console.log(`Host: ${host}:${port}`);
+    console.log(`Host: ${host}:${publicPort}${route}`);
     return;
   }
 
@@ -160,13 +224,14 @@ function main() {
       process.exitCode = 1;
       return;
     }
-    console.log(`Scan from the phone with the VPN connected. Host: ${host}:${port}`);
+    console.log(`Scan from the phone with the VPN connected. Host: ${host}:${publicPort}${route}`);
     return;
   }
 
   console.log(args.reveal ? url : maskUrl(url));
   console.log("");
-  console.log(`Host in use : ${host}:${port}${magicDns ? "  (MagicDNS)" : ""}`);
+  console.log(`Host in use : ${host}:${publicPort}${route}`);
+  if (served) console.log(`Bridge      : 127.0.0.1:${port}`);
   if (addresses.length) {
     console.log("Interfaces  :");
     for (const entry of addresses) {
@@ -180,4 +245,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { buildUrl, candidateAddresses, isMeshAddress, maskUrl };
+module.exports = { buildUrl, candidateAddresses, isMeshAddress, maskUrl, servedHttpsEndpoint };
