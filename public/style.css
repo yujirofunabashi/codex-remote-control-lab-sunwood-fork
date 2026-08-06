@@ -6212,7 +6212,11 @@ body[data-main-view="terminal"] .pwa-install-hint {
     max-width: calc(100% - 18px);
     min-width: 0;
     min-height: 84px;
-    margin-bottom: 4px;
+    /* The focused composer below clears the home indicator; this is the resting
+       state, and it has to clear it too. Without the inset here the composer
+       jumps back under the indicator the moment the prompt loses focus, which
+       is what sending a message does. */
+    margin-bottom: max(4px, env(safe-area-inset-bottom));
     border-radius: 18px;
   }
 
