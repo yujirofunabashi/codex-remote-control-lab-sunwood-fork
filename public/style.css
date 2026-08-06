@@ -5213,7 +5213,14 @@ body.prompt-modal-open {
   color: var(--muted);
 }
 
-.pwa-install-hint button {
+.pwa-install-hint:has(.pwa-install-open) {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.pwa-install-hint button,
+.pwa-install-hint .pwa-install-open {
+  display: inline-flex;
+  align-items: center;
   min-height: 30px;
   border: 1px solid var(--line);
   border-radius: 999px;
@@ -5221,6 +5228,12 @@ body.prompt-modal-open {
   background: var(--card);
   color: var(--muted);
   font-weight: 800;
+  text-decoration: none;
+}
+
+.pwa-install-hint .pwa-install-open {
+  border-color: color-mix(in srgb, var(--thread-accent) 44%, var(--line));
+  color: var(--text);
 }
 
 body[data-main-view="terminal"] .pwa-install-hint {

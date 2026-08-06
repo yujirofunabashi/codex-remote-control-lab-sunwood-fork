@@ -4660,6 +4660,16 @@ async function main() {
       serveIndex(req, res, { includeManifest: false, standalone: false, phoneToken });
       return;
     }
+    // Adding the root page to the home screen produces a standalone app that
+    // cannot connect: iOS takes its entry point from the manifest start_url,
+    // which is deliberately token-free. Dropping the manifest but keeping the
+    // standalone meta makes iOS use the URL in the address bar instead, so the
+    // icon carries the token the app needs, and the token still never appears in
+    // a file served to unauthenticated callers.
+    if (url.pathname === "/install") {
+      serveIndex(req, res, { includeManifest: false, standalone: true, phoneToken });
+      return;
+    }
     if (url.pathname === "/api/threads") {
       if (!requireToken(url, phoneToken, res)) return;
       const requestedProvider = queryProvider(url, res);

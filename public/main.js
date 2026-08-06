@@ -167,8 +167,11 @@ try {
   storedToken = "";
 }
 let token = initialToken || storedToken;
-const preserveBookmarkEntryUrl = location.pathname.replace(/\/+$/, "").endsWith("/bookmark");
-let selectedThread = preserveBookmarkEntryUrl ? "" : params.get("thread") || "";
+// /bookmark and /install are served without a manifest so that "ホーム画面に追加"
+// captures what is in the address bar. Both need their token left there until
+// the user has added it; every other page hides the token straight away.
+const preserveEntryUrl = /\/(?:bookmark|install)$/.test(location.pathname.replace(/\/+$/, ""));
+let selectedThread = preserveEntryUrl ? "" : params.get("thread") || "";
 let initialUrlThreadPending = Boolean(selectedThread);
 try {
   if (initialToken) {
@@ -178,7 +181,8 @@ try {
 } catch {
   // localStorage may be unavailable; the URL token still works for this page load.
 }
-if (params.has("token") && window.history?.replaceState) {
+// Everywhere else the token leaves the address bar as soon as it has been read.
+if (!preserveEntryUrl && params.has("token") && window.history?.replaceState) {
   const nextUrl = uiUtils.urlWithoutTokenParam ? uiUtils.urlWithoutTokenParam(location.href) : (() => {
     const url = new URL(location.href);
     url.searchParams.delete("token");
@@ -186,7 +190,7 @@ if (params.has("token") && window.history?.replaceState) {
   })();
   window.history.replaceState(null, "", nextUrl);
 }
-if (preserveBookmarkEntryUrl && params.has("thread") && window.history?.replaceState) {
+if (preserveEntryUrl && params.has("thread") && window.history?.replaceState) {
   const nextUrl = new URL(location.href);
   nextUrl.searchParams.delete("thread");
   window.history.replaceState(null, "", nextUrl);
@@ -199,6 +203,16 @@ function proxyBasePath() {
 }
 
 const appBasePath = proxyBasePath();
+
+// The URL to add to the home screen. /install keeps the token in the address bar,
+// so the icon iOS creates launches an app that can already reach the bridge -
+// unlike the root page, whose manifest start_url is deliberately token-free.
+function installEntryUrl() {
+  const url = new URL(appPath("/install"), location.href);
+  const value = effectiveBridgeToken(activeBridge()) || token;
+  if (value) url.searchParams.set("token", value);
+  return url.href;
+}
 
 function rememberTokenForCurrentOrigin(value) {
   const text = String(value || "");
@@ -414,14 +428,19 @@ function showPwaInstallHint() {
   hint.setAttribute("role", "status");
   const hasToken = Boolean(effectiveBridgeToken(activeBridge()) || token);
   const secure = window.isSecureContext;
+  // No point offering the install page to someone already standing on it.
+  const showInstallLink = hasToken && !preserveEntryUrl;
   hint.innerHTML = `
     <div>
       <strong>ホーム画面に追加</strong>
       <span>${secure ? "ホーム画面版では表示領域が少し増えます。" : "ローカル接続ではホーム画面版に制限があります。通常表示はこのまま使えます。"}</span>
-      <small>${hasToken ? "接続キーはホーム画面の起動URLに保存しません。" : "起動できない時は接続キー付きURLで開き直してください。"}</small>
+      <small>${showInstallLink ? "「追加用」から登録すると、接続キーの再入力が要りません。" : hasToken ? "接続キーはホーム画面の起動URLに保存しません。" : "起動できない時は接続キー付きURLで開き直してください。"}</small>
     </div>
+    ${showInstallLink ? '<a class="pwa-install-open" data-pwa-install>追加用</a>' : ""}
     <button type="button" data-pwa-dismiss>閉じる</button>
   `;
+  const installLink = hint.querySelector("[data-pwa-install]");
+  if (installLink) installLink.href = installEntryUrl();
   hint.querySelector("[data-pwa-dismiss]")?.addEventListener("click", () => {
     safeWriteStorage(localStorage, pwaInstallHintStorageKey, "dismissed");
     hint.remove();
@@ -4955,7 +4974,7 @@ async function loadArtifacts() {
 
 function updateUrlThread() {
   const next = new URL(location.href);
-  if (selectedThread && !preserveBookmarkEntryUrl) next.searchParams.set("thread", selectedThread);
+  if (selectedThread && !preserveEntryUrl) next.searchParams.set("thread", selectedThread);
   else next.searchParams.delete("thread");
   if (activeBridgeId && activeBridgeId !== homeBridgeId) next.searchParams.set("bridge", activeBridgeId);
   else next.searchParams.delete("bridge");
