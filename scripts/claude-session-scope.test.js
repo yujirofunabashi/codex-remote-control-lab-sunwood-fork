@@ -11,8 +11,17 @@ const home = os.homedir();
 const activeWorkdir = fs.mkdtempSync(path.join(home, "scope-active-"));
 const otherWorkdir = fs.mkdtempSync(path.join(home, "scope-other-"));
 
+// Settings are read per bridge slot, and a slot's own key outranks the plain one
+// whatever it came from. Both the repository's .env and the environment a
+// running bridge hands down to everything it spawns carry the keys for the slots
+// this machine really runs, so naming only PHONE_WORKDIR left the tests reading
+// the developer's own folder. Claim a slot nobody serves and set the folder
+// under that slot's key, so what is under test is decided here and not outside.
+const slot = "45246";
+process.env.PHONE_UI_PORT = slot;
 process.env.PHONE_AGENT_PROVIDER_DEFAULT = "claude";
 process.env.PHONE_WORKDIR = activeWorkdir;
+process.env[`PHONE_WORKDIR_${slot}`] = activeWorkdir;
 
 const {
   ClaudeBridge,
