@@ -8,7 +8,7 @@ const { execFileSync, spawn } = require("child_process");
 const WebSocket = require("ws");
 const { bridgeKeyForRequest, bridgeMatchesWorkdir, shouldDisposeIdleBridge, shouldPromoteBridgeKey, shouldReplaceBridgeForWorkdir } = require("./bridge-state");
 const { isHistorySyncEnabled, runHistorySync } = require("./history-sync");
-const { bridgeUrls, notificationTargets, notifyBridgeUrls, notifyEvent, notifyTaskEvent, stripTokenFromUrl } = require("./phone-notify");
+const { bridgeUrls, eventTypeLabel, notificationTargets, notifyBridgeUrls, notifyEvent, notifyTaskEvent, stripTokenFromUrl } = require("./phone-notify");
 const { defaultCodexAppServerPort, settingEnvKeysForSlot, slotEnvKey, slotSettingValue } = require("./phone-slot-settings");
 const { assertStorageCapacityIngress, storageCapacityErrorPayload } = require("./storage-capacity-gate");
 const { findLiveBridge, readThreadSnapshot } = require("./thread-read");
@@ -1324,7 +1324,7 @@ function notifyBridgeEvent(type, payload = {}) {
   const projectName = payload.projectName || path.basename(workdir);
   const event = {
     type,
-    title: payload.title || `${type.replace(/_/g, " ")}: ${projectName}`,
+    title: payload.title || `${eventTypeLabel(type)}: ${projectName}`,
     message: payload.message || "",
     threadId,
     threadTitle: payload.threadTitle || "",
@@ -1354,7 +1354,7 @@ function scheduleLongRunningNotification(bridge, turnId) {
       threadId: bridge.threadId,
       turnId,
       severity: "warning",
-      title: "Codex task is still running",
+      title: "処理が長時間続いています",
       message: `${path.basename(workdir)} の処理が長時間続いています。`,
     });
   }, longRunningNotifyMs);
@@ -2981,7 +2981,7 @@ class SharedBridge {
             threadId: this.threadId,
             turnId: completedTurnId,
             severity: "warning",
-            title: "Question requires your input",
+            title: "返信待ち",
             message: question,
           });
         }
@@ -3007,7 +3007,7 @@ class SharedBridge {
           threadId: this.threadId,
           turnId: this.activeTurnId,
           severity: "warning",
-          title: "Approval required",
+          title: "承認待ち",
           message: msg.method,
         });
         notifyRunEvent("approval", {
@@ -3057,7 +3057,7 @@ class SharedBridge {
         threadId: this.threadId,
         turnId: this.activeTurnId,
         severity: "error",
-        title: "Codex connection lost",
+        title: "Codex app-serverとの接続が切れました",
         message: error.message,
       });
       if (shouldStartCodexServer && isCodexConnectionFailure(error)) {
@@ -3087,8 +3087,8 @@ class SharedBridge {
         threadId: this.threadId,
         turnId: this.activeTurnId,
         severity: "warning",
-        title: "Codex connection closed",
-        message: "Codex app-server connection closed.",
+        title: "Codex app-serverとの接続が閉じました",
+        message: "Codex app-serverとの接続が閉じました。",
       });
       if (shouldStartCodexServer) {
         ensureCodexServerRunning().catch((error) => {
@@ -3216,7 +3216,7 @@ class SharedBridge {
           provider: this.provider,
           threadId: this.threadId,
           severity: "error",
-          title: "History sync failed",
+          title: "履歴同期に失敗しました",
           message: error.message,
         });
         this.emit("status", { text: `履歴同期に失敗しました: ${error.message}` });
@@ -3909,7 +3909,7 @@ class ClaudeBridge {
             threadId: this.threadId,
             turnId,
             severity: "warning",
-            title: "Question requires your input",
+            title: "返信待ち",
             message: question,
           });
         }
@@ -4042,7 +4042,7 @@ class ClaudeBridge {
       threadId: this.threadId,
       turnId: this.activeTurnId,
       severity: "warning",
-      title: "Approval required",
+      title: "承認待ち",
       message: `${request.params.toolName} の承認待ちです`,
     });
   }
@@ -5196,8 +5196,8 @@ async function main() {
     });
     notifyBridgeEvent("bridge_started", {
       severity: "info",
-      title: "Phone bridge started",
-      message: `${phoneBridgeLabel} is ready on ${tokenFreeLanUrls()[0] || `http://localhost:${uiPort}/`}`,
+      title: "スマホブリッジを起動しました",
+      message: `${phoneBridgeLabel} が ${tokenFreeLanUrls()[0] || `http://localhost:${uiPort}/`} で待機しています。`,
       projectName: path.basename(workdir),
       url: tokenFreeLanUrls()[0] || "",
     });

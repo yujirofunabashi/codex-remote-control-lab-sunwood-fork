@@ -87,36 +87,64 @@ function redactNotificationText(value) {
     .replace(/\b(token:\s*)[A-Za-z0-9._~+/=-]{12,}/gi, "$1[redacted]");
 }
 
+// A notification is read by a person, on a phone, and this one is read in
+// Japanese - the same language the UI it links to is written in. Only the
+// identifiers stay as they are: a thread id, a turn id, a model name and the
+// event type are looked up and pasted, not read.
 function notificationMessage(urls) {
-  const visibleUrls = urls.length ? urls : ["No LAN URL was detected. Check the bridge console on the host."];
-  return [
-    "Codex phone bridge is ready.",
-    "",
-    ...visibleUrls,
-    "",
-    "Open one of these URLs from a phone on the same Wi-Fi/LAN.",
-  ].join("\n");
+  const visibleUrls = urls.length ? urls : ["LAN内のURLを検出できませんでした。Mac側のコンソールを確認してください。"];
+  return ["スマホブリッジを起動しました。", "", ...visibleUrls, "", "同じWi-Fi / LAN上のスマホから、上のURLを開いてください。"].join("\n");
+}
+
+const providerLabels = { codex: "Codex", claude: "Claude" };
+
+function providerLabel(provider) {
+  const key = String(provider || "").toLowerCase();
+  return providerLabels[key] || provider || "Codex";
 }
 
 function taskStatusLabel(status) {
-  if (status === "completed") return "completed";
-  if (status === "failed") return "failed";
-  if (status === "approval") return "waiting for approval";
-  return String(status || "updated");
+  if (status === "completed") return "ターン完了";
+  if (status === "failed") return "失敗";
+  if (status === "approval") return "承認待ち";
+  if (status === "interrupted") return "中断";
+  return String(status || "更新");
+}
+
+const eventTypeLabels = {
+  bridge_started: "ブリッジ起動",
+  turn_completed: "ターン完了",
+  approval_required: "承認待ち",
+  question_required: "返信待ち",
+  test_failed: "失敗",
+  connection_lost: "接続切断",
+  history_sync_failed: "履歴同期の失敗",
+  long_running: "長時間実行",
+};
+
+function eventTypeLabel(type) {
+  return eventTypeLabels[String(type || "")] || String(type || "").replace(/_/g, " ");
+}
+
+const severityLabels = { info: "情報", warning: "注意", error: "エラー" };
+
+// The host's own clock. An ISO timestamp in UTC is not a time anyone reads at a
+// glance, and the person reading this is standing in the timezone the work ran
+// in.
+function localTimeLabel(value) {
+  const at = new Date(value);
+  if (Number.isNaN(at.getTime())) return String(value || "");
+  return at.toLocaleString("ja-JP", { hour12: false });
 }
 
 function taskNotificationMessage(event = {}) {
-  const provider = event.provider || "Codex";
-  const lines = [
-    `${provider} task ${taskStatusLabel(event.status)}.`,
-    "",
-  ];
-  if (event.threadId) lines.push(`Thread: ${event.threadId}`);
-  if (event.turnId) lines.push(`Turn: ${event.turnId}`);
-  if (event.model) lines.push(`Model: ${event.model}`);
-  if (event.workdir) lines.push(`Workdir: ${event.workdir}`);
+  const lines = [`${providerLabel(event.provider)}：${taskStatusLabel(event.status)}`, ""];
+  if (event.threadId) lines.push(`スレッド: ${event.threadId}`);
+  if (event.turnId) lines.push(`ターン: ${event.turnId}`);
+  if (event.model) lines.push(`モデル: ${event.model}`);
+  if (event.workdir) lines.push(`作業フォルダ: ${event.workdir}`);
   if (event.message) lines.push("", redactNotificationText(event.message));
-  if (Array.isArray(event.urls) && event.urls.length) lines.push("", "Links:", ...event.urls.map(stripTokenFromUrl));
+  if (Array.isArray(event.urls) && event.urls.length) lines.push("", "リンク:", ...event.urls.map(stripTokenFromUrl));
   else if (event.url) lines.push("", stripTokenFromUrl(event.url));
   return redactNotificationText(lines.join("\n"));
 }
@@ -140,7 +168,7 @@ function eventTags(event = {}) {
 function normalizeEvent(event = {}) {
   const type = String(event.type || event.status || "bridge_started");
   const severity = eventSeverity({ ...event, type });
-  const title = String(event.title || type.replace(/_/g, " "));
+  const title = String(event.title || eventTypeLabel(type));
   const createdAt = event.createdAt || new Date().toISOString();
   return {
     type,
@@ -163,13 +191,15 @@ function eventNotificationMessage(event = {}) {
     "",
     normalized.message,
     "",
-    `Type: ${normalized.type}`,
-    `Severity: ${normalized.severity}`,
-    `Created: ${normalized.createdAt}`,
+    // The raw type is kept alongside its label: it is what a filter or a search
+    // in the channel is written against.
+    `種別: ${eventTypeLabel(normalized.type)} (${normalized.type})`,
+    `重要度: ${severityLabels[normalized.severity] || normalized.severity}`,
+    `発生: ${localTimeLabel(normalized.createdAt)}`,
   ];
-  if (normalized.projectName) lines.push(`Project: ${normalized.projectName}`);
-  if (normalized.threadTitle) lines.push(`Thread title: ${normalized.threadTitle}`);
-  if (normalized.threadId) lines.push(`Thread: ${normalized.threadId}`);
+  if (normalized.projectName) lines.push(`プロジェクト: ${normalized.projectName}`);
+  if (normalized.threadTitle) lines.push(`スレッド名: ${normalized.threadTitle}`);
+  if (normalized.threadId) lines.push(`スレッド: ${normalized.threadId}`);
   if (normalized.url) lines.push("", normalized.url);
   return lines.join("\n");
 }
@@ -314,7 +344,7 @@ async function notifyTaskEvent(event = {}, options = {}) {
   return notifyEvent(
     {
       type: statusToType[status] || status,
-      title: `${event.provider || "Codex"} task ${taskStatusLabel(status)}`,
+      title: `${providerLabel(event.provider)}：${taskStatusLabel(status)}`,
       message: taskNotificationMessage({ ...event, url: stripTokenFromUrl(event.url), urls: (event.urls || []).map(stripTokenFromUrl) }),
       threadId: event.threadId,
       projectName: event.projectName || event.workdir?.split(/[\\/]/).filter(Boolean).pop() || "",
@@ -372,6 +402,7 @@ async function notifyEvent(event = {}, options = {}) {
 module.exports = {
   bridgeUrls,
   eventNotificationMessage,
+  eventTypeLabel,
   notificationEventDedupeMs,
   notificationEventsEnabled,
   notificationMessage,

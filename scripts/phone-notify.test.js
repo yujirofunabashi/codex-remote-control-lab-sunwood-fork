@@ -62,7 +62,7 @@ test("notifyBridgeUrls posts to configured ntfy topic", async () => {
   assert.equal(requests[0].options.method, "POST");
   assert.ok(requests[0].options.signal);
   assert.equal(requests[0].options.headers.authorization, "Bearer tok");
-  assert.match(requests[0].options.body, /Codex phone bridge is ready/);
+  assert.match(requests[0].options.body, /スマホブリッジを起動しました/);
 });
 
 test("notifyBridgeUrls rejects non-https ntfy servers", async () => {
@@ -118,10 +118,10 @@ test("notifyBridgeUrls omits provider link fields without a LAN URL", async () =
     { type: "pushover", ok: true },
   ]);
   assert.equal(requests[0].options.headers.click, undefined);
-  assert.match(requests[0].options.body, /No LAN URL was detected/);
+  assert.match(requests[0].options.body, /LAN内のURLを検出できませんでした/);
   assert.equal(requests[1].options.body.has("url"), false);
   assert.equal(requests[1].options.body.has("url_title"), false);
-  assert.match(requests[1].options.body.get("message"), /No LAN URL was detected/);
+  assert.match(requests[1].options.body.get("message"), /LAN内のURLを検出できませんでした/);
 });
 
 test("notifyBridgeUrls posts to configured Discord webhook", async () => {
@@ -139,7 +139,7 @@ test("notifyBridgeUrls posts to configured Discord webhook", async () => {
   assert.equal(requests[0].options.method, "POST");
   assert.ok(requests[0].options.signal);
   assert.equal(requests[0].options.headers["content-type"], "application/json");
-  assert.match(JSON.parse(requests[0].options.body).content, /Codex phone bridge is ready/);
+  assert.match(JSON.parse(requests[0].options.body).content, /スマホブリッジを起動しました/);
   assert.deepEqual(JSON.parse(requests[0].options.body).allowed_mentions, { parse: [] });
 });
 
@@ -167,8 +167,8 @@ test("notifyTaskEvent posts a Discord completion notification", async () => {
   assert.deepEqual(results, [{ type: "discord", ok: true }]);
   assert.equal(requests[0].url, "https://discord.com/api/webhooks/123/abc");
   const body = JSON.parse(requests[0].options.body);
-  assert.match(body.content, /codex task completed/);
-  assert.match(body.content, /Thread: thread-123/);
+  assert.match(body.content, /Codex：ターン完了/);
+  assert.match(body.content, /スレッド: thread-123/);
   assert.match(body.content, /http:\/\/100\.64\.0\.1:45214/);
   assert.doesNotMatch(body.content, /secret/);
   assert.deepEqual(body.allowed_mentions, { parse: [] });
@@ -204,7 +204,7 @@ test("notifyTaskEvent can force completion notifications for configured provider
 
   assert.deepEqual(results, [{ type: "discord", ok: true }]);
   assert.equal(requests.length, 1);
-  assert.match(JSON.parse(requests[0].options.body).content, /codex task completed/);
+  assert.match(JSON.parse(requests[0].options.body).content, /Codex：ターン完了/);
 });
 
 test("notifyEvent dedupes and strips tokenized URLs", async () => {
@@ -216,8 +216,8 @@ test("notifyEvent dedupes and strips tokenized URLs", async () => {
   };
   const event = {
     type: "approval_required",
-    title: "Approval required",
-    message: "Approve npm test",
+    title: "承認待ち",
+    message: "npm test の承認待ちです",
     threadId: "thread-123",
     url: "http://100.64.0.1:45214/?token=secret&thread=thread-123",
   };
@@ -278,8 +278,37 @@ test("taskNotificationMessage includes failure details", () => {
       threadId: "session-123",
       message: "process exited",
     }),
-    /claude task failed[\s\S]*process exited/,
+    /Claude：失敗[\s\S]*process exited/,
   );
+});
+
+test("a notification reads in the language the UI it links to is written in", () => {
+  // It arrives on a phone and is read by a person. Only the identifiers stay as
+  // they are - a thread id, a model name, the raw event type kept beside its
+  // label so a search in the channel still has something to match.
+  const message = eventNotificationMessage({
+    type: "approval_required",
+    title: "承認待ち",
+    message: "Bash の承認待ちです",
+    projectName: "codex-remote-control-lab-air",
+    severity: "warning",
+    createdAt: "2026-08-06T01:23:45.000Z",
+    threadId: "session-123",
+  });
+
+  assert.match(message, /種別: 承認待ち \(approval_required\)/);
+  assert.match(message, /重要度: 注意/);
+  assert.match(message, /プロジェクト: codex-remote-control-lab-air/);
+  assert.match(message, /スレッド: session-123/);
+  assert.doesNotMatch(message, /Type:|Severity:|Created:|Project:|Thread:/);
+  // The host's own clock, not an ISO timestamp in UTC.
+  assert.doesNotMatch(message, /2026-08-06T01:23:45/);
+  assert.match(message, new RegExp(`発生: ${new Date("2026-08-06T01:23:45.000Z").toLocaleString("ja-JP", { hour12: false }).replace(/[/]/g, "\\/")}`));
+});
+
+test("an event with no title of its own is still named in Japanese", () => {
+  assert.match(eventNotificationMessage({ type: "long_running" }), /^長時間実行/);
+  assert.match(eventNotificationMessage({ type: "turn_completed" }), /種別: ターン完了 \(turn_completed\)/);
 });
 
 test("taskNotificationMessage can include multiple task links", () => {
@@ -290,7 +319,7 @@ test("taskNotificationMessage can include multiple task links", () => {
     url: "http://192.168.11.8:45214/?token=secret",
   });
 
-  assert.match(message, /Links:/);
+  assert.match(message, /リンク:/);
   assert.match(message, /http:\/\/192\.168\.11\.8:45214/);
   assert.match(message, /http:\/\/100\.64\.0\.1:45214/);
   assert.equal(message.match(/http:\/\//g).length, 2);
