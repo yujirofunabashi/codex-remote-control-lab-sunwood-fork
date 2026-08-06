@@ -3,6 +3,9 @@ const assert = require("node:assert/strict");
 
 const {
   capTerminalHistory,
+  isMarkdownTableStart,
+  parseMarkdownTable,
+  splitMarkdownTableRow,
   bridgeIdFromBaseUrl,
   bridgeThreadKey,
   compactWorkspacePath,
@@ -341,4 +344,45 @@ test("no command is offered where none would work", () => {
   assert.equal(resumeCommandForThread({ id: "claude:6f9e", cwd: "/Users/you/Prj/example" }), "");
   assert.equal(resumeCommandForThread({ id: "thread-1", provider: "codex", cwd: "/Users/you/Prj/example" }), "");
   assert.equal(resumeCommandForThread({}), "");
+});
+
+test("a pipe table is recognized only once its divider row confirms it", () => {
+  assert.equal(isMarkdownTableStart(["| a | b |", "| --- | --- |"], 0), true);
+  assert.equal(isMarkdownTableStart(["| a | b |", "| :-- | --: |"], 0), true);
+  // Prose that merely contains a pipe is not a table.
+  assert.equal(isMarkdownTableStart(["run a | b", "then something"], 0), false);
+  // A divider whose column count disagrees with the header is not a table.
+  assert.equal(isMarkdownTableStart(["| a | b |", "| --- |"], 0), false);
+  assert.equal(isMarkdownTableStart(["| a | b |"], 0), false);
+});
+
+test("a table parses into header, alignment and padded rows", () => {
+  const table = parseMarkdownTable(["| ファイル | 内容 |", "| --- | ---: |", "| a.js | ロガー |", "| b.js |", "", "next"], 0);
+  assert.deepEqual(table.header, ["ファイル", "内容"]);
+  assert.deepEqual(table.align, ["", "right"]);
+  assert.deepEqual(table.rows, [
+    ["a.js", "ロガー"],
+    ["b.js", ""],
+  ]);
+  // Stops at the blank line so the paragraph after it is not swallowed.
+  assert.equal(table.endIndex, 4);
+});
+
+test("tables written without outer pipes still parse", () => {
+  const table = parseMarkdownTable(["a | b", "--- | ---", "1 | 2"], 0);
+  assert.deepEqual(table.header, ["a", "b"]);
+  assert.deepEqual(table.rows, [["1", "2"]]);
+});
+
+test("an escaped pipe stays inside its cell", () => {
+  assert.deepEqual(splitMarkdownTableRow("| a \\| b | c |"), ["a | b", "c"]);
+});
+
+test("a row with more cells than the header is trimmed to the header", () => {
+  const table = parseMarkdownTable(["| a | b |", "| --- | --- |", "| 1 | 2 | 3 |"], 0);
+  assert.deepEqual(table.rows, [["1", "2"]]);
+});
+
+test("text that is not a table returns nothing to render", () => {
+  assert.equal(parseMarkdownTable(["just prose", "more prose"], 0), null);
 });

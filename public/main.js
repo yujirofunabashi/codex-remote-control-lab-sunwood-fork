@@ -1703,13 +1703,17 @@ function formatRelativeTime(timestamp) {
   return `${months || 1}か月`;
 }
 
-function isBlockStart(line) {
+// A table needs its divider row to identify itself, so this takes the whole
+// list: called with one line it could not tell a table apart from prose.
+function isBlockStart(lines, index) {
+  const line = lines[index];
   return (
     /^```/.test(line) ||
     /^#{1,4}\s+/.test(line) ||
     /^>\s?/.test(line) ||
     /^\s*[-*]\s+/.test(line) ||
-    /^\s*\d+[.)]\s+/.test(line)
+    /^\s*\d+[.)]\s+/.test(line) ||
+    Boolean(uiUtils.isMarkdownTableStart?.(lines, index))
   );
 }
 
@@ -1874,6 +1878,25 @@ function renderInlineMarkdown(text) {
     });
 }
 
+function parseMarkdownTable(lines, index) {
+  if (!uiUtils.parseMarkdownTable) return null;
+  return uiUtils.parseMarkdownTable(lines, index);
+}
+
+// Wrapped in its own scroller: a table wide enough to matter is wider than a
+// phone, and the alternative is the whole conversation scrolling sideways.
+function renderMarkdownTable(table) {
+  const cell = (tag, value, align) => {
+    const style = align ? ` style="text-align:${align}"` : "";
+    return `<${tag}${style}>${renderInlineMarkdown(value)}</${tag}>`;
+  };
+  const head = `<tr>${table.header.map((value, column) => cell("th", value, table.align[column])).join("")}</tr>`;
+  const body = table.rows
+    .map((row) => `<tr>${row.map((value, column) => cell("td", value, table.align[column])).join("")}</tr>`)
+    .join("");
+  return `<div class="markdown-table"><table><thead>${head}</thead>${body ? `<tbody>${body}</tbody>` : ""}</table></div>`;
+}
+
 function renderMarkdown(text, options = {}) {
   const headingOffset = options.headingOffset ?? 1;
   const lines = String(text || "").replace(/\r\n?/g, "\n").split("\n");
@@ -1918,6 +1941,13 @@ function renderMarkdown(text, options = {}) {
       continue;
     }
 
+    const table = parseMarkdownTable(lines, index);
+    if (table) {
+      blocks.push(renderMarkdownTable(table));
+      index = table.endIndex;
+      continue;
+    }
+
     const heading = line.match(/^(#{1,4})\s+(.+)$/);
     if (heading) {
       const level = Math.min(heading[1].length + headingOffset, 6);
@@ -1958,7 +1988,7 @@ function renderMarkdown(text, options = {}) {
 
     const paragraph = [line.trim()];
     index += 1;
-    while (index < lines.length && lines[index].trim() && !isBlockStart(lines[index])) {
+    while (index < lines.length && lines[index].trim() && !isBlockStart(lines, index)) {
       paragraph.push(lines[index].trim());
       index += 1;
     }

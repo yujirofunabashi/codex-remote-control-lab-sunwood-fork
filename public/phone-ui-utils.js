@@ -584,6 +584,66 @@
     return [selected, ...rest].slice(0, max);
   }
 
+  // A pipe table is only a table once the row under the header says so, which
+  // is what keeps a line of prose containing "|" from being eaten. The cells
+  // come back as raw markdown - inline rendering belongs to the caller.
+  function splitMarkdownTableRow(line) {
+    const text = String(line || "").trim().replace(/^\|/, "").replace(/\|$/, "");
+    const cells = [];
+    let current = "";
+    for (let index = 0; index < text.length; index += 1) {
+      const char = text[index];
+      if (char === "\\" && text[index + 1] === "|") {
+        current += "|";
+        index += 1;
+        continue;
+      }
+      if (char === "|") {
+        cells.push(current.trim());
+        current = "";
+        continue;
+      }
+      current += char;
+    }
+    cells.push(current.trim());
+    return cells;
+  }
+
+  function markdownTableAlignment(cell) {
+    const text = String(cell || "").trim();
+    if (!/^:?-{1,}:?$/.test(text)) return null;
+    if (text.startsWith(":") && text.endsWith(":")) return "center";
+    if (text.endsWith(":")) return "right";
+    if (text.startsWith(":")) return "left";
+    return "";
+  }
+
+  function isMarkdownTableStart(lines = [], index = 0) {
+    const header = lines[index];
+    const divider = lines[index + 1];
+    if (!header || !divider || !header.includes("|") || !divider.includes("|")) return false;
+    const alignments = splitMarkdownTableRow(divider).map(markdownTableAlignment);
+    if (!alignments.length || alignments.some((value) => value === null)) return false;
+    return splitMarkdownTableRow(header).length === alignments.length;
+  }
+
+  function parseMarkdownTable(lines = [], index = 0) {
+    if (!isMarkdownTableStart(lines, index)) return null;
+    const header = splitMarkdownTableRow(lines[index]);
+    const align = splitMarkdownTableRow(lines[index + 1]).map(markdownTableAlignment);
+    const rows = [];
+    let cursor = index + 2;
+    while (cursor < lines.length && lines[cursor].trim() && lines[cursor].includes("|")) {
+      const cells = splitMarkdownTableRow(lines[cursor]);
+      // Ragged rows are common in generated markdown. Pad or trim to the header
+      // so the table still renders instead of collapsing back into prose.
+      while (cells.length < header.length) cells.push("");
+      rows.push(cells.slice(0, header.length));
+      cursor += 1;
+    }
+    return { header, align, rows, endIndex: cursor };
+  }
+
   return {
     defaultThreadPalette,
     terminalHistoryLimit,
@@ -634,5 +694,8 @@
     limitThreadList,
     prioritizeSelectedThread,
     threadStatusFromKey,
+    splitMarkdownTableRow,
+    isMarkdownTableStart,
+    parseMarkdownTable,
   };
 });

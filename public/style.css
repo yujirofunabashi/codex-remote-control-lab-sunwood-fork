@@ -460,6 +460,16 @@ body.app--pwa-standalone .titlebar {
   padding-top: max(0px, env(safe-area-inset-top));
 }
 
+/* The padding above only has room if the row it sits in grows with it. Below
+   820px that row is already `auto` and absorbs it, so this is scoped above the
+   breakpoint - unscoped it would outrank the narrow layout and put the fixed
+   row back on phones. */
+@media (min-width: 821px) {
+  body.app--pwa-standalone .workspace {
+    grid-template-rows: calc(52px + env(safe-area-inset-top)) auto auto minmax(0, 1fr);
+  }
+}
+
 body.app--pwa-standalone .workspace {
   background: var(--bg);
 }
@@ -2748,7 +2758,8 @@ body[data-terminal-input-mode="keys"] .terminal-input-mode-button {
 .entry-body ul,
 .entry-body ol,
 .entry-body blockquote,
-.entry-body pre {
+.entry-body pre,
+.entry-body .markdown-table {
   margin: 0 0 14px;
 }
 
@@ -2764,7 +2775,8 @@ body[data-terminal-input-mode="keys"] .terminal-input-mode-button {
 .entry-body ul:last-child,
 .entry-body ol:last-child,
 .entry-body blockquote:last-child,
-.entry-body pre:last-child {
+.entry-body pre:last-child,
+.entry-body .markdown-table:last-child {
   margin-bottom: 0;
 }
 
@@ -2818,6 +2830,47 @@ body[data-terminal-input-mode="keys"] .terminal-input-mode-button {
   border-left: 3px solid var(--quote);
   padding-left: 12px;
   color: var(--muted);
+}
+
+/* A table wide enough to be worth drawing is wider than a phone. It scrolls
+   inside its own box so the conversation itself never moves sideways. */
+.markdown-table {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.markdown-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.94em;
+}
+
+.markdown-table th,
+.markdown-table td {
+  padding: 8px 11px;
+  border-bottom: 1px solid var(--line);
+  border-right: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+.markdown-table th:last-child,
+.markdown-table td:last-child {
+  border-right: 0;
+}
+
+.markdown-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.markdown-table thead th {
+  background: var(--soft);
+  font-weight: 700;
+  white-space: nowrap;
 }
 
 .entry-body a {
@@ -3217,13 +3270,15 @@ body[data-terminal-input-mode="keys"] .terminal-input-mode-button {
   max-width: 100%;
   min-height: 116px;
   min-width: 0;
-  margin: 0 auto 20px;
+  /* Installed to the home screen there is no browser chrome under this, so the
+     home indicator sits where the rounded bottom edge is drawn. Terminal mode
+     already clears it; the chat composer has to do the same. */
+  margin: 0 auto max(6px, env(safe-area-inset-bottom));
   border: 1px solid var(--composer-border);
   border-radius: 24px;
   background: var(--composer-bg);
   box-shadow: var(--composer-shadow);
   overflow: visible;
-  margin-bottom: 6px;
 }
 
 body[data-main-view="terminal"] .composer {
