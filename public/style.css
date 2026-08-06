@@ -2002,6 +2002,20 @@ body.terminal-focus-mode .composer-footer {
   font-weight: 650;
 }
 
+/* Anchors 最新へ to the bottom of the log. The button used to be positioned
+   against .conversation, whose bottom edge is the composer, so it sat on top of
+   the send row instead of over the end of the chat. */
+.log-shell {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  width: 100%;
+  max-width: 100%;
+  min-height: 0;
+  min-width: 0;
+}
+
 .log {
   flex: 1 1 auto;
   width: 100%;
@@ -2543,7 +2557,8 @@ body.terminal-nowrap .terminal-detail {
   font-size: 11px;
 }
 
-.terminal-latest-button {
+.terminal-latest-button,
+.chat-latest-button {
   position: absolute;
   right: 16px;
   bottom: 14px;

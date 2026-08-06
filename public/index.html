@@ -212,7 +212,10 @@
         <div class="content-grid">
           <section class="conversation" aria-label="会話">
             <section id="globalApprovalBanner" class="global-approval-banner hidden" aria-live="polite"></section>
-            <div id="log" class="log" aria-live="polite"></div>
+            <div id="logShell" class="log-shell">
+              <div id="log" class="log" aria-live="polite"></div>
+              <button type="button" id="chatLatestButton" class="chat-latest-button hidden">最新へ</button>
+            </div>
             <section id="mainTerminalView" class="terminal-view hidden" aria-label="Terminal">
               <header class="terminal-card-header">
                 <div class="terminal-identity">

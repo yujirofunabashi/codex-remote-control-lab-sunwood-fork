@@ -1,5 +1,7 @@
 const uiUtils = window.CodexPhoneUiUtils || {};
 const log = document.querySelector("#log");
+const logShell = document.querySelector("#logShell");
+const chatLatestButton = document.querySelector("#chatLatestButton");
 const meta = document.querySelector("#meta");
 const connectButton = document.querySelector("#connect");
 const searchButton = document.querySelector("#searchButton");
@@ -2131,7 +2133,43 @@ function updateStatusGroup(group) {
   );
 }
 
+// The chat log repinned itself to the bottom on every streaming delta, so
+// scrolling back through an answer while it was still being written yanked the
+// view away again. Terminal already had the rule this borrows: follow the tail
+// only for a reader who is parked at it, and offer 最新へ to anyone who is not.
+const chatBottomThreshold = 40;
+
+function isChatNearBottom() {
+  if (!log) return true;
+  return log.scrollHeight - log.scrollTop - log.clientHeight < chatBottomThreshold;
+}
+
+function updateChatLatestButton() {
+  if (!chatLatestButton || !log) return;
+  chatLatestButton.classList.toggle("hidden", mainViewMode !== "chat" || isChatNearBottom());
+}
+
+function scrollChatToBottom() {
+  if (!log) return;
+  log.scrollTop = log.scrollHeight;
+  updateChatLatestButton();
+}
+
+// renderHistory wipes the log and replays every message through addEntry. Those
+// replays are not new arrivals and must not each decide where the view sits, so
+// the bulk redraw owns the scroll position for its whole run.
+let chatBulkRender = false;
+
+// Callers measure before they append: once the new content is in the DOM the
+// reader is no longer "near the bottom" by their own doing.
+function settleChatScroll(stickToBottom) {
+  if (chatBulkRender) return;
+  if (stickToBottom) scrollChatToBottom();
+  else updateChatLatestButton();
+}
+
 function addStatusGroupItem(text) {
+  const stickToBottom = isChatNearBottom();
   if (!statusGroup || statusGroup.items.length >= 12) {
     const el = document.createElement("article");
     el.className = "entry status status-group";
@@ -2164,7 +2202,7 @@ function addStatusGroupItem(text) {
   }
   statusGroup.items.push(text);
   updateStatusGroup(statusGroup);
-  log.scrollTop = log.scrollHeight;
+  settleChatScroll(stickToBottom);
 }
 
 // An empty thread used to be an empty scroll area: most of the screen blank,
@@ -2208,6 +2246,8 @@ function addEntry(kind, text, images = [], options = {}) {
     return null;
   }
   if (kind === "user" && !String(text || "").trim() && !images.length) return null;
+  // Your own message is the exception: you just sent it, so you want to see it.
+  const stickToBottom = kind === "user" || isChatNearBottom();
   statusGroup = null;
   const el = document.createElement("article");
   el.className = `entry ${kind}`;
@@ -2235,7 +2275,7 @@ function addEntry(kind, text, images = [], options = {}) {
   el.append(avatar, body, tools);
   log.appendChild(el);
   syncLogEmptyState();
-  log.scrollTop = log.scrollHeight;
+  settleChatScroll(stickToBottom);
   return body;
 }
 
@@ -2490,6 +2530,7 @@ function restoreScrollPositions() {
       terminalTranscript.scrollTop = terminalTranscript.scrollHeight;
     }
     updateTerminalLatestButton();
+    updateChatLatestButton();
   });
 }
 
@@ -2912,6 +2953,26 @@ function renderHistory(history) {
   // that is no longer in the log: the answer appeared, vanished, and never came
   // back. The text is carried across instead, into a bubble that is on screen.
   const liveText = assistantEntry?.markdownSource || "";
+  // replaceChildren() drops scrollTop to 0, and the rebuild re-runs addEntry for
+  // every message, so each one would read "near the bottom" off a log that is
+  // still empty. Take the reader's position before the wipe, put it back after.
+  const stickToBottom = isChatNearBottom();
+  const previousScrollTop = log.scrollTop;
+  chatBulkRender = true;
+  try {
+    renderHistoryEntries(history, liveText);
+  } finally {
+    chatBulkRender = false;
+  }
+  if (stickToBottom) {
+    scrollChatToBottom();
+    return;
+  }
+  log.scrollTop = previousScrollTop;
+  updateChatLatestButton();
+}
+
+function renderHistoryEntries(history, liveText) {
   log.replaceChildren();
   statusGroup = null;
   assistantEntry = null;
@@ -4477,7 +4538,9 @@ function setMainView(view) {
   saveScrollPositions();
   mainViewMode = view === "terminal" ? "terminal" : "chat";
   localStorage.setItem(mainViewStorageKey, mainViewMode);
-  log.classList.toggle("hidden", mainViewMode !== "chat");
+  // The shell, not the log: hiding only the log would leave 最新へ floating over
+  // the terminal view.
+  logShell.classList.toggle("hidden", mainViewMode !== "chat");
   mainTerminalView.classList.toggle("hidden", mainViewMode !== "terminal");
   terminalOps?.classList.toggle("hidden", mainViewMode !== "terminal");
   chatViewButton.classList.toggle("active", mainViewMode === "chat");
@@ -6767,6 +6830,7 @@ function connect({ preserveHistory = false, freshThread = false, workdir = "" } 
         unreadChatCount += 1;
         updateUnreadBadges();
       }
+      const stickToBottom = isChatNearBottom();
       if (!assistantEntry) {
         assistantEntry = addEntry("assistant", "", [], {
           outputGroup: liveOutputGroup || `live-${Date.now()}`,
@@ -6774,7 +6838,7 @@ function connect({ preserveHistory = false, freshThread = false, workdir = "" } 
         });
       }
       setEntryText(assistantEntry, "assistant", `${assistantEntry.markdownSource || ""}${msg.text}`);
-      log.scrollTop = log.scrollHeight;
+      settleChatScroll(stickToBottom);
       return;
     }
     if (msg.type === "approval") {
@@ -7111,7 +7175,13 @@ terminalTranscript?.addEventListener("scroll", () => {
   }
   updateTerminalLatestButton();
 });
-log?.addEventListener("scroll", saveScrollPositions);
+chatLatestButton?.addEventListener("click", () => {
+  scrollChatToBottom();
+});
+log?.addEventListener("scroll", () => {
+  saveScrollPositions();
+  updateChatLatestButton();
+});
 terminalFontDownButton?.addEventListener("click", () => setTerminalFontSize(terminalFontSize - 1));
 terminalFontResetButton?.addEventListener("click", () => setTerminalFontSize(12));
 terminalFontUpButton?.addEventListener("click", () => setTerminalFontSize(terminalFontSize + 1));
