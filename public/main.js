@@ -3358,10 +3358,15 @@ function createThreadListItem(thread, options = {}) {
   const status = deriveThreadStatus(thread);
   selectButton.append(title, time);
   const threadWorkdir = workspaceKeyForThread(thread);
-  if (threadWorkdir) {
+  if (threadWorkdir) item.title = `${displayTitle}\n${threadWorkdir}`;
+  // Under a project heading almost every row repeats the folder that heading
+  // already names, and a second line of it per row is what makes the list hard
+  // to read. It is kept for the rows that genuinely sit somewhere else, which
+  // is the only case where it says anything.
+  if (threadWorkdir && threadWorkdir !== options.groupWorkdir) {
     const workdir = document.createElement("span");
     workdir.className = "thread-workdir";
-    workdir.textContent = `cwd: ${compactWorkspaceLocation(threadWorkdir)}`;
+    workdir.textContent = compactWorkspaceLocation(threadWorkdir);
     workdir.title = threadWorkdir;
     selectButton.append(workdir);
   }
@@ -3633,7 +3638,7 @@ function renderThreadList() {
 
     const visibleThreads = limitedVisibleThreads(threads, projectVisibleLimit(project, threads.length));
     for (const thread of visibleThreads) {
-      group.appendChild(createThreadListItem(thread));
+      group.appendChild(createThreadListItem(thread, { groupWorkdir: projectWorkdir }));
     }
 
     if (threads.length > collapsedProjectRows) {
