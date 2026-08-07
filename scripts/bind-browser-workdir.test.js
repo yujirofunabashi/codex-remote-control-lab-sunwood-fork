@@ -44,7 +44,6 @@ function fakeBridge(seen) {
 
 async function bind(browser, workdir, seen, requested = []) {
   return bindBrowser(browser, "private-token", "some-thread", "claude", { workdir }, {
-    assertStorageCapacityIngress() {},
     async ensureCodexServerRunning() {},
     getBridge(threadId, provider, connectionId, options) {
       requested.push(options.workdir);
