@@ -3962,13 +3962,14 @@ function bridgeMetaText(entry, state = getBridgeState(entry.id)) {
 }
 
 // Which machine this bridge is running on. A port number does not answer that,
-// and with a bridge on each Mac it is the first thing worth knowing. The tail
-// of a hostname is the part that identifies the machine - `Yujiro-no-MacBook-
-// Air` and `minijiro-Mac-mini` differ at the end, so trimming from the front is
-// what keeps them apart. PHONE_BRIDGE_LABEL overrides it outright.
+// and with a bridge on each Mac it is the first thing worth knowing. The model
+// in the hostname is what these get called day to day, so an Air reads as
+// "Air"; PHONE_MACHINE_LABEL on the bridge overrides that outright.
 function shortMachineName(entry = {}, state = {}) {
+  const explicit = String(state.info?.machineLabel || "").trim();
+  if (explicit) return explicit;
   const host = state.info?.hostName || "";
-  if (uiUtils.shortHostLabel) return uiUtils.shortHostLabel(host);
+  if (uiUtils.machineLabelFromHost) return uiUtils.machineLabelFromHost(host);
   return String(host).trim().replace(/\.(local|lan|home|internal)\.?$/i, "");
 }
 

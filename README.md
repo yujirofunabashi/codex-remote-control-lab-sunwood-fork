@@ -83,6 +83,7 @@ Useful environment variables:
 PHONE_UI_PORT=45214 npm run phone
 PHONE_UI_PORT=45224 PHONE_WORKDIR=/Users/admin/Prj/some-project PHONE_APP_NAME="Slot 45224" PHONE_APP_ID=slot-45224 npm run phone
 PHONE_BRIDGE_ID=work-a PHONE_BRIDGE_LABEL=WorkA PHONE_BRIDGE_GROUP=client PHONE_BRIDGE_COLOR=#2f6f2f npm run phone
+PHONE_MACHINE_LABEL=mini npm run phone
 npm run phone:fleet
 PHONE_AGENT_PROVIDER=claude npm run phone
 PHONE_WORKDIR=/Users/admin/Prj/some-project npm run phone

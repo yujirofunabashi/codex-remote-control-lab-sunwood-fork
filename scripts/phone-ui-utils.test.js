@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 
 const {
   capTerminalHistory,
+  machineLabelFromHost,
   shortHostLabel,
   isMarkdownTableStart,
   parseMarkdownTable,
@@ -406,4 +407,24 @@ test("a missing host name produces no label rather than a stray separator", () =
   assert.equal(shortHostLabel(""), "");
   assert.equal(shortHostLabel(null), "");
   assert.equal(shortHostLabel(undefined), "");
+});
+
+test("a Mac is labelled by its model, which is what it gets called", () => {
+  assert.equal(machineLabelFromHost("Yujiro-no-MacBook-Air.local"), "Air");
+  assert.equal(machineLabelFromHost("minijiro-Mac-mini.local"), "mini");
+  assert.equal(machineLabelFromHost("Macmini.local"), "mini");
+  assert.equal(machineLabelFromHost("MacBookAir.local"), "Air");
+});
+
+test("a MacBook Pro is not read as a Mac Pro", () => {
+  assert.equal(machineLabelFromHost("work-MacBook-Pro.local"), "Pro");
+  assert.equal(machineLabelFromHost("studio-Mac-Pro.local"), "Mac Pro");
+  assert.equal(machineLabelFromHost("desk-Mac-Studio.local"), "Studio");
+  assert.equal(machineLabelFromHost("family-iMac.local"), "iMac");
+});
+
+test("a hostname naming no model keeps its distinguishing tail", () => {
+  assert.equal(machineLabelFromHost("build-box-01.local"), "box-01");
+  assert.equal(machineLabelFromHost("air"), "air");
+  assert.equal(machineLabelFromHost(""), "");
 });

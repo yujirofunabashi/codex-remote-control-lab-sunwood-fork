@@ -500,6 +500,9 @@ const bridgeStartedAt = Date.now();
 const phoneBridgeId = appIdSlug(process.env.PHONE_BRIDGE_ID, `${path.basename(workdir)}-${uiPort}`);
 const phoneBridgeLabel = String(process.env.PHONE_BRIDGE_LABEL || process.env.PHONE_BRIDGE_REGISTRY_NAME || path.basename(workdir) || phoneAppShortName).trim();
 const phoneBridgeGroup = String(process.env.PHONE_BRIDGE_GROUP || "").trim();
+// What to call this Mac in the phone UI. The hostname carries the model and the
+// phone reads it, so this is only needed where that guess is wrong or too long.
+const phoneMachineLabel = String(process.env.PHONE_MACHINE_LABEL || "").trim();
 const phoneBridgeColor = String(process.env.PHONE_BRIDGE_COLOR || "").trim();
 let notificationBridgeUrls = [];
 let codexProcess = null;
@@ -588,6 +591,7 @@ function bridgeInfoPayload() {
     startedAt: bridgeStartedAt,
     uiPort,
     hostName: os.hostname(),
+    machineLabel: phoneMachineLabel || null,
     workdir,
     cwd: workdir,
     repoRoot,

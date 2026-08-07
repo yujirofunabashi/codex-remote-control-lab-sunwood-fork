@@ -584,15 +584,43 @@
     return [selected, ...rest].slice(0, max);
   }
 
+  // Apple puts the model in the default hostname, and the model is what anyone
+  // actually calls the machine - "Air", not "Yujiro-no-MacBook-Air". Checked
+  // longest-first so a MacBook Pro is not read as a Mac Pro.
+  const macModelLabels = [
+    [/macbook[\s_-]*air/i, "Air"],
+    [/macbook[\s_-]*pro/i, "Pro"],
+    [/macbook/i, "MacBook"],
+    [/mac[\s_-]*mini/i, "mini"],
+    [/mac[\s_-]*studio/i, "Studio"],
+    [/imac/i, "iMac"],
+    [/mac[\s_-]*pro/i, "Mac Pro"],
+  ];
+
+  function stripHostSuffix(hostName) {
+    return String(hostName || "")
+      .trim()
+      .replace(/\.(local|lan|home|internal)\.?$/i, "")
+      .replace(/\.$/, "");
+  }
+
+  // A hostname that names no model falls back to its tail, which is still the
+  // half that tells two machines apart.
+  function machineLabelFromHost(hostName) {
+    const host = stripHostSuffix(hostName);
+    if (!host) return "";
+    for (const [pattern, label] of macModelLabels) {
+      if (pattern.test(host)) return label;
+    }
+    return shortHostLabel(host);
+  }
+
   // Hostnames identify the machine at their tail: `Yujiro-no-MacBook-Air` and
   // `minijiro-Mac-mini` agree on nothing that matters until the last segments,
   // so a label trimmed from the front is the one that stays distinguishable in
   // a narrow line. Two segments is what carries an Apple model name.
   function shortHostLabel(hostName, segments = 2) {
-    const host = String(hostName || "")
-      .trim()
-      .replace(/\.(local|lan|home|internal)\.?$/i, "")
-      .replace(/\.$/, "");
+    const host = stripHostSuffix(hostName);
     if (!host) return "";
     const parts = host.split("-").filter(Boolean);
     const keep = Math.max(1, Number(segments) || 2);
@@ -710,6 +738,7 @@
     limitThreadList,
     prioritizeSelectedThread,
     threadStatusFromKey,
+    machineLabelFromHost,
     shortHostLabel,
     splitMarkdownTableRow,
     isMarkdownTableStart,
