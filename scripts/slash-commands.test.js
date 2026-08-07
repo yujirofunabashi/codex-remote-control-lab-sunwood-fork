@@ -36,12 +36,8 @@ test("a description too long for a phone row is cut with a marker", () => {
   assert.ok(short.endsWith("…"));
 });
 
-test("the catalog carries every command, described where a description exists", () => {
-  const catalog = slashCommandCatalog({
-    commands: ["clear", "verify", "claude-mem:do"],
-    skills: ["verify"],
-    descriptions: { verify: "作業結果が通るか確かめます。トリガー: 「検証」" },
-  });
+test("the catalog carries every command with its kind", () => {
+  const catalog = slashCommandCatalog({ commands: ["clear", "verify", "claude-mem:do"], skills: ["verify"] });
   assert.deepEqual(
     catalog.map((item) => [item.name, item.kind]),
     [
@@ -50,10 +46,38 @@ test("the catalog carries every command, described where a description exists", 
       ["claude-mem:do", "plugin"],
     ],
   );
-  assert.equal(catalog[0].description, "会話をリセットして最初から");
-  assert.equal(catalog[1].description, "作業結果が通るか確かめます");
-  // No invented sentence for a plugin command that supplied none.
-  assert.equal(catalog[2].description, "");
+  assert.ok(catalog.every((item) => item.description));
+});
+
+test("the phone's own wording outranks the blurb a skill ships", () => {
+  // A skill's frontmatter is written for matching, is often English, and runs
+  // long; the table exists precisely to replace it on a phone row.
+  const catalog = slashCommandCatalog({
+    commands: ["verify"],
+    skills: ["verify"],
+    descriptions: { verify: "Use when checking that work actually passes." },
+  });
+  assert.equal(catalog[0].description, "作業結果が本当に通るか検証する");
+});
+
+test("a skill the table does not know still shows what it says about itself", () => {
+  const catalog = slashCommandCatalog({
+    commands: ["some-local-skill"],
+    skills: ["some-local-skill"],
+    descriptions: { "some-local-skill": "社内向けの棚卸しをします。トリガー: 「棚卸し」" },
+  });
+  assert.equal(catalog[0].description, "社内向けの棚卸しをします");
+});
+
+test("a command nobody has described is listed bare rather than invented", () => {
+  const catalog = slashCommandCatalog({ commands: ["totally-unknown-command"], skills: [] });
+  assert.equal(catalog.length, 1);
+  assert.equal(catalog[0].description, "");
+});
+
+test("internal plumbing commands are not offered", () => {
+  const catalog = slashCommandCatalog({ commands: ["__remote-workflow", "workflow-launch-exec", "clear"], skills: [] });
+  assert.deepEqual(catalog.map((item) => item.name), ["clear"]);
 });
 
 test("built-ins come first, then skills, then plugins, alphabetical within each", () => {
