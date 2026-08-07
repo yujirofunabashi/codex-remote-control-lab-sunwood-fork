@@ -584,6 +584,22 @@
     return [selected, ...rest].slice(0, max);
   }
 
+  // Hostnames identify the machine at their tail: `Yujiro-no-MacBook-Air` and
+  // `minijiro-Mac-mini` agree on nothing that matters until the last segments,
+  // so a label trimmed from the front is the one that stays distinguishable in
+  // a narrow line. Two segments is what carries an Apple model name.
+  function shortHostLabel(hostName, segments = 2) {
+    const host = String(hostName || "")
+      .trim()
+      .replace(/\.(local|lan|home|internal)\.?$/i, "")
+      .replace(/\.$/, "");
+    if (!host) return "";
+    const parts = host.split("-").filter(Boolean);
+    const keep = Math.max(1, Number(segments) || 2);
+    if (parts.length <= keep) return parts.join("-");
+    return parts.slice(-keep).join("-");
+  }
+
   // A pipe table is only a table once the row under the header says so, which
   // is what keeps a line of prose containing "|" from being eaten. The cells
   // come back as raw markdown - inline rendering belongs to the caller.
@@ -694,6 +710,7 @@
     limitThreadList,
     prioritizeSelectedThread,
     threadStatusFromKey,
+    shortHostLabel,
     splitMarkdownTableRow,
     isMarkdownTableStart,
     parseMarkdownTable,

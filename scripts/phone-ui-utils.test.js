@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 
 const {
   capTerminalHistory,
+  shortHostLabel,
   isMarkdownTableStart,
   parseMarkdownTable,
   splitMarkdownTableRow,
@@ -385,4 +386,24 @@ test("a row with more cells than the header is trimmed to the header", () => {
 
 test("text that is not a table returns nothing to render", () => {
   assert.equal(parseMarkdownTable(["just prose", "more prose"], 0), null);
+});
+
+test("a host label keeps the end of the name, where the machine is identified", () => {
+  assert.equal(shortHostLabel("Yujiro-no-MacBook-Air.local"), "MacBook-Air");
+  assert.equal(shortHostLabel("minijiro-Mac-mini.local"), "Mac-mini");
+  assert.equal(shortHostLabel("Mac-mini"), "Mac-mini");
+  assert.equal(shortHostLabel("air"), "air");
+});
+
+test("host labels drop only local-network suffixes", () => {
+  assert.equal(shortHostLabel("mini-codex.lan"), "mini-codex");
+  assert.equal(shortHostLabel("build-box.internal."), "build-box");
+  // A name that is not a local suffix stays part of the label.
+  assert.equal(shortHostLabel("desk-mac.example.com"), "desk-mac.example.com");
+});
+
+test("a missing host name produces no label rather than a stray separator", () => {
+  assert.equal(shortHostLabel(""), "");
+  assert.equal(shortHostLabel(null), "");
+  assert.equal(shortHostLabel(undefined), "");
 });

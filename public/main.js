@@ -3366,7 +3366,10 @@ function createThreadListItem(thread, options = {}) {
   if (threadWorkdir && threadWorkdir !== options.groupWorkdir) {
     const workdir = document.createElement("span");
     workdir.className = "thread-workdir";
-    workdir.textContent = compactWorkspaceLocation(threadWorkdir);
+    // With no heading overhead to name the project, the folder is what the row
+    // needs to say. An elided path spends its width on the shared prefix and
+    // truncates the one segment that identifies the work.
+    workdir.textContent = options.showFolderName ? projectForThread(thread) : compactWorkspaceLocation(threadWorkdir);
     workdir.title = threadWorkdir;
     selectButton.append(workdir);
   }
@@ -3546,6 +3549,7 @@ function renderThreadList() {
       heading,
       createThreadListItem(currentThread, {
         displayTitle: currentTitle === "名前未設定のチャット" ? "現在のチャット" : currentTitle,
+        showFolderName: true,
       }),
     );
     threadList.appendChild(currentGroup);
@@ -3570,7 +3574,7 @@ function renderThreadList() {
     // Same cap and the same way past it: without one, work older than the
     // newest 30 is unreachable in this view.
     const shown = limitedVisibleThreads(flat, expandedProjects.has(recentViewKey) ? flat.length : collapsedRecentRows);
-    for (const thread of shown) group.appendChild(createThreadListItem(thread));
+    for (const thread of shown) group.appendChild(createThreadListItem(thread, { showFolderName: true }));
     if (flat.length > collapsedRecentRows) {
       const expanded = expandedProjects.has(recentViewKey);
       const toggle = document.createElement("button");
@@ -3957,6 +3961,17 @@ function bridgeMetaText(entry, state = getBridgeState(entry.id)) {
   return [port ? `:${port}` : "", branch, dirty, name].filter(Boolean).join(" / ") || "未確認";
 }
 
+// Which machine this bridge is running on. A port number does not answer that,
+// and with a bridge on each Mac it is the first thing worth knowing. The tail
+// of a hostname is the part that identifies the machine - `Yujiro-no-MacBook-
+// Air` and `minijiro-Mac-mini` differ at the end, so trimming from the front is
+// what keeps them apart. PHONE_BRIDGE_LABEL overrides it outright.
+function shortMachineName(entry = {}, state = {}) {
+  const host = state.info?.hostName || "";
+  if (uiUtils.shortHostLabel) return uiUtils.shortHostLabel(host);
+  return String(host).trim().replace(/\.(local|lan|home|internal)\.?$/i, "");
+}
+
 function bridgeConnectionMetaText(entry, state = getBridgeState(entry.id)) {
   const info = state.info || {};
   const status = state.status || {};
@@ -3964,7 +3979,8 @@ function bridgeConnectionMetaText(entry, state = getBridgeState(entry.id)) {
   const port = entry.port || info.uiPort || status.uiPort || "";
   const branch = displayMeta.gitBranch || "";
   const dirty = dirtyTextForDisplayWorkspace(entry, state, displayMeta);
-  return [port ? `:${port}` : "", branch, dirty].filter(Boolean).join(" / ") || bridgeMetaText(entry, state);
+  const machine = shortMachineName(entry, state);
+  return [machine, port ? `:${port}` : "", branch, dirty].filter(Boolean).join(" / ") || bridgeMetaText(entry, state);
 }
 
 function bridgeHeaderMetaText(entry, state = getBridgeState(entry.id)) {
@@ -3974,7 +3990,8 @@ function bridgeHeaderMetaText(entry, state = getBridgeState(entry.id)) {
   const port = entry.port || info.uiPort || status.uiPort || "";
   const branch = displayMeta.gitBranch || "";
   const dirty = dirtyTextForDisplayWorkspace(entry, state, displayMeta) === "変更あり" ? "変更あり" : "";
-  return [branch || (port ? `:${port}` : ""), dirty].filter(Boolean).join(" / ") || bridgeMetaText(entry, state);
+  const machine = shortMachineName(entry, state);
+  return [machine, branch || (port ? `:${port}` : ""), dirty].filter(Boolean).join(" / ") || bridgeMetaText(entry, state);
 }
 
 function workspaceMetaFromBridgeInfo(info = {}) {
