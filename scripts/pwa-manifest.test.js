@@ -34,7 +34,7 @@ test("manifest proxy base is constrained to browser preview proxy paths", () => 
   assert.equal(safeProxyBasePath("/api/file/raw"), "");
 });
 
-test("bridge icons distinguish provider and machine identity without in-image labels", () => {
+test("bridge icons distinguish provider and machine identity", () => {
   assert.equal(bridgeIconVariant({ provider: "codex", appName: "AIRCodex 46214" }), "air");
   assert.equal(bridgeIconVariant({ provider: "codex", appName: "miniCodex 45224" }), "mini");
   assert.equal(bridgeIconVariant({ provider: "claude", appName: "Claude mini" }), "mini");
