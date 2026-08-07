@@ -76,6 +76,10 @@ const bottomNavChatLabel = document.querySelector("#bottomNavChatLabel");
 const bottomNavChatBadge = document.querySelector("#bottomNavChatBadge");
 const bottomNavTerminalBadge = document.querySelector("#bottomNavTerminalBadge");
 const bottomNavApprovalBadge = document.querySelector("#bottomNavApprovalBadge");
+const commandSheet = document.querySelector("#commandSheet");
+const commandList = document.querySelector("#commandList");
+const commandSearch = document.querySelector("#commandSearch");
+const commandSheetClose = document.querySelector("#commandSheetClose");
 const prevThreadButton = document.querySelector("#prevThread");
 const nextThreadButton = document.querySelector("#nextThread");
 const threadPositionPill = document.querySelector("#threadPositionPill");
@@ -1144,6 +1148,9 @@ function syncBottomNav() {
       item.dataset.pending = String(approvalPending);
       item.disabled = !approvalPending;
     }
+    if (nav === "commands" && commandSheet && !commandSheet.classList.contains("hidden")) {
+      item.setAttribute("aria-current", "page");
+    }
   }
   if (bottomNavChatLabel && chatViewLabel) bottomNavChatLabel.textContent = chatViewLabel.textContent || "チャット";
   if (bottomNavApprovalBadge) {
@@ -1151,6 +1158,86 @@ function syncBottomNav() {
     bottomNavApprovalBadge.classList.toggle("hidden", !approvalPending);
   }
 }
+
+// The list Claude reported for this session. Empty until the first turn of a
+// fresh bridge has opened, which is why the sheet says so rather than looking
+// broken.
+let slashCommands = [];
+
+function setSlashCommands(next) {
+  if (!Array.isArray(next)) return;
+  slashCommands = next;
+  if (commandSheet && !commandSheet.classList.contains("hidden")) renderCommandList();
+  syncBottomNav();
+}
+
+const commandKindLabels = { builtin: "組み込み", skill: "スキル", plugin: "プラグイン" };
+
+function renderCommandList() {
+  if (!commandList) return;
+  const query = String(commandSearch?.value || "").trim().toLowerCase();
+  const matches = slashCommands.filter(
+    (command) => !query || command.name.toLowerCase().includes(query) || String(command.description || "").toLowerCase().includes(query),
+  );
+  commandList.replaceChildren();
+  if (!matches.length) {
+    const empty = document.createElement("p");
+    empty.className = "command-empty";
+    empty.textContent = slashCommands.length
+      ? "一致するコマンドはありません"
+      : "コマンドは最初のやり取りのあとに読み込まれます";
+    commandList.appendChild(empty);
+    return;
+  }
+  let lastKind = "";
+  for (const command of matches) {
+    if (command.kind !== lastKind) {
+      lastKind = command.kind;
+      const heading = document.createElement("div");
+      heading.className = "command-group";
+      heading.textContent = commandKindLabels[command.kind] || command.kind;
+      commandList.appendChild(heading);
+    }
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "command-item";
+    const name = document.createElement("span");
+    name.className = "command-name";
+    name.textContent = `/${command.name}`;
+    item.appendChild(name);
+    if (command.description) {
+      const description = document.createElement("span");
+      description.className = "command-description";
+      description.textContent = command.description;
+      item.appendChild(description);
+    }
+    // Inserted rather than sent: several take an argument, and a command fired
+    // straight off the list would rule that out.
+    item.addEventListener("click", () => {
+      insertPromptText(`/${command.name} `);
+      toggleCommandSheet(false);
+      promptInput?.focus();
+    });
+    commandList.appendChild(item);
+  }
+}
+
+function toggleCommandSheet(open) {
+  if (!commandSheet) return;
+  const willOpen = open ?? commandSheet.classList.contains("hidden");
+  commandSheet.classList.toggle("hidden", !willOpen);
+  bottomNav?.querySelector('[data-nav="commands"]')?.setAttribute("aria-expanded", String(willOpen));
+  if (willOpen) {
+    renderCommandList();
+    commandList.scrollTop = 0;
+  } else if (commandSearch) {
+    commandSearch.value = "";
+  }
+  syncBottomNav();
+}
+
+commandSearch?.addEventListener("input", renderCommandList);
+commandSheetClose?.addEventListener("click", () => toggleCommandSheet(false));
 
 function revealPendingApproval() {
   if (!pendingApproval) return;
@@ -1175,9 +1262,9 @@ bottomNav?.addEventListener("click", (event) => {
     case "threads":
       mobileThreadsButton?.click();
       break;
-    case "menu":
-      menuButton?.click();
-      break;
+    case "commands":
+      toggleCommandSheet();
+      return;
     default:
       break;
   }
@@ -6922,8 +7009,13 @@ function connect({ preserveHistory = false, freshThread = false, workdir = "" } 
     if (!isCurrentSocket()) return;
     lastWsMessageAt = Date.now();
     const msg = JSON.parse(event.data);
+    if (msg.type === "slashCommands") {
+      setSlashCommands(msg.slashCommands);
+      return;
+    }
     if (msg.type === "ready") {
       setReady(true);
+      setSlashCommands(msg.slashCommands);
       setActiveProvider(msg.provider || "codex");
       setSelectedModel(msg.model, { persist: false });
       const readyWorkspace = workspaceMetaFromRun({

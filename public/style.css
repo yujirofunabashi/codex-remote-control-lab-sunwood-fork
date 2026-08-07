@@ -1967,6 +1967,11 @@ body.terminal-focus-mode .composer-footer {
   display: none;
 }
 
+.bottom-dock {
+  position: relative;
+  flex: 0 0 auto;
+}
+
 .bottom-nav-icon svg {
   width: 22px;
   height: 22px;
@@ -1977,9 +1982,115 @@ body.terminal-focus-mode .composer-footer {
   stroke-linejoin: round;
 }
 
-.bottom-nav-item[data-nav="menu"] .bottom-nav-icon svg {
-  fill: currentColor;
-  stroke: none;
+/* Sits on the bar rather than over the whole screen: the conversation behind it
+   stays readable, which is what you are picking a command against. */
+.command-sheet {
+  position: absolute;
+  right: 9px;
+  bottom: calc(100% + 8px);
+  left: 9px;
+  z-index: var(--layer-sheet);
+  display: flex;
+  flex-direction: column;
+  max-height: min(62dvh, 470px);
+  border: 1px solid var(--composer-border);
+  border-radius: 16px;
+  background: var(--card);
+  box-shadow: 0 22px 50px color-mix(in srgb, var(--text) 22%, transparent);
+}
+
+.command-sheet.hidden {
+  display: none;
+}
+
+.command-sheet-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 10px 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.command-search {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 6px 9px;
+  background: var(--soft);
+  color: var(--text);
+  font-size: 14px;
+}
+
+.command-sheet-close {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--muted);
+  font-size: 19px;
+  line-height: 1;
+}
+
+.command-list {
+  /* Without this the list refuses to shrink below its content and spills out
+     of the card it is supposed to scroll inside. */
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 6px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.command-group {
+  position: sticky;
+  top: 0;
+  padding: 7px 8px 4px;
+  background: var(--card);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.command-item {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  border: 0;
+  border-radius: 10px;
+  padding: 8px 9px;
+  background: none;
+  color: var(--text);
+  text-align: left;
+}
+
+.command-item:hover {
+  background: var(--soft);
+}
+
+.command-name {
+  font-size: 14px;
+  font-weight: 700;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.command-description {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command-empty {
+  margin: 0;
+  padding: 14px 10px;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
 }
 
 .main-view-bar {

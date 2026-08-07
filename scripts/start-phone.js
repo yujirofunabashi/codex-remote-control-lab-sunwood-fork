@@ -12,6 +12,7 @@ const { isHistorySyncEnabled, runHistorySync } = require("./history-sync");
 const { bridgeUrls, eventTypeLabel, notificationTargets, notifyBridgeUrls, notifyEvent, notifyTaskEvent, stripTokenFromUrl } = require("./phone-notify");
 const { defaultCodexAppServerPort, settingEnvKeysForSlot, slotEnvKey, slotSettingValue } = require("./phone-slot-settings");
 const { assertStorageCapacityIngress, storageCapacityErrorPayload } = require("./storage-capacity-gate");
+const { slashCommandCatalog } = require("./slash-commands");
 const { findLiveBridge, readThreadSnapshot } = require("./thread-read");
 
 const root = path.resolve(__dirname, "..");
@@ -3286,6 +3287,41 @@ class SharedBridge {
   }
 }
 
+// Skills describe themselves in SKILL.md frontmatter. Read once per bridge run:
+// the set only changes when files change, and the phone asks on every turn.
+let skillDescriptionCache = null;
+
+function skillDescriptionsFromDisk() {
+  if (skillDescriptionCache) return skillDescriptionCache;
+  const descriptions = {};
+  const roots = [path.join(os.homedir(), ".claude", "skills"), path.join(workdir, ".claude", "skills")];
+  for (const dir of roots) {
+    let entries = [];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      // No isDirectory() check: skills are commonly symlinked in from a shared
+      // folder, and a symlink reports as neither a file nor a directory here.
+      // Reading through the name settles it, and anything else lands in catch.
+      try {
+        const head = fs.readFileSync(path.join(dir, entry.name, "SKILL.md"), "utf8").slice(0, 4000);
+        const frontmatter = head.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+        if (!frontmatter) continue;
+        // `description:` runs to the next top-level key, folded or not.
+        const described = frontmatter[1].match(/^description:\s*(>-?|\|-?)?[ \t]*\r?\n?([\s\S]*?)(?=\r?\n[a-zA-Z_-]+:|$)/m);
+        if (described) descriptions[entry.name] = described[2].replace(/\s+/g, " ").trim();
+      } catch {
+        // A skill that cannot be read is listed without a description.
+      }
+    }
+  }
+  skillDescriptionCache = descriptions;
+  return descriptions;
+}
+
 const approvalMcpScript = path.join(root, "scripts", "claude-approval-mcp.js");
 const approvalMcpServerName = "phone_approval";
 const approvalTimeoutMs = Number(process.env.PHONE_APPROVAL_TIMEOUT_MS || 5 * 60 * 1000);
@@ -3433,6 +3469,7 @@ class ClaudeBridge {
     this.workdir = claudeSessionWorkdir(session, requestedWorkdirOr(options.workdir));
     this.terminalHistory = terminalHistoryFromChatHistory(this.history);
     this.pendingApproval = null;
+    this.slashCommands = [];
     this.turnQueue = [];
     this.activeProcess = null;
     const idleState = idleRunStateFromHistory(this.history);
@@ -3519,8 +3556,23 @@ class ClaudeBridge {
       clients: this.clients.size,
       history: this.history,
       terminalHistory: this.terminalHistory,
+      slashCommands: this.slashCommands,
       run: this.runPayload(),
     };
+  }
+
+  // A phone that joins between turns has no init message to learn from, so the
+  // last list this bridge saw travels with `ready`.
+  applySlashCommands(commands, skills) {
+    if (!Array.isArray(commands) || !commands.length) return;
+    const catalog = slashCommandCatalog({
+      commands,
+      skills: Array.isArray(skills) ? skills : [],
+      descriptions: skillDescriptionsFromDisk(),
+    });
+    const changed = JSON.stringify(catalog) !== JSON.stringify(this.slashCommands);
+    this.slashCommands = catalog;
+    if (changed) this.emit("slashCommands", { slashCommands: catalog });
   }
 
   runPayload() {
@@ -3832,8 +3884,17 @@ class ClaudeBridge {
         this.promoteBridgeKey();
       }
       if (msg.type === "system" && msg.subtype === "init") {
+        // Claude opens every turn by listing what it can do. Taking the list
+        // from here is what keeps the phone's command sheet honest when a skill
+        // is added or the CLI is updated.
+        this.applySlashCommands(msg.slash_commands, msg.skills);
         this.emit("status", { text: `Claude session ready: ${msg.session_id || this.threadId}` });
-        return { ...routed, handled: "systemInit", sessionId: msg.session_id || this.threadId };
+        return {
+          ...routed,
+          handled: "systemInit",
+          sessionId: msg.session_id || this.threadId,
+          slashCommandCount: this.slashCommands.length,
+        };
       }
       if (msg.type === "system" && msg.subtype === "api_retry") {
         this.emit("status", { text: `Claude API retry ${msg.attempt}/${msg.max_retries}` });

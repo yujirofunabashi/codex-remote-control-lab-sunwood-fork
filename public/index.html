@@ -414,6 +414,20 @@
                 </footer>
               </div>
             </section>
+            <!-- The bar and anything that opens off it share one positioning
+                 base, so a sheet can sit directly on top of the bar without
+                 anybody having to know how tall the bar came out. -->
+            <div class="bottom-dock">
+            <!-- Filled from the session's own command list, so it never has to
+                 be kept in step with the CLI or with the skills installed. -->
+            <section id="commandSheet" class="command-sheet hidden" role="dialog" aria-modal="false" aria-label="コマンド">
+              <header class="command-sheet-header">
+                <strong>コマンド</strong>
+                <input id="commandSearch" class="command-search" type="search" placeholder="絞り込み" aria-label="コマンドを絞り込む" />
+                <button type="button" id="commandSheetClose" class="command-sheet-close" aria-label="閉じる">×</button>
+              </header>
+              <div id="commandList" class="command-list"></div>
+            </section>
             <!-- Phone-only. Its background runs to the bottom edge of the screen
                  while the buttons stay above the home indicator, so the strip
                  iOS reserves reads as part of the bar instead of dead space. -->
@@ -445,13 +459,14 @@
                 </span>
                 <span class="bottom-nav-label">一覧</span>
               </button>
-              <button type="button" class="bottom-nav-item" data-nav="menu" aria-label="メニュー">
+              <button type="button" class="bottom-nav-item" data-nav="commands" aria-label="コマンド" aria-expanded="false" aria-controls="commandSheet">
                 <span class="bottom-nav-icon" aria-hidden="true">
-                  <svg viewBox="0 0 24 24"><circle cx="5.5" cy="12" r="1.6" /><circle cx="12" cy="12" r="1.6" /><circle cx="18.5" cy="12" r="1.6" /></svg>
+                  <svg viewBox="0 0 24 24"><path d="m4 7 3.5 3.5L4 14M10.5 15H20" /><path d="M3 4.2h18v15.6H3z" opacity=".35" /></svg>
                 </span>
-                <span class="bottom-nav-label">メニュー</span>
+                <span class="bottom-nav-label">コマンド</span>
               </button>
             </nav>
+            </div>
           </section>
 
           <aside class="artifact-panel" aria-label="ファイル">
