@@ -1969,12 +1969,71 @@ function staticAssetHref(fileName) {
   return `${fileName}?v=${encodeURIComponent(version)}`;
 }
 
+const bridgeIconFiles = {
+  codex: {
+    default: {
+      icon180: "bridge-icons/codex-default-180.png",
+      icon512: "bridge-icons/codex-default-512.png",
+    },
+    air: {
+      icon180: "bridge-icons/codex-air-180.png",
+      icon512: "bridge-icons/codex-air-512.png",
+    },
+    mini: {
+      icon180: "bridge-icons/codex-mini-180.png",
+      icon512: "bridge-icons/codex-mini-512.png",
+    },
+    windows: {
+      icon180: "bridge-icons/codex-windows-180.png",
+      icon512: "bridge-icons/codex-windows-512.png",
+    },
+  },
+  claude: {
+    air: {
+      icon180: "bridge-icons/claude-air-180.png",
+      icon512: "bridge-icons/claude-air-512.png",
+    },
+    mini: {
+      icon180: "bridge-icons/claude-mini-180.png",
+      icon512: "bridge-icons/claude-mini-512.png",
+    },
+  },
+};
+
+function bridgeIconVariant({ provider = agentProvider, machineLabel = "", appId = "", appName = "" } = {}) {
+  const normalizedProvider = normalizeProvider(provider);
+  const identity = [machineLabel, appId, appName]
+    .map((value) => String(value || "").trim().toLowerCase())
+    .filter(Boolean)
+    .join(" ");
+  if (normalizedProvider === "codex" && /windows|win32|win64/.test(identity)) return "windows";
+  if (/(?:^|[^a-z])mini(?:[^a-z]|$)|mac.?mini|mini.?codex|claude.?mini/.test(identity)) return "mini";
+  if (/(?:^|[^a-z])air(?:[^a-z]|$)|macbook.?air|air.?codex|claude.?air/.test(identity)) return "air";
+  return "default";
+}
+
+function bookmarkIconFiles({
+  provider = agentProvider,
+  machineLabel = phoneMachineLabel,
+  appId = phoneAppId,
+  appName = phoneAppName,
+} = {}) {
+  const normalizedProvider = normalizeProvider(provider);
+  const variant = bridgeIconVariant({ provider: normalizedProvider, machineLabel, appId, appName });
+  return (
+    bridgeIconFiles[normalizedProvider]?.[variant] ||
+    (normalizedProvider === "claude"
+      ? { icon180: "bookmark-claude.png", icon512: "bookmark-claude-512.png" }
+      : { icon180: "bookmark-codex.png", icon512: "bookmark-codex-512.png" })
+  );
+}
+
 function bookmarkIconFileName() {
-  return agentProvider === "claude" ? "bookmark-claude.png" : "bookmark-codex.png";
+  return bookmarkIconFiles().icon180;
 }
 
 function bookmarkIcon512FileName() {
-  return agentProvider === "claude" ? "bookmark-claude-512.png" : "bookmark-codex-512.png";
+  return bookmarkIconFiles().icon512;
 }
 
 function iconHrefForRequest() {
@@ -5331,6 +5390,8 @@ module.exports = {
   ClaudeBridge,
   approvalMcpConfig,
   bindBrowser,
+  bookmarkIconFiles,
+  bridgeIconVariant,
   browseWorkspaceDirectories,
   setWorkspaceBookmark,
   setWorkspaceHidden,

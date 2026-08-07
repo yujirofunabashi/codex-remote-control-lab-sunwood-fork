@@ -1,7 +1,16 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { manifestHrefForRequest, manifestPayloadForRequest, maskTokenValue, requestTokenFromHeaders, safeProxyBasePath, tokenMetadata } = require("./start-phone");
+const {
+  bookmarkIconFiles,
+  bridgeIconVariant,
+  manifestHrefForRequest,
+  manifestPayloadForRequest,
+  maskTokenValue,
+  requestTokenFromHeaders,
+  safeProxyBasePath,
+  tokenMetadata,
+} = require("./start-phone");
 const fs = require("node:fs");
 const path = require("node:path");
 
@@ -23,6 +32,42 @@ test("manifest proxy base is constrained to browser preview proxy paths", () => 
   assert.equal(safeProxyBasePath("/proxy/45214"), "/proxy/45214");
   assert.equal(safeProxyBasePath("/absproxy/45214"), "/absproxy/45214");
   assert.equal(safeProxyBasePath("/api/file/raw"), "");
+});
+
+test("bridge icons distinguish provider and machine identity without in-image labels", () => {
+  assert.equal(bridgeIconVariant({ provider: "codex", appName: "AIRCodex 46214" }), "air");
+  assert.equal(bridgeIconVariant({ provider: "codex", appName: "miniCodex 45224" }), "mini");
+  assert.equal(bridgeIconVariant({ provider: "claude", appName: "Claude mini" }), "mini");
+  assert.equal(bridgeIconVariant({ provider: "claude", appName: "Claude 8443 AIR" }), "air");
+  assert.equal(bridgeIconVariant({ provider: "codex", appName: "WindowsCodex" }), "windows");
+  assert.equal(bridgeIconVariant({ provider: "codex", appName: "Codex" }), "default");
+
+  assert.deepEqual(bookmarkIconFiles({ provider: "codex", machineLabel: "MacBook Air" }), {
+    icon180: "bridge-icons/codex-air-180.png",
+    icon512: "bridge-icons/codex-air-512.png",
+  });
+  assert.deepEqual(bookmarkIconFiles({ provider: "claude", machineLabel: "Mac mini" }), {
+    icon180: "bridge-icons/claude-mini-180.png",
+    icon512: "bridge-icons/claude-mini-512.png",
+  });
+  assert.deepEqual(bookmarkIconFiles({ provider: "claude", machineLabel: "Windows" }), {
+    icon180: "bookmark-claude.png",
+    icon512: "bookmark-claude-512.png",
+  });
+
+  const iconCases = [
+    { provider: "codex", appName: "Codex" },
+    { provider: "codex", appName: "AIRCodex 46214" },
+    { provider: "codex", appName: "miniCodex 45224" },
+    { provider: "codex", appName: "WindowsCodex" },
+    { provider: "claude", appName: "Claude mini" },
+    { provider: "claude", appName: "Claude 8443 AIR" },
+  ];
+  for (const iconCase of iconCases) {
+    const files = bookmarkIconFiles(iconCase);
+    assert.ok(fs.existsSync(path.join(__dirname, "..", "public", files.icon180)), files.icon180);
+    assert.ok(fs.existsSync(path.join(__dirname, "..", "public", files.icon512)), files.icon512);
+  }
 });
 
 test("auth metadata and header helpers do not expose full token", () => {
