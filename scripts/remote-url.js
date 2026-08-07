@@ -4,15 +4,18 @@
 // without putting the token on screen.
 //
 //   node scripts/remote-url.js              # list reachable addresses, token masked
-//   node scripts/remote-url.js --copy       # full URL to the clipboard, nothing printed
-//   node scripts/remote-url.js --qr         # scan it from the phone
+//   node scripts/remote-url.js --copy       # install URL to the clipboard, nothing printed
+//   node scripts/remote-url.js --qr         # scan the install URL from the phone
 //   node scripts/remote-url.js --host mac.tailnet.ts.net --qr
 //
 // When `tailscale serve` already publishes this bridge over HTTPS, that address
 // is the one handed over. It is the origin the phone will keep coming back to,
-// so the token it was given stays in that origin's storage and the app can
-// install itself; reaching the same bridge by address and port is a different
-// origin, where none of that survives. `--host` names an address instead.
+// so the token it was given stays in that origin's storage. The `/install`
+// route intentionally omits the web app manifest: on iOS this makes Add to Home
+// Screen preserve the token-bearing address instead of replacing it with the
+// manifest's token-free start URL. Reaching the same bridge by address and port
+// is a different origin, where none of that survives. `--host` names an address
+// instead.
 //
 // The token is only ever written to the clipboard or the QR image. Plain output
 // stays masked so a screenshot or a shared terminal does not leak access.
@@ -88,6 +91,7 @@ function magicDnsName() {
 
 function buildUrl(host, port, token, protocol = "http") {
   const url = new URL(`${protocol}://${host}:${port}/`);
+  url.pathname = "/install";
   if (token) url.searchParams.set("token", token);
   return url.toString();
 }
@@ -173,7 +177,8 @@ function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     console.log("Usage: node scripts/remote-url.js [--host <name>] [--port <n>] [--copy] [--qr] [--reveal]");
-    console.log("A bridge published by `tailscale serve` is handed over at its HTTPS address.");
+    console.log("A token-preserving iOS install URL is handed over for the bridge.");
+    console.log("A bridge published by `tailscale serve` uses its HTTPS address.");
     console.log("--host names an address instead; --port names the bridge's own port.");
     return;
   }

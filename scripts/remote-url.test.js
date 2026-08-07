@@ -24,18 +24,18 @@ test("tailscale CGNAT addresses are recognised, ordinary 100.x ones are not", ()
   assert.ok(!isMeshAddress("192.168.11.8"));
 });
 
-test("the assembled URL matches what the bridge prints", () => {
-  assert.equal(buildUrl("100.101.102.103", 45214, "abc123"), "http://100.101.102.103:45214/?token=abc123");
-  assert.equal(buildUrl("mac.tailnet.ts.net", 45217, "abc123"), "http://mac.tailnet.ts.net:45217/?token=abc123");
+test("the assembled handoff URL uses the token-preserving install route", () => {
+  assert.equal(buildUrl("100.101.102.103", 45214, "abc123"), "http://100.101.102.103:45214/install?token=abc123");
+  assert.equal(buildUrl("mac.tailnet.ts.net", 45217, "abc123"), "http://mac.tailnet.ts.net:45217/install?token=abc123");
 });
 
 test("a URL with no token is still well formed", () => {
-  assert.equal(buildUrl("100.101.102.103", 45214, ""), "http://100.101.102.103:45214/");
+  assert.equal(buildUrl("100.101.102.103", 45214, ""), "http://100.101.102.103:45214/install");
 });
 
 test("an HTTPS URL keeps the token and drops the port only when it is the default", () => {
-  assert.equal(buildUrl("mac.tailnet.ts.net", 8443, "abc123", "https"), "https://mac.tailnet.ts.net:8443/?token=abc123");
-  assert.equal(buildUrl("mac.tailnet.ts.net", 443, "abc123", "https"), "https://mac.tailnet.ts.net/?token=abc123");
+  assert.equal(buildUrl("mac.tailnet.ts.net", 8443, "abc123", "https"), "https://mac.tailnet.ts.net:8443/install?token=abc123");
+  assert.equal(buildUrl("mac.tailnet.ts.net", 443, "abc123", "https"), "https://mac.tailnet.ts.net/install?token=abc123");
 });
 
 test("the published address is the one whose root proxies to this bridge", () => {
