@@ -21,6 +21,12 @@ const commandDescriptions = {
   autocompact: "自動要約が始まるサイズを変える",
   clear: "会話をリセットして最初から",
   color: "プロンプトバーの色を変える",
+  // `/design` on its own answers `Usage: /design consent | /design revoke`, so
+  // the other two are its subcommands registered flat, and all three are about
+  // the design-system authorization that /design-sync needs.
+  design: "デザインシステム連携の許可・取り消しの入口",
+  "design-consent": "Claude Design のデザインシステムへのアクセスを許可する",
+  "design-revoke": "Claude Design のデザインシステムへのアクセスを取り消す",
   compact: "会話を要約して文脈を空ける",
   config: "設定を開く",
   context: "文脈の使用量を内訳つきで見る",
@@ -31,6 +37,7 @@ const commandDescriptions = {
   "extra-usage": "クレジット残量を見る（/usage-credits の旧名）",
   fast: "高速モードを切り替える",
   goal: "完了条件を決めて、満たすまで作業を続けさせる",
+  import: "Codex / Gemini CLI の設定を取り込む",
   init: "このリポジトリの CLAUDE.md を作る",
   insights: "セッションを分析して傾向とつまずきを報告する",
   loop: "同じ作業を一定間隔で繰り返す",
