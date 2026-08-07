@@ -5557,7 +5557,10 @@ body[data-main-view="terminal"] .pwa-install-hint {
     z-index: var(--layer-drawer);
     width: min(78vw, 310px);
     gap: 9px;
-    padding: 10px 10px 12px;
+    /* Pinned to both edges of the screen, so it owns both insets: the project
+       name at the top was landing behind the clock, and the settings button at
+       the bottom sits where the home indicator is drawn. */
+    padding: max(10px, env(safe-area-inset-top)) 10px max(12px, env(safe-area-inset-bottom));
     transform: translateX(-100%);
     transition: transform 180ms ease;
     box-shadow: 18px 0 30px color-mix(in srgb, var(--text) 14%, transparent);
