@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const {
   bookmarkIconFiles,
   bridgeIconVariant,
+  machineLabelForEnvironment,
   manifestHrefForRequest,
   manifestPayloadForRequest,
   maskTokenValue,
@@ -35,6 +36,17 @@ test("manifest proxy base is constrained to browser preview proxy paths", () => 
 });
 
 test("bridge icons distinguish provider and machine identity", () => {
+  assert.equal(machineLabelForEnvironment("", "minijironoMac-mini.local"), "minijironoMac-mini.local");
+  assert.equal(machineLabelForEnvironment("", "MacBook-Air.local"), "MacBook-Air.local");
+  assert.equal(machineLabelForEnvironment("Configured label", "ignored-host.local"), "Configured label");
+  assert.equal(
+    bridgeIconVariant({ provider: "claude", machineLabel: machineLabelForEnvironment("", "minijironoMac-mini.local") }),
+    "mini",
+  );
+  assert.equal(
+    bridgeIconVariant({ provider: "claude", machineLabel: machineLabelForEnvironment("", "MacBook-Air.local") }),
+    "air",
+  );
   assert.equal(bridgeIconVariant({ provider: "codex", appName: "AIRCodex 46214" }), "air");
   assert.equal(bridgeIconVariant({ provider: "codex", appName: "miniCodex 45224" }), "mini");
   assert.equal(bridgeIconVariant({ provider: "claude", appName: "Claude mini" }), "mini");

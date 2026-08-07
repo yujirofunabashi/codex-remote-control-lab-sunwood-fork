@@ -502,7 +502,10 @@ const phoneBridgeLabel = String(process.env.PHONE_BRIDGE_LABEL || process.env.PH
 const phoneBridgeGroup = String(process.env.PHONE_BRIDGE_GROUP || "").trim();
 // What to call this Mac in the phone UI. The hostname carries the model and the
 // phone reads it, so this is only needed where that guess is wrong or too long.
-const phoneMachineLabel = String(process.env.PHONE_MACHINE_LABEL || "").trim();
+function machineLabelForEnvironment(configuredLabel = process.env.PHONE_MACHINE_LABEL, hostName = os.hostname()) {
+  return String(configuredLabel || hostName || "").trim();
+}
+const phoneMachineLabel = machineLabelForEnvironment();
 const phoneBridgeColor = String(process.env.PHONE_BRIDGE_COLOR || "").trim();
 let notificationBridgeUrls = [];
 let codexProcess = null;
@@ -5409,6 +5412,7 @@ module.exports = {
   getBridge,
   historyKeepsLatestAnswer,
   launchSettingsFromFleetOrEnv,
+  machineLabelForEnvironment,
   manifestHrefForRequest,
   manifestPayloadForRequest,
   maskTokenValue,
