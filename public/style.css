@@ -1253,6 +1253,26 @@ button.project-heading.active {
   font-size: 15px;
 }
 
+/* Reads as a note but behaves as the way out, so the count and the fix are the
+   same tap rather than a message that leaves you looking for the chip. */
+.thread-filter-escape {
+  display: block;
+  width: calc(100% - 16px);
+  margin: 8px;
+  padding: 9px 10px;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  background: none;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: left;
+}
+
+.thread-filter-escape:hover {
+  border-style: solid;
+  color: var(--text);
+}
+
 /* The indent lines this up with the thread rows above it. The empty-state
    message has no row to line up with, and the same indent left it wrapping
    mid-phrase in a sidebar that had the width to spare. */

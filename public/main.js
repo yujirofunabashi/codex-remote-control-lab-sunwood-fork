@@ -770,7 +770,10 @@ let firstUseHints = readJsonStorage(firstUseHintsStorageKey, {});
 let bridgeRegistry = readJsonStorage(bridgeRegistryStorageKey, { version: 1, bridges: [] });
 let bridgeLocalTokens = readJsonStorage(bridgeLocalTokensStorageKey, {});
 let bridgeViewState = readJsonStorage(bridgeViewStateStorageKey, {});
-let threadInboxFilter = localStorage.getItem(threadInboxFilterStorageKey) || "attention";
+// Opening on the attention filter made a quiet moment look like a lost account:
+// the list was filtered, not empty, and nothing on screen said so. Start from
+// the unfiltered view and let the narrower ones be asked for.
+let threadInboxFilter = localStorage.getItem(threadInboxFilterStorageKey) || "recent";
 // Grouping by project is the default because it is what the list has always
 // done; date order is the view that answers "what was I just doing" when the
 // work is spread across several folders.
@@ -1076,6 +1079,28 @@ function threadMatchesInboxFilter(thread) {
   if (threadInboxFilter === "attention") return status.group === "attention";
   if (threadInboxFilter === "running") return status.group === "running";
   return true;
+}
+
+function setThreadInboxFilter(value) {
+  threadInboxFilter = value || "recent";
+  localStorage.setItem(threadInboxFilterStorageKey, threadInboxFilter);
+  renderThreadList();
+}
+
+// What the narrow filters are keeping out of the list, counted the way the list
+// itself counts: a search already in the box still applies, so the number is
+// what clearing the filter would actually reveal. The selected thread shows
+// under every filter, so it is never something being held back.
+function threadsHiddenByInboxFilter() {
+  if (threadInboxFilter === "recent") return 0;
+  const query = threadSearch.value.trim().toLowerCase();
+  return threadCache.filter((thread) => {
+    if (thread.id === selectedThread) return false;
+    if (query && !projectForThread(thread).toLowerCase().includes(query) && !titleForThread(thread).toLowerCase().includes(query)) {
+      return false;
+    }
+    return !threadMatchesInboxFilter(thread);
+  }).length;
 }
 
 function renderThreadInboxTabs() {
@@ -3632,6 +3657,18 @@ function renderThreadList() {
           ? "実行中のチャットはありません"
           : `${providerLabel(provider)}のチャットはありません`;
     threadList.appendChild(empty);
+  }
+
+  // A short list under a narrow filter reads exactly like a lost list. Say how
+  // many are being held back, and make the way out of the filter the same tap.
+  const hiddenByFilter = threadsHiddenByInboxFilter();
+  if (hiddenByFilter) {
+    const escape = document.createElement("button");
+    escape.type = "button";
+    escape.className = "thread-filter-escape";
+    escape.textContent = `絞り込みで${hiddenByFilter}件を非表示中 — すべて表示`;
+    escape.addEventListener("click", () => setThreadInboxFilter("recent"));
+    threadList.appendChild(escape);
   }
   renderHiddenProjects();
   updateThreadNavigation();
@@ -7154,9 +7191,7 @@ searchButton.addEventListener("click", () => {
 threadSearch.addEventListener("input", renderThreadList);
 for (const button of threadInboxTabButtons) {
   button.addEventListener("click", () => {
-    threadInboxFilter = button.dataset.threadFilter || "recent";
-    localStorage.setItem(threadInboxFilterStorageKey, threadInboxFilter);
-    renderThreadList();
+    setThreadInboxFilter(button.dataset.threadFilter);
   });
 }
 for (const button of threadSortTabButtons) {
