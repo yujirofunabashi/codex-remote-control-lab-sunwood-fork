@@ -193,6 +193,17 @@
     );
   }
 
+  async function loadThreadsAfterProviderSync(syncProvider, loadThreads, options = {}) {
+    try {
+      if (typeof syncProvider === "function") await syncProvider();
+    } catch {
+      // A provider lookup can fail while a bridge is waking. The thread loader
+      // still gets one chance to recover from the provider it already knows.
+    }
+    if (typeof loadThreads !== "function") return undefined;
+    return loadThreads(options);
+  }
+
   function workspaceKeyForThreadRecord(thread = {}, fallback = "") {
     const record = thread || {};
     const raw = record.cwd || record.workspaceLocation || record.workdir || fallback || "";
@@ -720,6 +731,7 @@
     serviceWorkerRegistrationAllowed,
     pwaManifestTokenIssues,
     shouldReloadInstallWithStoredToken,
+    loadThreadsAfterProviderSync,
     workspaceKeyForThreadRecord,
     sameWorkspaceThreadRecord,
     isOpaqueThreadId,

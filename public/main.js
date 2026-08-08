@@ -6939,7 +6939,13 @@ function recoverFromPageResume(reason = "resume") {
   lastResumeRefreshAt = now;
   selectedThreadRefreshActive = false;
   refreshFleet().catch(() => {});
-  loadThreads({ background: true }).catch(() => {});
+  // `pageshow` also fires for the first page load. Resolve the bridge provider
+  // before that refresh so a Claude-only bridge never receives the default
+  // Codex thread request during startup.
+  const resumeThreadLoad = uiUtils.loadThreadsAfterProviderSync
+    ? uiUtils.loadThreadsAfterProviderSync(syncProviderFromBridge, loadThreads, { background: true })
+    : syncProviderFromBridge().then(() => loadThreads({ background: true }));
+  resumeThreadLoad.catch(() => {});
   if (selectedThread) refreshSelectedThread();
   if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
     scheduleReconnect(reason, 120);
