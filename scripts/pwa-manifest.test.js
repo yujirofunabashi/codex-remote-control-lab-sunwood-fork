@@ -41,7 +41,8 @@ test("authenticated install manifest seeds the isolated Home Screen app with a f
   assert.equal(manifestUrl.searchParams.get("token"), token);
 
   const manifest = manifestPayloadForRequest(manifestUrl, token);
-  assert.equal(manifest.id, "/proxy/45214/codex-remote-codex-45214");
+  assert.match(manifest.id, /^\/proxy\/45214\/codex-remote-[a-z0-9-]+$/);
+  assert.doesNotMatch(manifest.id, /secret123|[?&]token=/);
   assert.equal(manifest.start_url, `/proxy/45214/install#token=${token}`);
   assert.doesNotMatch(manifest.start_url, /[?&]token=/);
 });
