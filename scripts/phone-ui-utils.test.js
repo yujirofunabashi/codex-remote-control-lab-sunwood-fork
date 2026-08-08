@@ -4,6 +4,10 @@ const assert = require("node:assert/strict");
 const {
   capTerminalHistory,
   machineLabelFromHost,
+  machineLabelForBridge,
+  machineScopeKey,
+  machineScopeCount,
+  threadProjectGroupKey,
   shortHostLabel,
   isMarkdownTableStart,
   parseMarkdownTable,
@@ -473,4 +477,36 @@ test("a hostname naming no model keeps its distinguishing tail", () => {
   assert.equal(machineLabelFromHost("build-box-01.local"), "box-01");
   assert.equal(machineLabelFromHost("air"), "air");
   assert.equal(machineLabelFromHost(""), "");
+});
+
+test("a bridge is named by the label its owner set, and by its host otherwise", () => {
+  assert.equal(machineLabelForBridge({ machineLabel: "母艦", hostName: "minijironoMac-mini.local" }), "母艦");
+  assert.equal(machineLabelForBridge({ machineLabel: "", hostName: "minijironoMac-mini.local" }), "mini");
+  assert.equal(machineLabelForBridge({ hostName: "Yujiro-no-MacBook-Air.local" }), "Air");
+  assert.equal(machineLabelForBridge({}), "");
+});
+
+test("two Macs running the same project name get one heading each", () => {
+  const air = threadProjectGroupKey("00_受け渡し", "Air");
+  const mini = threadProjectGroupKey("00_受け渡し", "mini");
+  assert.notEqual(air, mini);
+  assert.equal(air, "air/00_受け渡し");
+  // Without a machine the key stays what it was before machines were named.
+  assert.equal(threadProjectGroupKey("00_受け渡し", ""), "00_受け渡し");
+  assert.equal(threadProjectGroupKey("", "Air"), "air/No project");
+});
+
+test("the machine key ignores case and spacing so one Mac is not counted twice", () => {
+  assert.equal(machineScopeKey("Mac mini"), "mac-mini");
+  assert.equal(machineScopeKey("  Air  "), "air");
+  // An unnamed bridge still counts as its own machine.
+  assert.equal(machineScopeKey("", "claude-45214"), "claude-45214");
+  assert.equal(machineScopeKey("", ""), "");
+});
+
+test("a list spanning one Mac is not worth labelling per row", () => {
+  const mini = [{ machineLabel: "mini", bridgeId: "a" }, { machineLabel: "mini", bridgeId: "b" }];
+  assert.equal(machineScopeCount(mini), 1);
+  assert.equal(machineScopeCount([...mini, { machineLabel: "Air", bridgeId: "c" }]), 2);
+  assert.equal(machineScopeCount([]), 0);
 });

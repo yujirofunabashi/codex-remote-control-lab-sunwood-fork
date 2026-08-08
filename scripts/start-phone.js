@@ -1060,6 +1060,12 @@ function browseWorkspaceDirectories(input) {
     isRepo: fs.existsSync(path.join(target, ".git")),
     pinned: pinned.has(target),
     entries: children,
+    // Which machine's tree this is. The two Macs keep the same folder names
+    // under different home directories, so a listing that does not say whose
+    // home it started from is a listing you can pick the wrong folder from.
+    home,
+    hostName: os.hostname(),
+    machineLabel: phoneMachineLabel || null,
   };
 }
 

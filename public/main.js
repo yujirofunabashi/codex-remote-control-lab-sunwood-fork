@@ -741,6 +741,8 @@ function setBridgeToken(entry, nextToken, rememberToken = true) {
 function setSidebarVisible(visible) {
   document.body.classList.toggle("show-sidebar", visible);
   mobileThreadsButton.setAttribute("aria-expanded", visible ? "true" : "false");
+  // Opening the list is the moment the other Macs' sessions have to be current.
+  if (visible) loadFleetThreads({ force: true }).catch(() => {});
 }
 
 if (manifestLink && appBasePath) {
@@ -780,6 +782,7 @@ const expandedProjectsStorageKey = "codexPhoneExpandedProjects:v1";
 const recentViewKey = "\u0000recent";
 const taskTemplateStorageKey = "codexPhoneLastTaskTemplate:v1";
 const serviceTierStorageKey = "codexPhoneServiceTier:v1";
+const explicitModelStorageKey = "codexPhoneModelByProvider:v1";
 const terminalHistoryLimit = 300;
 const terminalSurfaceKinds = new Set(["command", "error", "approval", "file"]);
 const threadColorPalette = [
@@ -877,6 +880,14 @@ let swipeStart = null;
 let swipeFeedbackTimer = null;
 let selectedModel = localStorage.getItem("codexPhoneModel") || "";
 let selectedModelLabel = localStorage.getItem("codexPhoneModelLabel") || "5.5";
+// A model picked in the composer belongs to the person who picked it, and to the
+// provider they picked it for. The bridge announces its own model on every
+// `ready` - which arrives again on each reconnect, each thread switch and each
+// return from the background - so the two are kept apart: the explicit choice is
+// remembered per provider, the bridge's answer is only the fallback.
+let explicitModelByProvider = readJsonStorage(explicitModelStorageKey, {});
+const bridgeModelByProvider = {};
+migrateLegacySelectedModel();
 let selectedReasoning = localStorage.getItem("codexPhoneReasoning") || "M";
 let selectedServiceTier = localStorage.getItem(serviceTierStorageKey) || "";
 let settingsRenderSeq = 0;
@@ -1126,9 +1137,16 @@ function setThreadInboxFilter(value) {
 function threadsHiddenByInboxFilter() {
   if (threadInboxFilter === "recent") return 0;
   const query = threadSearch.value.trim().toLowerCase();
-  return threadCache.filter((thread) => {
-    if (thread.id === selectedThread) return false;
-    if (query && !projectForThread(thread).toLowerCase().includes(query) && !titleForThread(thread).toLowerCase().includes(query)) {
+  // Counted across the same set the list draws from, which is every registered
+  // bridge, so the number matches what clearing the filter puts on screen.
+  return fleetThreadRecords().filter((thread) => {
+    if (thread.id === selectedThread && isActiveBridgeThread(thread)) return false;
+    if (
+      query &&
+      !projectForThread(thread).toLowerCase().includes(query) &&
+      !titleForThread(thread).toLowerCase().includes(query) &&
+      !String(thread.machineLabel || "").toLowerCase().includes(query)
+    ) {
       return false;
     }
     return !threadMatchesInboxFilter(thread);
@@ -1522,15 +1540,46 @@ function displayModelName(model) {
   return value ? value[0].toUpperCase() + value.slice(1) : "Model";
 }
 
-function setSelectedModel(model, { persist = true } = {}) {
-  selectedModel = model || "";
-  selectedModelLabel = labelForModel(selectedModel);
+// `persist` is what separates the two callers: a model the person chose is
+// stored against its provider and outlives every reconnect, while the model the
+// bridge reports is only remembered until it reports another one.
+function setSelectedModel(model, { persist = true, provider = currentThreadProvider() } = {}) {
+  const value = String(model || "");
+  const scope = normalizeProviderName(provider) || currentThreadProvider();
   if (persist) {
-    localStorage.setItem("codexPhoneModel", selectedModel);
-    localStorage.setItem("codexPhoneModelLabel", selectedModelLabel);
+    if (value) explicitModelByProvider = { ...explicitModelByProvider, [scope]: value };
+    else {
+      const next = { ...explicitModelByProvider };
+      delete next[scope];
+      explicitModelByProvider = next;
+    }
+    writeJsonStorage(explicitModelStorageKey, explicitModelByProvider);
+  } else {
+    bridgeModelByProvider[scope] = value;
   }
+  applySelectedModel(scope);
+}
+
+// The one place the effective model is decided, so the button, the terminal
+// header and the next prompt cannot disagree about it.
+function applySelectedModel(provider = currentThreadProvider()) {
+  const scope = normalizeProviderName(provider) || currentThreadProvider();
+  selectedModel = String(explicitModelByProvider[scope] || bridgeModelByProvider[scope] || "");
+  selectedModelLabel = labelForModel(selectedModel);
+  localStorage.setItem("codexPhoneModel", selectedModel);
+  localStorage.setItem("codexPhoneModelLabel", selectedModelLabel);
   updateModelButton();
   updateTerminalHeader();
+}
+
+// Carries a choice made before models were remembered per provider. A Codex
+// model name never applied to Claude, so it is filed by the name it carries.
+function migrateLegacySelectedModel() {
+  if (Object.keys(explicitModelByProvider).length) return;
+  const legacy = String(localStorage.getItem("codexPhoneModel") || "").trim();
+  if (!legacy) return;
+  explicitModelByProvider = { [/^gpt-/i.test(legacy) ? "codex" : "claude"]: legacy };
+  writeJsonStorage(explicitModelStorageKey, explicitModelByProvider);
 }
 
 // Codex calls it reasoning, Claude calls it effort, and both are chosen from the
@@ -1604,7 +1653,9 @@ function setActiveProvider(provider) {
   // The chat tab used to be a hardcoded "Codex". With several bridges open at
   // once, every tab read the same regardless of which agent was behind it.
   if (chatViewLabel) chatViewLabel.textContent = providerLabel(currentThreadProvider());
-  updateModelButton();
+  // Codex and Claude do not share model names, so the composer follows the
+  // provider back to whichever model was last chosen for it.
+  applySelectedModel();
 }
 
 // "M" was the only thing on screen saying how hard the model was being asked to
@@ -3374,24 +3425,36 @@ function upsertThreadRecord(thread, provider = currentThreadProvider()) {
 function visibleThreadGroups(options = {}) {
   const includeSelected = options.includeSelected !== false;
   const query = threadSearch.value.trim().toLowerCase();
+  const records = fleetThreadRecords();
+  // Naming the Mac on every heading when there is only one is noise, so the
+  // list says it exactly when it has two answers to tell apart.
+  const showMachine = (uiUtils.machineScopeCount ? uiUtils.machineScopeCount(records) : 1) > 1;
   const groups = new Map();
-  for (const thread of sortThreadsForInbox(threadCache)) {
+  for (const thread of sortThreadsForInbox(records)) {
     const project = projectForThread(thread);
     const title = titleForThread(thread);
-    const selected = thread.id === selectedThread;
+    const machineLabel = String(thread.machineLabel || "");
+    const selected = thread.id === selectedThread && isActiveBridgeThread(thread);
     if (!includeSelected && selected) continue;
-    const matches = !query || project.toLowerCase().includes(query) || title.toLowerCase().includes(query);
+    const matches =
+      !query ||
+      project.toLowerCase().includes(query) ||
+      title.toLowerCase().includes(query) ||
+      machineLabel.toLowerCase().includes(query);
     if (!matches) continue;
     if (!selected && !threadMatchesInboxFilter(thread)) continue;
-    if (!groups.has(project)) groups.set(project, []);
-    groups.get(project).push(thread);
+    const key = uiUtils.threadProjectGroupKey ? uiUtils.threadProjectGroupKey(project, thread.machineKey) : project;
+    if (!groups.has(key)) {
+      groups.set(key, { key, label: project, machineLabel, machineKey: thread.machineKey || "", bridgeId: thread.bridgeId || activeBridgeId, showMachine, threads: [] });
+    }
+    groups.get(key).threads.push(thread);
   }
   if (includeSelected && selectedThread) {
-    for (const [project, threads] of groups) {
-      if (!threads.some((thread) => thread.id === selectedThread)) continue;
-      const selectedFirst = new Map([[project, threads]]);
-      for (const [otherProject, otherThreads] of groups) {
-        if (otherProject !== project) selectedFirst.set(otherProject, otherThreads);
+    for (const [key, group] of groups) {
+      if (!group.threads.some((thread) => thread.id === selectedThread && isActiveBridgeThread(thread))) continue;
+      const selectedFirst = new Map([[key, group]]);
+      for (const [otherKey, otherGroup] of groups) {
+        if (otherKey !== key) selectedFirst.set(otherKey, otherGroup);
       }
       return selectedFirst;
     }
@@ -3448,7 +3511,7 @@ function createThreadListItem(thread, options = {}) {
   const repoLabel = repoLabelForContext(thread, "");
   const colorSubject = repoLabel ? `${repoLabel} のリポ色` : "リポ色";
   const item = document.createElement("div");
-  item.className = thread.id === selectedThread ? "thread-item active" : "thread-item";
+  item.className = thread.id === selectedThread && isActiveBridgeThread(thread) ? "thread-item active" : "thread-item";
   item.title = displayTitle;
   item.style.setProperty("--item-thread-accent", repoColor);
   const colorButton = document.createElement("button");
@@ -3472,20 +3535,36 @@ function createThreadListItem(thread, options = {}) {
   time.textContent = formatRelativeTime(thread.updatedAt || thread.createdAt);
   const status = deriveThreadStatus(thread);
   selectButton.append(title, time);
+  const machineLabel = String(thread.machineLabel || "");
   const threadWorkdir = workspaceKeyForThread(thread);
-  if (threadWorkdir) item.title = `${displayTitle}\n${threadWorkdir}`;
+  if (threadWorkdir) item.title = machineLabel ? `${displayTitle}\n${machineLabel}: ${threadWorkdir}` : `${displayTitle}\n${threadWorkdir}`;
   // Under a project heading almost every row repeats the folder that heading
   // already names, and a second line of it per row is what makes the list hard
   // to read. It is kept for the rows that genuinely sit somewhere else, which
   // is the only case where it says anything.
-  if (threadWorkdir && threadWorkdir !== options.groupWorkdir) {
+  const showsPlace = Boolean(threadWorkdir && threadWorkdir !== options.groupWorkdir);
+  // Which Mac shares that line, because "where is this work" is one question:
+  // the same `~/WORK_LOCAL/…` folder name exists on both of them.
+  const showsMachine = Boolean(options.showMachine && machineLabel);
+  if (showsPlace || showsMachine) {
     const workdir = document.createElement("span");
     workdir.className = "thread-workdir";
-    // With no heading overhead to name the project, the folder is what the row
-    // needs to say. An elided path spends its width on the shared prefix and
-    // truncates the one segment that identifies the work.
-    workdir.textContent = options.showFolderName ? projectForThread(thread) : compactWorkspaceLocation(threadWorkdir);
-    workdir.title = threadWorkdir;
+    if (showsMachine) {
+      const machine = document.createElement("span");
+      machine.className = "thread-machine";
+      machine.textContent = machineLabel;
+      workdir.appendChild(machine);
+    }
+    if (showsPlace) {
+      const place = document.createElement("span");
+      place.className = "thread-workdir-name";
+      // With no heading overhead to name the project, the folder is what the
+      // row needs to say. An elided path spends its width on the shared prefix
+      // and truncates the one segment that identifies the work.
+      place.textContent = options.showFolderName ? projectForThread(thread) : compactWorkspaceLocation(threadWorkdir);
+      workdir.appendChild(place);
+    }
+    workdir.title = machineLabel ? `${machineLabel}: ${threadWorkdir}` : threadWorkdir;
     selectButton.append(workdir);
   }
   if (status.label) {
@@ -3494,7 +3573,14 @@ function createThreadListItem(thread, options = {}) {
     badge.textContent = status.label;
     selectButton.append(badge);
   }
-  selectButton.addEventListener("click", () => selectThread(thread.id, { thread, workdir: workspaceKeyForThread(thread), project: projectForThread(thread) }));
+  selectButton.addEventListener("click", () =>
+    selectThread(thread.id, {
+      thread,
+      bridgeId: thread.bridgeId || "",
+      workdir: workspaceKeyForThread(thread),
+      project: projectForThread(thread),
+    }),
+  );
   item.append(colorButton, selectButton);
   const resumeCommand = resumeCommandForThread(thread);
   if (resumeCommand) {
@@ -3541,10 +3627,12 @@ function visibleThreadsInListOrder() {
     const current = currentThreadListRecord();
     if (current && isSameCurrentWorkspaceThread(current, baseKey)) threads.push(current);
   }
-  for (const [project, groupThreads] of groups) {
-    const scopedThreads = groupThreads.filter((thread) => isSameCurrentWorkspaceThread(thread, baseKey));
+  for (const group of groups.values()) {
+    // Swiping moves between chats in the same place on the same Mac; a chat the
+    // arrows reach has to be one this connection can actually open.
+    const scopedThreads = group.threads.filter((thread) => isActiveBridgeThread(thread) && isSameCurrentWorkspaceThread(thread, baseKey));
     // Follows the sidebar: a row you can see is a row the arrows should reach.
-    threads.push(...limitedVisibleThreads(scopedThreads, projectVisibleLimit(project, scopedThreads.length)));
+    threads.push(...limitedVisibleThreads(scopedThreads, projectVisibleLimit(group.key, scopedThreads.length)));
   }
   return threads;
 }
@@ -3552,8 +3640,8 @@ function visibleThreadsInListOrder() {
 function selectedThreadVisibleInGroups(groups) {
   if (!selectedThread) return false;
   const baseKey = currentThreadWorkspaceKey();
-  for (const groupThreads of groups.values()) {
-    const scopedThreads = groupThreads.filter((thread) => isSameCurrentWorkspaceThread(thread, baseKey));
+  for (const group of groups.values()) {
+    const scopedThreads = group.threads.filter((thread) => isActiveBridgeThread(thread) && isSameCurrentWorkspaceThread(thread, baseKey));
     if (limitedVisibleThreads(scopedThreads, 6).some((thread) => thread.id === selectedThread)) return true;
   }
   return false;
@@ -3625,16 +3713,22 @@ function renderHiddenProjects() {
   threadList.appendChild(section);
 }
 
-async function setProjectHidden(workdir, hidden, project = "") {
+async function setProjectHidden(workdir, hidden, project = "", bridgeId = activeBridgeId) {
   if (!workdir) return;
   try {
-    const result = await apiPost("/api/workspaces/hidden", { path: workdir, hidden });
-    hiddenProjects = Array.isArray(result.hiddenProjects) ? result.hiddenProjects : hiddenProjects;
+    const result = await apiPost("/api/workspaces/hidden", { path: workdir, hidden }, { bridgeId });
+    if (bridgeId === activeBridgeId) hiddenProjects = Array.isArray(result.hiddenProjects) ? result.hiddenProjects : hiddenProjects;
+    const state = getBridgeState(bridgeId);
+    state.threadsLoadedAt = 0;
     renderThreadList();
     // Hiding drops the project's threads from what the bridge sends, so putting
     // it back needs the list fetched again — redrawing the cache we already have
     // would leave the project empty until the next poll happened to come round.
-    await loadThreads({ background: true });
+    // Every bridge is re-read, not just the one that was told: the sidebar now
+    // merges them, so a stale copy on any other connection would put the
+    // project straight back under its own heading.
+    await loadThreads({ background: true }).catch(() => {});
+    await loadFleetThreads({ force: true }).catch(() => {});
     showToast(hidden ? `${project || workdir} を隠しました。` : `${project || workdir} を戻しました。`);
   } catch (error) {
     showToast(`変更できませんでした: ${error.message}`, "warn");
@@ -3646,8 +3740,11 @@ function renderThreadList() {
   renderThreadInboxTabs();
   const provider = currentThreadProvider();
   const groups = visibleThreadGroups();
+  const showMachine = Array.from(groups.values()).some((group) => group.showMachine);
+  const activeMachineLabel = shortMachineName(activeBridge() || {}, getBridgeState(activeBridgeId));
 
-  const currentThread = selectedThreadVisibleInGroups(groups) ? null : currentThreadListRecord();
+  const current = currentThreadListRecord();
+  const currentThread = selectedThreadVisibleInGroups(groups) ? null : current && { ...current, bridgeId: activeBridgeId, machineLabel: activeMachineLabel };
   if (currentThread) {
     const currentGroup = document.createElement("section");
     currentGroup.className = "project-group current-thread-group";
@@ -3665,6 +3762,7 @@ function renderThreadList() {
       createThreadListItem(currentThread, {
         displayTitle: currentTitle === "名前未設定のチャット" ? "現在のチャット" : currentTitle,
         showFolderName: true,
+        showMachine,
       }),
     );
     threadList.appendChild(currentGroup);
@@ -3674,7 +3772,7 @@ function renderThreadList() {
     // One flat list across every project. Each row already carries its own cwd,
     // so nothing is lost by dropping the headings, and work spread over several
     // folders reads in the order it actually happened.
-    const flat = sortThreadsForInbox(Array.from(groups.values()).flat());
+    const flat = sortThreadsForInbox(Array.from(groups.values()).flatMap((group) => group.threads));
     const group = document.createElement("section");
     group.className = "project-group";
     const heading = document.createElement("div");
@@ -3689,7 +3787,7 @@ function renderThreadList() {
     // Same cap and the same way past it: without one, work older than the
     // newest 30 is unreachable in this view.
     const shown = limitedVisibleThreads(flat, expandedProjects.has(recentViewKey) ? flat.length : collapsedRecentRows);
-    for (const thread of shown) group.appendChild(createThreadListItem(thread, { showFolderName: true }));
+    for (const thread of shown) group.appendChild(createThreadListItem(thread, { showFolderName: true, showMachine }));
     if (flat.length > collapsedRecentRows) {
       const expanded = expandedProjects.has(recentViewKey);
       const toggle = document.createElement("button");
@@ -3707,7 +3805,9 @@ function renderThreadList() {
     return;
   }
 
-  for (const [project, threads] of groups) {
+  for (const [groupKey, groupRecord] of groups) {
+    const threads = groupRecord.threads;
+    const project = groupRecord.label;
     const group = document.createElement("section");
     group.className = "project-group";
 
@@ -3721,6 +3821,15 @@ function renderThreadList() {
     const titleRow = document.createElement("span");
     titleRow.className = "project-title-row";
     titleRow.appendChild(name);
+    // The Air and the mini both keep a folder called `00_受け渡し`, and the Air's
+    // copy of this repo has almost the same name as the mini's. Which Mac the
+    // work is on is the part that tells the two headings apart.
+    if (groupRecord.showMachine && groupRecord.machineLabel) {
+      const machine = document.createElement("span");
+      machine.className = "project-machine";
+      machine.textContent = groupRecord.machineLabel;
+      titleRow.appendChild(machine);
+    }
     heading.append(folder, titleRow);
     const projectWorkdir = projectWorkdirForThreads(threads);
     if (projectWorkdir) {
@@ -3735,7 +3844,7 @@ function renderThreadList() {
       createButton.appendChild(icon);
       createButton.addEventListener("click", (event) => {
         event.stopPropagation();
-        startNewThread({ workdir: projectWorkdir, project });
+        startNewThread({ workdir: projectWorkdir, project, bridgeId: groupRecord.bridgeId });
       });
       heading.appendChild(createButton);
       // Tooling writes sessions too — memory hooks, summarisers — and which
@@ -3749,19 +3858,21 @@ function renderThreadList() {
       hideButton.textContent = "×";
       hideButton.addEventListener("click", (event) => {
         event.stopPropagation();
-        setProjectHidden(projectWorkdir, true, project);
+        // Hiding is per machine: the bridge that lists the folder is the one
+        // that has to be told to stop listing it.
+        setProjectHidden(projectWorkdir, true, project, groupRecord.bridgeId);
       });
       heading.appendChild(hideButton);
     }
     group.appendChild(heading);
 
-    const visibleThreads = limitedVisibleThreads(threads, projectVisibleLimit(project, threads.length));
+    const visibleThreads = limitedVisibleThreads(threads, projectVisibleLimit(groupKey, threads.length));
     for (const thread of visibleThreads) {
       group.appendChild(createThreadListItem(thread, { groupWorkdir: projectWorkdir }));
     }
 
     if (threads.length > collapsedProjectRows) {
-      appendThreadListToggle(group, project, visibleThreads.length, threads.length);
+      appendThreadListToggle(group, groupKey, visibleThreads.length, threads.length);
     } else if (!visibleThreads.length) {
       const empty = document.createElement("div");
       empty.className = "project-empty";
@@ -4081,11 +4192,20 @@ function bridgeMetaText(entry, state = getBridgeState(entry.id)) {
 // in the hostname is what these get called day to day, so an Air reads as
 // "Air"; PHONE_MACHINE_LABEL on the bridge overrides that outright.
 function shortMachineName(entry = {}, state = {}) {
+  if (uiUtils.machineLabelForBridge) return uiUtils.machineLabelForBridge(state.info || {});
   const explicit = String(state.info?.machineLabel || "").trim();
   if (explicit) return explicit;
   const host = state.info?.hostName || "";
   if (uiUtils.machineLabelFromHost) return uiUtils.machineLabelFromHost(host);
   return String(host).trim().replace(/\.(local|lan|home|internal)\.?$/i, "");
+}
+
+// The comparable form of the same answer. A bridge that has not reported its
+// host yet falls back to its own id, so it is never mistaken for another Mac.
+function bridgeMachineKey(entry = {}, state = getBridgeState(entry.id)) {
+  const label = shortMachineName(entry, state);
+  if (uiUtils.machineScopeKey) return uiUtils.machineScopeKey(label, entry.id || "");
+  return String(label || entry.id || "").trim().toLowerCase();
 }
 
 function bridgeConnectionMetaText(entry, state = getBridgeState(entry.id)) {
@@ -4514,6 +4634,9 @@ function applyActiveBridgeState(bridgeId) {
   token = effectiveBridgeToken(activeBridge()) || "";
   selectedThreadByProvider.clear();
   if (selectedThread && threadProvider) selectedThreadByProvider.set(threadProvider, selectedThread);
+  // Each bridge answers for one provider, so the composer's model follows the
+  // bridge rather than carrying the previous one across the switch.
+  applySelectedModel();
 }
 
 async function setActiveBridge(bridgeId, { silent = false, reconnect = true, followThreadWorkdir = false } = {}) {
@@ -5179,6 +5302,71 @@ async function loadThreads({ background = false, provider = "" } = {}) {
   }
 }
 
+// A session belongs to the Mac that ran it: the Air's transcripts are under the
+// Air's home, and no amount of asking the mini will produce them. So each
+// registered bridge is asked for its own list, and the sidebar shows the union
+// instead of whichever machine happens to be connected.
+async function loadFleetThreads({ force = false } = {}) {
+  const entries = (bridgeRegistry.bridges || []).filter((entry) => entry.id !== activeBridgeId);
+  if (!entries.length) return;
+  let changed = false;
+  await Promise.all(
+    entries.map(async (entry) => {
+      const state = getBridgeState(entry.id);
+      if (state.threadsLoading) return;
+      if (!force && state.threadsLoadedAt && Date.now() - state.threadsLoadedAt < 5_000) return;
+      if (!effectiveBridgeToken(entry) && !token) return;
+      state.threadsLoading = true;
+      try {
+        const provider = normalizeProviderName(state.activeProvider || state.info?.provider) || "";
+        const result = await fetchJsonForBridge(entry, provider ? `/api/threads?provider=${encodeURIComponent(provider)}` : "/api/threads");
+        const resultProvider = normalizeProviderName(result.provider || result.activeProvider || provider) || "codex";
+        state.activeProvider = normalizeProviderName(result.activeProvider) || resultProvider;
+        state.threadCache = (result.data || []).map((thread) => normalizeThreadRecord(thread, resultProvider));
+        state.threadsLoadedAt = Date.now();
+        state.threadsError = "";
+        changed = true;
+      } catch (error) {
+        // A sleeping Air is the normal case, not a failure worth interrupting
+        // the list for. The fleet row already shows it as disconnected.
+        state.threadsError = error.message || String(error);
+      } finally {
+        state.threadsLoading = false;
+      }
+    }),
+  );
+  if (changed) renderThreadList();
+}
+
+// Every thread the sidebar can show, each carrying the bridge that can open it
+// and the Mac it lives on. The active bridge goes first so it wins a duplicate.
+function fleetThreadRecords() {
+  const entries = bridgeRegistry.bridges || [];
+  const ordered = [...entries.filter((entry) => entry.id === activeBridgeId), ...entries.filter((entry) => entry.id !== activeBridgeId)];
+  const records = [];
+  const seen = new Set();
+  for (const entry of ordered) {
+    const state = getBridgeState(entry.id);
+    const threads = entry.id === activeBridgeId ? threadCache : Array.isArray(state.threadCache) ? state.threadCache : [];
+    const machineLabel = shortMachineName(entry, state);
+    const machineKey = bridgeMachineKey(entry, state);
+    for (const thread of threads) {
+      if (!thread?.id) continue;
+      // Two bridges on one Mac read the same transcripts, so the same session
+      // can arrive twice. It is one session either way.
+      const key = `${machineKey}:${normalizeProviderName(thread.provider) || ""}:${thread.id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      records.push({ ...thread, bridgeId: entry.id, machineLabel, machineKey });
+    }
+  }
+  return records;
+}
+
+function isActiveBridgeThread(thread = {}) {
+  return !thread.bridgeId || thread.bridgeId === activeBridgeId;
+}
+
 async function refreshSelectedThread() {
   if (!selectedThread || liveTurnActive || selectedThreadRefreshActive) return;
   const provider = currentThreadProvider();
@@ -5295,7 +5483,13 @@ async function selectThread(threadId, options = {}) {
   updateHeaderStatus();
   const workdir = workspaceKeyForThread({ cwd: options.workdir || "" });
   workspaceFollowsSelectedThread = Boolean(workdir || threadId);
-  if (workdir) await switchToBridgeForWorkdir(workdir, { reconnect: false, followThreadWorkdir: true });
+  // A session opens on the Mac that holds its transcript. When the row names
+  // its own bridge that answer is already settled, so the workdir must not be
+  // allowed to send the connection back to a same-named folder on this one.
+  const switchedByBridge = await switchToNamedBridge(options.bridgeId);
+  if (workdir && !switchedByBridge && !options.bridgeId) {
+    await switchToBridgeForWorkdir(workdir, { reconnect: false, followThreadWorkdir: true });
+  }
   if (workdir) {
     setWorkspaceMeta({ repoName: options.project || projectForThread({ cwd: workdir }), workspaceLocation: workdir, gitBranch: "" });
   }
@@ -5329,6 +5523,19 @@ async function selectThread(threadId, options = {}) {
   }, 420);
 }
 
+// The sidebar now lists every registered bridge's sessions at once, so a row
+// can belong to a Mac this connection is not talking to. Opening it moves the
+// connection there first; the thread id means nothing on the other machine.
+async function switchToNamedBridge(bridgeId) {
+  if (!bridgeId || bridgeId === activeBridgeId || !bridgeById(bridgeId)) return false;
+  const state = getBridgeState(bridgeId);
+  await setActiveBridge(bridgeId, { silent: true, reconnect: false });
+  const provider = normalizeProviderName(state.activeProvider || state.info?.provider);
+  if (provider) adoptBridgeProvider(provider);
+  showToast(`${shortMachineName(bridgeById(bridgeId) || {}, state)} の接続に切り替えました。`);
+  return true;
+}
+
 async function switchToBridgeForWorkdir(workdir, options = {}) {
   const target = workspaceKeyForThread({ cwd: workdir });
   if (!target) return false;
@@ -5357,11 +5564,12 @@ async function switchToBridgeForWorkdir(workdir, options = {}) {
 async function startNewThread(options = {}) {
   const workdir = String(options.workdir || "").trim();
   workspaceFollowsSelectedThread = Boolean(workdir);
+  const switchedByBridge = await switchToNamedBridge(options.bridgeId);
   if (workdir) {
-    await switchToBridgeForWorkdir(workdir, { reconnect: false, followThreadWorkdir: true });
+    if (!switchedByBridge && !options.bridgeId) await switchToBridgeForWorkdir(workdir, { reconnect: false, followThreadWorkdir: true });
     setWorkspaceMeta({ repoName: options.project || projectForThread({ cwd: workdir }), workspaceLocation: workdir, gitBranch: "" });
   }
-  selectThread("", { fresh: true, workdir });
+  selectThread("", { fresh: true, workdir, bridgeId: options.bridgeId || "" });
 }
 
 function showRightPanel() {
@@ -6021,14 +6229,51 @@ async function showSettings() {
   }
 }
 
+// Settings belong to one bridge, and a bridge belongs to one Mac, so the way to
+// set up the Air from here is to move this screen to the Air's connection. The
+// row makes that a tap and says which machine is being edited right now.
+function machinePickerRow(currentMachineName = "") {
+  const row = document.createElement("div");
+  row.className = "settings-machine-row";
+  const label = document.createElement("span");
+  label.className = "settings-machine-label";
+  label.textContent = "設定するMac";
+  row.appendChild(label);
+
+  const entries = bridgeRegistry.bridges || [];
+  if (entries.length <= 1) {
+    const only = document.createElement("span");
+    only.className = "settings-machine-current";
+    only.textContent = currentMachineName || "この接続先だけ";
+    row.appendChild(only);
+    return row;
+  }
+
+  const names = entries.map((entry) => shortMachineName(entry, getBridgeState(entry.id)) || bridgeDisplayLabel(entry, entry.id));
+  for (const [index, entry] of entries.entries()) {
+    const machine = names[index];
+    // Two bridges on one Mac would otherwise show as two identical chips.
+    const duplicated = names.filter((name) => name === machine).length > 1;
+    const port = entry.port || getBridgeState(entry.id).info?.uiPort || "";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = entry.id === activeBridgeId ? "settings-machine-chip active" : "settings-machine-chip";
+    button.textContent = duplicated && port ? `${machine} :${port}` : machine;
+    button.title = `${machine} / ${bridgeDisplayLabel(entry, entry.id)} / ${entry.baseUrl}`;
+    button.setAttribute("aria-pressed", String(entry.id === activeBridgeId));
+    button.disabled = entry.id === activeBridgeId;
+    button.addEventListener("click", async () => {
+      await setActiveBridge(entry.id);
+      showSettings();
+    });
+    row.appendChild(button);
+  }
+  return row;
+}
+
 function renderLocalSettings(payload) {
   const group = document.createElement("section");
   group.className = "local-settings";
-
-  const title = document.createElement("div");
-  title.className = "theme-settings-title";
-  title.textContent = "起動設定";
-  group.appendChild(title);
 
   const active = payload.active || {};
   const settings = payload.settings || {};
@@ -6037,14 +6282,31 @@ function renderLocalSettings(payload) {
   const defaultModels = options.defaultModels || {};
   let workspaceItems = options.workspaces || [];
 
+  // Everything under this heading belongs to one Mac: the one this connection
+  // is talking to. `/Users/minijiro/WORK_LOCAL/…` and `/Users/yujiro/WORK_LOCAL/…`
+  // are different machines wearing nearly the same path, so the machine is named
+  // once at the top and again on the folder controls below.
+  const activeEntry = activeBridge() || {};
+  const activeState = getBridgeState(activeBridgeId);
+  const machineName = shortMachineName(activeEntry, activeState);
+  const machineHost = String(activeState.info?.hostName || "");
+  let browsingMachine = machineName;
+
+  const title = document.createElement("div");
+  title.className = "theme-settings-title";
+  title.textContent = machineName ? `起動設定 — ${machineName}` : "起動設定";
+  group.appendChild(title);
+
   const modelLabel = document.createElement("div");
   modelLabel.className = "local-settings-current";
   modelLabel.innerHTML = `
-    <span>現在</span>
+    <span>${escapeHtml(machineName || "現在")}</span>
     <strong>${escapeHtml(`${active.provider || "codex"} / ${active.model || "unknown"}`)}</strong>
     <code>${escapeHtml(shortenPath(active.workdir || ""))}</code>
   `;
+  if (machineHost) modelLabel.title = machineHost;
   group.appendChild(modelLabel);
+  group.appendChild(machinePickerRow(machineName));
 
   const modelSelect = document.createElement("select");
   modelSelect.className = "settings-select";
@@ -6085,7 +6347,7 @@ function renderLocalSettings(payload) {
 
   const workspaceSelect = document.createElement("select");
   workspaceSelect.className = "settings-select";
-  renderWorkspaceOptions(workspaceSelect, workspaceItems, settings.workdir || active.workdir || "");
+  renderWorkspaceOptions(workspaceSelect, workspaceItems, settings.workdir || active.workdir || "", machineName);
 
   const manualInput = document.createElement("input");
   manualInput.className = "settings-input";
@@ -6138,7 +6400,22 @@ function renderLocalSettings(payload) {
     try {
       const result = await apiGet(`/api/workspaces/browse${targetPath ? `?path=${encodeURIComponent(targetPath)}` : ""}`);
       browserCurrent = result;
-      browserPath.textContent = result.displayPath || result.path;
+      // The listing says whose home it came from, so a path that reads the same
+      // on both Macs still cannot be mistaken for the other one's.
+      browsingMachine = uiUtils.machineLabelForBridge ? uiUtils.machineLabelForBridge(result) || machineName : machineName;
+      browserPath.replaceChildren();
+      if (browsingMachine) {
+        const machineChip = document.createElement("span");
+        machineChip.className = "workspace-browser-machine";
+        machineChip.textContent = browsingMachine;
+        browserPath.appendChild(machineChip);
+      }
+      const pathText = document.createElement("span");
+      pathText.className = "workspace-browser-path-text";
+      pathText.textContent = result.displayPath || result.path;
+      browserPath.appendChild(pathText);
+      browserPath.title = `${browsingMachine ? `${browsingMachine}: ` : ""}${result.path || ""}`;
+      if (result.home) manualInput.placeholder = `${result.home}/...`;
       browserUp.disabled = !result.parent;
       setBookmarkButton(result.pinned);
       browserList.textContent = "";
@@ -6172,8 +6449,8 @@ function renderLocalSettings(payload) {
     try {
       const result = await apiPost("/api/workspaces", { path: browserCurrent.path });
       workspaceItems = result.options || workspaceItems;
-      renderWorkspaceOptions(workspaceSelect, workspaceItems, browserCurrent.path);
-      setSettingsStatus(status, "作業場所に選びました。保存すると次回起動でも使われます。");
+      renderWorkspaceOptions(workspaceSelect, workspaceItems, browserCurrent.path, browsingMachine);
+      setSettingsStatus(status, `${browsingMachine ? `${browsingMachine} の` : ""}作業場所に選びました。保存すると次回起動でも使われます。`);
     } catch (error) {
       setSettingsStatus(status, error.message, "error");
     }
@@ -6186,7 +6463,7 @@ function renderLocalSettings(payload) {
       browserCurrent.pinned = result.pinned;
       setBookmarkButton(result.pinned);
       workspaceItems = result.options || workspaceItems;
-      renderWorkspaceOptions(workspaceSelect, workspaceItems, workspaceSelect.value);
+      renderWorkspaceOptions(workspaceSelect, workspaceItems, workspaceSelect.value, browsingMachine);
       setSettingsStatus(status, result.pinned ? "ブックマークしました。" : "ブックマークを解除しました。");
     } catch (error) {
       setSettingsStatus(status, error.message, "error");
@@ -6218,9 +6495,9 @@ function renderLocalSettings(payload) {
   form.append(
     settingField("使用AI", providerSelect),
     settingField("モデル", modelSelect),
-    settingField("作業場所", workspaceSelect),
-    settingGroup("フォルダをたどって選ぶ", browser),
-    settingGroup("パスを直接入力", manualRow),
+    settingField(machineName ? `作業場所（${machineName}）` : "作業場所", workspaceSelect),
+    settingGroup(machineName ? `${machineName} のフォルダをたどって選ぶ` : "フォルダをたどって選ぶ", browser),
+    settingGroup(machineName ? `${machineName} のパスを直接入力` : "パスを直接入力", manualRow),
     historyLabel,
     status,
   );
@@ -6257,7 +6534,7 @@ function renderLocalSettings(payload) {
     try {
       const result = await apiPost("/api/workspaces", { path: nextPath });
       workspaceItems = result.options || workspaceItems;
-      renderWorkspaceOptions(workspaceSelect, workspaceItems, result.workspace?.path || nextPath);
+      renderWorkspaceOptions(workspaceSelect, workspaceItems, result.workspace?.path || nextPath, browsingMachine);
       manualInput.value = "";
       setSettingsStatus(status, "候補に追加しました。保存すると次回起動の作業場所になります。");
       addStatus("作業場所候補を追加しました。");
@@ -6279,9 +6556,9 @@ function renderLocalSettings(payload) {
         workdir: workspaceSelect.value,
         historySyncEnabled: historyInput.checked,
       });
-      setSelectedModel(modelSelect.value);
+      setSelectedModel(modelSelect.value, { provider: providerSelect.value });
       workspaceItems = result.options?.workspaces || workspaceItems;
-      renderWorkspaceOptions(workspaceSelect, workspaceItems, result.settings?.workdir || workspaceSelect.value);
+      renderWorkspaceOptions(workspaceSelect, workspaceItems, result.settings?.workdir || workspaceSelect.value, browsingMachine);
       switchThreadProvider(providerSelect.value);
       setSettingsStatus(status, result.restartRequired ? "保存しました。作業場所やモデルは再起動で既定に反映します。" : "保存しました。", result.restartRequired ? "warning" : "");
       addStatus("起動設定を保存しました。");
@@ -6310,19 +6587,23 @@ function renderLocalSettings(payload) {
   artifactList.appendChild(group);
 }
 
-function renderWorkspaceOptions(select, items, selectedValue) {
+// `machine` names the Mac these folders are on. A dropdown listing
+// `codex-remote-control-lab` twice, once per machine, is a dropdown you pick the
+// wrong one from; the optgroup heading is where that gets settled.
+function renderWorkspaceOptions(select, items, selectedValue, machine = "") {
   const selectedPath = selectedValue || "";
+  const prefix = machine ? `${machine} / ` : "";
   const groups = new Map();
   const seen = new Set();
   for (const item of items || []) {
     if (!item?.path || seen.has(item.path)) continue;
     seen.add(item.path);
-    const groupName = item.group || "フォルダ";
+    const groupName = `${prefix}${item.group || "フォルダ"}`;
     if (!groups.has(groupName)) groups.set(groupName, []);
     groups.get(groupName).push(item);
   }
   if (selectedPath && !seen.has(selectedPath)) {
-    groups.set("選択中", [{ path: selectedPath, label: shortenPath(selectedPath), group: "選択中" }]);
+    groups.set(`${prefix}選択中`, [{ path: selectedPath, label: shortenPath(selectedPath), group: "選択中" }]);
   }
 
   select.replaceChildren();
@@ -7051,7 +7332,7 @@ function connect({ preserveHistory = false, freshThread = false, workdir = "" } 
       setReady(true);
       setSlashCommands(msg.slashCommands);
       setActiveProvider(msg.provider || "codex");
-      setSelectedModel(msg.model, { persist: false });
+      setSelectedModel(msg.model, { persist: false, provider: msg.provider || currentThreadProvider() });
       const readyWorkspace = workspaceMetaFromRun({
         repoName: msg.repoName || msg.run?.repoName,
         workspaceLocation: msg.workspaceLocation || msg.run?.workspaceLocation,
@@ -7718,7 +7999,9 @@ refreshBridgeState(activeBridgeId, { force: true })
   // stored per-thread choice cannot send this session at a provider the bridge
   // has no way to answer.
   .finally(() => syncProviderFromBridge().finally(() => loadThreads().catch(() => {}).finally(connect)));
-refreshFleet({ force: true }).catch(() => {});
+refreshFleet({ force: true })
+  .catch(() => {})
+  .finally(() => loadFleetThreads({ force: true }).catch(() => {}));
 unregisterStaleServiceWorkersIfNeeded().finally(() => {
   if (params.get("pwaDiagnostics") === "1") safeWriteStorage(localStorage, pwaDiagnosticsStorageKey, "1");
   trackHeaderBlockEnd();
@@ -7728,6 +8011,11 @@ unregisterStaleServiceWorkersIfNeeded().finally(() => {
 setInterval(() => {
   if (document.visibilityState !== "hidden") loadThreads({ background: true });
 }, 10_000);
+// The other Macs are polled more slowly than the one being worked on: their
+// lists move when someone is at that machine, not while this one is being used.
+setInterval(() => {
+  if (document.visibilityState !== "hidden") loadFleetThreads().catch(() => {});
+}, 20_000);
 setInterval(() => {
   if (document.visibilityState !== "hidden") refreshSelectedThread();
 }, 3_000);

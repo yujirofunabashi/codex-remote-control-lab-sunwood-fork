@@ -333,6 +333,14 @@
   line-height: 1.5;
 }
 
+/* Says what adding a Mac is for, above the box rather than after it. */
+.bridge-add-note {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .composer[data-submitting="true"] .send-button {
   opacity: 0.72;
 }
@@ -1237,13 +1245,40 @@ button.project-heading.active {
 
 .thread-workdir {
   grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
   min-width: 0;
   overflow: hidden;
   color: color-mix(in srgb, var(--muted) 82%, transparent);
-  text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 11px;
   font-weight: 500;
+}
+
+.thread-workdir-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Which Mac ran the session. It shares the folder line because "where is this
+   work" is one question, and it only appears when the list has two answers. */
+.thread-machine,
+.project-machine {
+  flex: none;
+  border: 1px solid color-mix(in srgb, var(--muted) 38%, transparent);
+  border-radius: 999px;
+  padding: 0 6px;
+  color: color-mix(in srgb, var(--muted) 92%, transparent);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+
+.project-machine {
+  font-size: 11px;
 }
 
 .project-empty,
@@ -7201,9 +7236,69 @@ body[data-main-view="terminal"] .pwa-install-hint {
 }
 
 .workspace-browser-path {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
   font-size: 12px;
   color: var(--muted, #6b6b76);
   word-break: break-all;
+}
+
+/* The path alone does not say which Mac it is on: both machines keep the same
+   folder names under different home directories. */
+.workspace-browser-machine {
+  flex: none;
+  border: 1px solid color-mix(in srgb, var(--muted) 38%, transparent);
+  border-radius: 999px;
+  padding: 0 6px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.7;
+  white-space: nowrap;
+}
+
+.workspace-browser-path-text {
+  min-width: 0;
+}
+
+/* Which Mac this whole settings screen is editing. The chips switch the
+   connection, because the settings belong to the bridge on that machine. */
+.settings-machine-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 10px;
+}
+
+.settings-machine-label {
+  color: var(--muted, #6b6b76);
+  font-size: 12px;
+}
+
+.settings-machine-current {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.settings-machine-chip {
+  appearance: none;
+  border: 1px solid var(--border, rgba(120, 120, 140, 0.28));
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 12px;
+}
+
+.settings-machine-chip.active {
+  border-color: var(--bridge-color, var(--thread-accent));
+  background: color-mix(in srgb, var(--bridge-color, var(--thread-accent)) 16%, transparent);
+  cursor: default;
 }
 
 .workspace-browser-list {

@@ -92,6 +92,15 @@ test("browsing with no path starts at the home folder", () => {
   assert.equal(browseWorkspaceDirectories("").path, path.resolve(home));
 });
 
+test("a listing names the machine whose folders it is showing", () => {
+  // `~/WORK_LOCAL/00_MINI_WORKSPACE` exists on both Macs under different homes,
+  // so the machine has to come back with the listing rather than be assumed.
+  const result = browseWorkspaceDirectories(projects);
+  assert.equal(result.home, path.resolve(home));
+  assert.equal(result.hostName, os.hostname());
+  assert.ok(Object.prototype.hasOwnProperty.call(result, "machineLabel"));
+});
+
 test("a bookmark survives where recent would age out", () => {
   const before = workspaceBookmarks().length;
   const result = setWorkspaceBookmark(repo, true);
@@ -138,10 +147,12 @@ test("multi-button settings groups are not wrapped in a label", () => {
   // press "↑ 上の階層", so picking a folder immediately jumped to its parent.
   const ui = fs.readFileSync(path.join(__dirname, "..", "public", "main.js"), "utf8");
 
-  assert.match(ui, /settingGroup\("フォルダをたどって選ぶ", browser\)/);
-  assert.match(ui, /settingGroup\("パスを直接入力", manualRow\)/);
-  assert.ok(!/settingField\("フォルダをたどって選ぶ"/.test(ui));
-  assert.ok(!/settingField\("パスを直接入力"/.test(ui));
+  // The heading now names the machine being browsed, so what is pinned here is
+  // the wrapper each control goes through, not the words in front of it.
+  assert.match(ui, /settingGroup\(.*, browser\)/);
+  assert.match(ui, /settingGroup\(.*, manualRow\)/);
+  assert.ok(!/settingField\(.*, browser\)/.test(ui));
+  assert.ok(!/settingField\(.*, manualRow\)/.test(ui));
 
   // settingGroup must stay a div; the whole point is that it is not a label.
   const group = ui.match(/function settingGroup\(labelText, control\) \{[\s\S]*?\n\}/)[0];

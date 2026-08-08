@@ -97,7 +97,7 @@ PHONE_DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/... npm run phone
 PHONE_NOTIFY_TIMEOUT_MS=5000 npm run phone
 ```
 
-複数 bridge / 複数 worktree を 1 つの browser tab で扱う場合は、Bridge Fleet / Worktree Switchboard を使います。通常通り 1 つ目の bridge を開き、ヘッダーまたは sidebar の bridge/worktree pill から、残りの protected startup URL または base URL と token を追加します。`CODEX_APP_SERVER_PORT` を指定しない場合、各 slot の Codex app-server は `PHONE_UI_PORT - 1` を使います。たとえば `45224 -> 45223` になり、`45214 -> 45213` の既定 app-server を複数 slot が奪い合いません。active bridge を切り替えると chat / terminal / thread / artifact / approval UI はその bridge の状態へ切り替わり、inactive bridge の稼働・エラー・承認待ちは global monitor / inbox に出ます。
+複数 bridge / 複数 worktree を 1 つの browser tab で扱う場合は、Bridge Fleet / Worktree Switchboard を使います。通常通り 1 つ目の bridge を開き、ヘッダーまたは sidebar の bridge/worktree pill から、残りの protected startup URL または base URL と token を追加します。`CODEX_APP_SERVER_PORT` を指定しない場合、各 slot の Codex app-server は `PHONE_UI_PORT - 1` を使います。たとえば `45224 -> 45223` になり、`45214 -> 45213` の既定 app-server を複数 slot が奪い合いません。active bridge を切り替えると chat / terminal / thread / artifact / approval UI はその bridge の状態へ切り替わり、inactive bridge の稼働・エラー・承認待ちは global monitor / inbox に出ます。session は実行した Mac に残るため、sidebar の thread 一覧は登録済み bridge すべてから集めた 1 つの一覧になります。2 台以上の Mac が並ぶときだけ project 見出しと thread 行に機体名（`mini` / `Air` など）が付き、別の Mac の thread を開くとその bridge へ接続が切り替わります。設定画面の作業場所・フォルダ選択も、いま見ているのがどの Mac かを見出しとパス表示に出し、上部の chip で設定対象の Mac を切り替えられます。機体名は hostname から推定し、`PHONE_MACHINE_LABEL` を指定した場合はそちらが優先されます。
 
 各 bridge は token-protected な `GET /api/bridge/info` で label、port、cwd、branch、dirty summary、model、capabilities を返します。token は UI では mask され、host profile には base URL と metadata だけを保存し、保存 token は端末内の token store、保存しない token は sessionStorage に分けます。`.phone-fleet.local.json` を作って `npm run phone:fleet` を使うと、複数 slot をまとめて起動できます。各 entry に `"provider": "codex"` または `"provider": "claude"` を入れると、その slot の既定 provider を再起動後も固定できます。fleet mode では browser UI から保存した workdir / model / provider も対応する `.phone-fleet.local.json` entry へ反映され、次回の fleet 再起動後も維持されます。この local config は Git に入れないでください。
 
@@ -112,6 +112,7 @@ PHONE_NOTIFY_TIMEOUT_MS=5000 npm run phone
 - Codex Desktop 風の sidebar / conversation / artifact panel / composer layout
 - 最近の thread 一覧と直接 resume
 - 複数 bridge profile を 1 tab に登録する Bridge Fleet / Worktree Switchboard
+- 登録済み bridge 全体の thread 一覧を 1 つの sidebar にまとめ、project 見出しにどの Mac のものかを表示
 - 登録済み bridge 全体の global running monitor と global approval inbox
 - thread ごとのアクセント色を browser localStorage に保存し、複数作業を見分けやすくする
 - チャット / ターミナル表示を切り替え、command・file change・承認・error などの監視ログを確認

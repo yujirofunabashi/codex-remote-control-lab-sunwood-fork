@@ -650,6 +650,43 @@
     return parts.slice(-keep).join("-");
   }
 
+  // What a bridge calls the Mac it runs on. PHONE_MACHINE_LABEL wins outright,
+  // because a machine whose owner renamed it is not identified by its hostname.
+  function machineLabelForBridge(info = {}) {
+    const explicit = String(info?.machineLabel || "").trim();
+    if (explicit) return explicit;
+    return machineLabelFromHost(info?.hostName || info?.host || "");
+  }
+
+  // The label is for reading; this is for comparing. Falls back to the bridge id
+  // so two unnamed bridges still count as two machines rather than merging.
+  function machineScopeKey(machine = "", fallback = "") {
+    const text = String(machine || "").trim() || String(fallback || "").trim();
+    return text.toLowerCase().replace(/\s+/g, "-");
+  }
+
+  // Both Macs keep a `00_受け渡し`, and the Air's copy of this repo is a folder
+  // with the same tail as the mini's. A heading keyed on the folder name alone
+  // therefore files one machine's sessions under the other's project, so the
+  // machine goes into the key, separated by the one character neither a folder
+  // name nor a hostname can contain.
+  function threadProjectGroupKey(project = "", machine = "") {
+    const name = String(project || "").trim() || "No project";
+    const scope = machineScopeKey(machine);
+    return scope ? `${scope}/${name}` : name;
+  }
+
+  // How many machines the visible list actually spans. One is the normal case,
+  // and naming the machine on every row there would be noise.
+  function machineScopeCount(records = []) {
+    const seen = new Set();
+    for (const record of records || []) {
+      const key = machineScopeKey(record?.machineLabel, record?.bridgeId);
+      if (key) seen.add(key);
+    }
+    return seen.size;
+  }
+
   // A pipe table is only a table once the row under the header says so, which
   // is what keeps a line of prose containing "|" from being eaten. The cells
   // come back as raw markdown - inline rendering belongs to the caller.
@@ -763,6 +800,10 @@
     prioritizeSelectedThread,
     threadStatusFromKey,
     machineLabelFromHost,
+    machineLabelForBridge,
+    machineScopeKey,
+    machineScopeCount,
+    threadProjectGroupKey,
     shortHostLabel,
     splitMarkdownTableRow,
     isMarkdownTableStart,
