@@ -16,6 +16,7 @@ const {
   fallbackThreadColor,
   keyIntentText,
   limitThreadList,
+  loadThreadsAfterProviderSync,
   maskToken,
   middleEllipsis,
   normalizeBridgeBaseUrl,
@@ -210,6 +211,34 @@ test("PWA helpers keep manifest and service worker opt-in safe", () => {
     shouldReloadInstallWithStoredToken({ pathname: "/", search: "", storedToken: "secret", standalone: false }),
     false,
   );
+});
+
+test("resume thread refresh waits for provider sync and still falls back after a lookup failure", async () => {
+  const events = [];
+  const result = await loadThreadsAfterProviderSync(
+    async () => {
+      events.push("sync:start");
+      await Promise.resolve();
+      events.push("sync:end");
+    },
+    async (options) => {
+      events.push(`load:${options.background}`);
+      return "loaded";
+    },
+    { background: true },
+  );
+  assert.equal(result, "loaded");
+  assert.deepEqual(events, ["sync:start", "sync:end", "load:true"]);
+
+  const fallbackEvents = [];
+  await loadThreadsAfterProviderSync(
+    async () => {
+      fallbackEvents.push("sync");
+      throw new Error("bridge waking");
+    },
+    async () => fallbackEvents.push("load"),
+  );
+  assert.deepEqual(fallbackEvents, ["sync", "load"]);
 });
 
 test("redactSensitiveText masks bridge tokens and auth-like secrets", () => {
