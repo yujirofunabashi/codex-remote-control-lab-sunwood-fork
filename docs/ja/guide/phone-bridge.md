@@ -264,6 +264,8 @@ terminal の key row は、認証なしの raw shell 実行口ではありませ
 
 ## PWA 注意
 
-`site.webmanifest` は token を含まず、`display: standalone` を使います。secure context または localhost では `service-worker.js` を登録し、app shell だけを cache します。API response、WebSocket、token 付き URL、upload、raw file route、terminal history、approval payload は cache しません。LAN HTTP ではブラウザ制約で Service Worker 登録ができないことがありますが、通常の browser UI はそのまま使えます。
+通常公開する `site.webmanifest` は token を含まず、`display: standalone` を使います。有効な protected `/install?token=...` page だけが no-store の install manifest を参照し、その `start_url` は credential を URL fragment で渡します。Safari とホーム画面 Web App は storage が別であるため、この受け渡しが必要です。初回起動時に Web App 自身の local storage へ保存し、fragment は即時削除します。fragment は bridge へ送信されず、無効または token なしの install-manifest request が credential 付き `start_url` を受け取ることもありません。
 
-ホーム画面に追加した後も、保存された token はその端末の private state として扱ってください。token がない、または rotation した場合は、private な起動通知の URL を一度開くか、token 入力欄で local の `.phone-token` / `PHONE_TOKEN` を保存すると、UI は address bar に token を残さず再接続します。
+secure context または localhost では `service-worker.js` を登録し、app shell だけを cache します。通常 manifest、API response、WebSocket、token 付き URL と install manifest、upload、raw file route、terminal history、approval payload は cache しません。LAN HTTP ではブラウザ制約で Service Worker 登録ができないことがありますが、通常の browser UI はそのまま使えます。
+
+ホーム画面に追加した後も、保存された token はその端末の private state として扱ってください。token がない、または rotation した場合は、ホーム画面 Web App の復旧フォームへ local の `.phone-token` / `PHONE_TOKEN` を入力します。または、その Web App を削除し、現在の protected `/install?token=...` URL から追加し直します。Safari で URL を開くだけでは、既にインストール済みの Web App へ Safari の storage はコピーされません。

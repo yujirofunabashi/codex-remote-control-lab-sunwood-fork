@@ -164,7 +164,9 @@ const reviewTabButtons = document.querySelectorAll("[data-review-tab]");
 
 const tokenStorageKey = "codexPhoneToken:v1";
 const params = new URLSearchParams(location.search);
-const initialToken = params.get("token") || "";
+const startupHashParams = new URLSearchParams(location.hash.replace(/^#/, ""));
+const startupHashToken = startupHashParams.get("token") || "";
+const initialToken = params.get("token") || startupHashToken;
 const initialProviderParam = (() => {
   const value = String(params.get("provider") || "").trim().toLowerCase();
   return value === "codex" || value === "claude" ? value : "";
@@ -189,6 +191,15 @@ try {
   }
 } catch {
   // localStorage may be unavailable; the URL token still works for this page load.
+}
+// Safari and a Home Screen web app have separate storage. The authenticated
+// install manifest therefore launches the app once with its token in the URL
+// fragment. Persist it inside the web app, then remove it before anything can
+// copy or display the launch URL. Fragments are never sent to the bridge.
+if (startupHashToken && window.history?.replaceState) {
+  const nextUrl = new URL(location.href);
+  nextUrl.hash = "";
+  window.history.replaceState(null, "", nextUrl);
 }
 // Everywhere else the token leaves the address bar as soon as it has been read.
 if (!preserveEntryUrl && params.has("token") && window.history?.replaceState) {

@@ -1957,11 +1957,18 @@ function safeProxyBasePath(basePath) {
   return /^\/(?:abs)?proxy\/\d+$/.test(value) ? value : "";
 }
 
-function manifestHrefForRequest(req, _phoneToken) {
+function manifestHrefForRequest(req, phoneToken) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const safeBasePath = safeProxyBasePath(url.searchParams.get("base"));
   const params = new URLSearchParams();
   if (safeBasePath) params.set("base", safeBasePath);
+  // A Home Screen web app has storage isolated from Safari. On the protected
+  // install page, give iOS an explicit start_url that can seed that isolated
+  // storage. Normal manifests remain public and token-free.
+  if (url.pathname === "/install" && phoneToken && requestToken(url) === phoneToken) {
+    params.set("install", "1");
+    params.set("token", phoneToken);
+  }
   const query = params.toString();
   return `site.webmanifest${query ? `?${query}` : ""}`;
 }
@@ -2099,7 +2106,7 @@ function serveStatic(req, res, phoneToken) {
   fs.createReadStream(target).pipe(res);
 }
 
-function manifestPayloadForRequest(url) {
+function manifestPayloadForRequest(url, phoneToken = "") {
   const manifestPath = path.join(root, "public", "site.webmanifest");
   const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
   const safeBasePath = safeProxyBasePath(url.searchParams.get("base"));
@@ -2122,12 +2129,16 @@ function manifestPayloadForRequest(url) {
       purpose: "any maskable",
     },
   ];
-  manifest.start_url = `${safeBasePath}/`;
+  const authenticatedInstall = url.searchParams.get("install") === "1" && phoneToken && requestToken(url) === phoneToken;
+  manifest.start_url = authenticatedInstall
+    ? `${safeBasePath}/install#token=${encodeURIComponent(phoneToken)}`
+    : `${safeBasePath}/`;
   return manifest;
 }
 
-function serveManifest(url, _phoneToken, res) {
-  const manifest = manifestPayloadForRequest(url);
+function serveManifest(url, phoneToken, res) {
+  if (url.searchParams.get("install") === "1" && !requireToken(url, phoneToken, res)) return;
+  const manifest = manifestPayloadForRequest(url, phoneToken);
   res.writeHead(200, { "content-type": "application/manifest+json; charset=utf-8", "cache-control": "no-store" });
   res.end(JSON.stringify(manifest, null, 2));
 }
@@ -4827,14 +4838,13 @@ async function main() {
       serveIndex(req, res, { includeManifest: false, standalone: false, phoneToken });
       return;
     }
-    // Adding the root page to the home screen produces a standalone app that
-    // cannot connect: iOS takes its entry point from the manifest start_url,
-    // which is deliberately token-free. Dropping the manifest but keeping the
-    // standalone meta makes iOS use the URL in the address bar instead, so the
-    // icon carries the token the app needs, and the token still never appears in
-    // a file served to unauthenticated callers.
+    // Safari and the installed Home Screen app do not share storage. A valid
+    // install URL therefore receives an authenticated manifest whose start_url
+    // seeds the app through a fragment. Tokenless or invalid requests keep the
+    // manifest out, and the normal public manifest remains credential-free.
     if (url.pathname === "/install") {
-      serveIndex(req, res, { includeManifest: false, standalone: true, phoneToken });
+      const authenticatedInstall = requestToken(url) === phoneToken;
+      serveIndex(req, res, { includeManifest: authenticatedInstall, standalone: true, phoneToken });
       return;
     }
     if (url.pathname === "/api/threads") {

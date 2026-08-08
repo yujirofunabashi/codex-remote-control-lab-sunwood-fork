@@ -15,7 +15,7 @@ const {
 const fs = require("node:fs");
 const path = require("node:path");
 
-test("manifest href and start_url never include bridge token", () => {
+test("normal manifest href and start_url never include bridge token", () => {
   const req = {
     url: "/?token=secret123&base=/proxy/45214",
     headers: { host: "127.0.0.1:45214" },
@@ -27,6 +27,29 @@ test("manifest href and start_url never include bridge token", () => {
   const manifest = manifestPayloadForRequest(new URL("http://127.0.0.1:45214/site.webmanifest?token=secret123&base=/proxy/45214"));
   assert.equal(manifest.start_url, "/proxy/45214/");
   assert.doesNotMatch(JSON.stringify(manifest), /secret123|[?&]token=/);
+});
+
+test("authenticated install manifest seeds the isolated Home Screen app with a fragment token", () => {
+  const token = "secret123";
+  const req = {
+    url: `/install?token=${token}&base=/proxy/45214`,
+    headers: { host: "127.0.0.1:45214" },
+  };
+  const href = manifestHrefForRequest(req, token);
+  const manifestUrl = new URL(href, "http://127.0.0.1:45214/install");
+  assert.equal(manifestUrl.searchParams.get("install"), "1");
+  assert.equal(manifestUrl.searchParams.get("token"), token);
+
+  const manifest = manifestPayloadForRequest(manifestUrl, token);
+  assert.equal(manifest.id, "/proxy/45214/codex-remote-codex-45214");
+  assert.equal(manifest.start_url, `/proxy/45214/install#token=${token}`);
+  assert.doesNotMatch(manifest.start_url, /[?&]token=/);
+});
+
+test("an invalid install manifest request cannot create a credential-bearing start_url", () => {
+  const url = new URL("http://127.0.0.1:45214/site.webmanifest?install=1&token=wrong");
+  const manifest = manifestPayloadForRequest(url, "secret123");
+  assert.equal(manifest.start_url, "/");
 });
 
 test("manifest proxy base is constrained to browser preview proxy paths", () => {
