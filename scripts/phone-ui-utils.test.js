@@ -31,6 +31,7 @@ const {
   sameWorkspaceThreadRecord,
   sanitizeHexColor,
   serviceWorkerRegistrationAllowed,
+  shouldReloadInstallWithStoredToken,
   shouldConfirmDangerousKey,
   shouldShowQuickBar,
   sortThreadsForInbox,
@@ -193,6 +194,22 @@ test("PWA helpers keep manifest and service worker opt-in safe", () => {
   assert.equal(serviceWorkerRegistrationAllowed({ enableSw: true, secureContext: true }), true);
   assert.deepEqual(pwaManifestTokenIssues({ start_url: "/?token=secret", name: "Codex" }).hasTokenParam, true);
   assert.deepEqual(pwaManifestTokenIssues({ start_url: "/", description: "token-protected bridge" }).hasTokenParam, false);
+  assert.equal(
+    shouldReloadInstallWithStoredToken({ pathname: "/install", search: "", storedToken: "secret", standalone: false }),
+    true,
+  );
+  assert.equal(
+    shouldReloadInstallWithStoredToken({ pathname: "/install", search: "?token=fresh", storedToken: "secret", standalone: false }),
+    false,
+  );
+  assert.equal(
+    shouldReloadInstallWithStoredToken({ pathname: "/install", search: "", storedToken: "secret", standalone: true }),
+    false,
+  );
+  assert.equal(
+    shouldReloadInstallWithStoredToken({ pathname: "/", search: "", storedToken: "secret", standalone: false }),
+    false,
+  );
 });
 
 test("redactSensitiveText masks bridge tokens and auth-like secrets", () => {

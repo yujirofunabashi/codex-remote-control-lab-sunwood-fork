@@ -201,6 +201,23 @@ if (startupHashToken && window.history?.replaceState) {
   nextUrl.hash = "";
   window.history.replaceState(null, "", nextUrl);
 }
+// A previous protected visit may have left the token in Safari storage even
+// when the user opens the short /install URL later. Reload that browser page
+// with the credential so the server can attach the authenticated install
+// manifest. Never do this inside the already installed Home Screen app.
+const reloadInstallWithStoredToken = uiUtils.shouldReloadInstallWithStoredToken
+  ? uiUtils.shouldReloadInstallWithStoredToken({
+      pathname: location.pathname,
+      search: location.search,
+      storedToken,
+      standalone: Boolean(window.matchMedia?.("(display-mode: standalone)")?.matches || window.navigator?.standalone === true),
+    })
+  : preserveEntryUrl && Boolean(storedToken) && !params.has("token") && window.navigator?.standalone !== true;
+if (reloadInstallWithStoredToken) {
+  const nextUrl = new URL(location.href);
+  nextUrl.searchParams.set("token", storedToken);
+  window.location.replace(nextUrl.href);
+}
 // Everywhere else the token leaves the address bar as soon as it has been read.
 if (!preserveEntryUrl && params.has("token") && window.history?.replaceState) {
   const nextUrl = uiUtils.urlWithoutTokenParam ? uiUtils.urlWithoutTokenParam(location.href) : (() => {

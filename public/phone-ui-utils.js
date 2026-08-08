@@ -182,6 +182,17 @@
     };
   }
 
+  function shouldReloadInstallWithStoredToken(options = {}) {
+    const pathname = String(options.pathname || "").replace(/\/+$/, "") || "/";
+    const search = new URLSearchParams(String(options.search || ""));
+    return Boolean(
+      pathname.endsWith("/install") &&
+        options.storedToken &&
+        !search.has("token") &&
+        !options.standalone,
+    );
+  }
+
   function workspaceKeyForThreadRecord(thread = {}, fallback = "") {
     const record = thread || {};
     const raw = record.cwd || record.workspaceLocation || record.workdir || fallback || "";
@@ -708,6 +719,7 @@
     canSuggestPwaInstall,
     serviceWorkerRegistrationAllowed,
     pwaManifestTokenIssues,
+    shouldReloadInstallWithStoredToken,
     workspaceKeyForThreadRecord,
     sameWorkspaceThreadRecord,
     isOpaqueThreadId,
