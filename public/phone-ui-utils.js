@@ -676,6 +676,19 @@
     return scope ? `${scope}/${name}` : name;
   }
 
+  // The two Macs already have colours their owner recognises before reading
+  // anything: the mini's icon is amber, the Air's is blue. The label carries the
+  // same two, so the machine registers at a glance. A machine that is neither
+  // gets a stable colour from the shared palette instead, which is why this
+  // answers with a name rather than a colour.
+  function machineAccentToken(machine = "") {
+    const key = machineScopeKey(machine);
+    if (!key) return "";
+    if (/(?:^|[^a-z])mini(?:[^a-z]|$)/.test(key)) return "mini";
+    if (/(?:^|[^a-z])air(?:[^a-z]|$)/.test(key)) return "air";
+    return "";
+  }
+
   // How many machines the visible list actually spans. One is the normal case,
   // and naming the machine on every row there would be noise.
   function machineScopeCount(records = []) {
@@ -803,6 +816,7 @@
     machineLabelForBridge,
     machineScopeKey,
     machineScopeCount,
+    machineAccentToken,
     threadProjectGroupKey,
     shortHostLabel,
     splitMarkdownTableRow,

@@ -7,6 +7,7 @@ const {
   machineLabelForBridge,
   machineScopeKey,
   machineScopeCount,
+  machineAccentToken,
   threadProjectGroupKey,
   shortHostLabel,
   isMarkdownTableStart,
@@ -502,6 +503,22 @@ test("the machine key ignores case and spacing so one Mac is not counted twice",
   // An unnamed bridge still counts as its own machine.
   assert.equal(machineScopeKey("", "claude-45214"), "claude-45214");
   assert.equal(machineScopeKey("", ""), "");
+});
+
+test("the mini and the Air are labelled in the colours of their own app icons", () => {
+  assert.equal(machineAccentToken("mini"), "mini");
+  assert.equal(machineAccentToken("Mac mini"), "mini");
+  assert.equal(machineAccentToken("Air"), "air");
+  assert.equal(machineAccentToken("MacBook-Air"), "air");
+});
+
+test("a machine that is neither takes no named colour, including near-misses", () => {
+  // `repair` and `administrator` contain the letters but name no Air.
+  assert.equal(machineAccentToken("repair-box"), "");
+  assert.equal(machineAccentToken("administrator"), "");
+  assert.equal(machineAccentToken("minimal"), "");
+  assert.equal(machineAccentToken("build-box-01"), "");
+  assert.equal(machineAccentToken(""), "");
 });
 
 test("a list spanning one Mac is not worth labelling per row", () => {

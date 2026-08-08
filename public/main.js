@@ -1025,6 +1025,16 @@ function repoColorForKey(key) {
   return sanitizeHexColor(repoColorOverrides[key]) || fallbackThreadColor(key);
 }
 
+// Paints a machine label in that machine's colour. The mini and the Air are
+// named in CSS, so they follow the theme and match their app icons; anything
+// else takes a stable colour from the palette so a third Mac still reads apart.
+function applyMachineAccent(element, machineLabel = "", machineKey = "") {
+  const identity = String(machineKey || machineLabel || "");
+  const token = uiUtils.machineAccentToken ? uiUtils.machineAccentToken(identity) : "";
+  if (token) element.dataset.machine = token;
+  else if (identity) element.style.setProperty("--machine-color", fallbackThreadColor(`machine:${identity.toLowerCase()}`));
+}
+
 function repoColorForThread(thread) {
   return repoColorForKey(repoColorKeyForContext(thread));
 }
@@ -3553,6 +3563,7 @@ function createThreadListItem(thread, options = {}) {
       const machine = document.createElement("span");
       machine.className = "thread-machine";
       machine.textContent = machineLabel;
+      applyMachineAccent(machine, machineLabel, thread.machineKey);
       workdir.appendChild(machine);
     }
     if (showsPlace) {
@@ -3828,6 +3839,7 @@ function renderThreadList() {
       const machine = document.createElement("span");
       machine.className = "project-machine";
       machine.textContent = groupRecord.machineLabel;
+      applyMachineAccent(machine, groupRecord.machineLabel, groupRecord.machineKey);
       titleRow.appendChild(machine);
     }
     heading.append(folder, titleRow);
@@ -6259,6 +6271,7 @@ function machinePickerRow(currentMachineName = "") {
     button.type = "button";
     button.className = entry.id === activeBridgeId ? "settings-machine-chip active" : "settings-machine-chip";
     button.textContent = duplicated && port ? `${machine} :${port}` : machine;
+    applyMachineAccent(button, machine, bridgeMachineKey(entry));
     button.title = `${machine} / ${bridgeDisplayLabel(entry, entry.id)} / ${entry.baseUrl}`;
     button.setAttribute("aria-pressed", String(entry.id === activeBridgeId));
     button.disabled = entry.id === activeBridgeId;
@@ -6408,6 +6421,7 @@ function renderLocalSettings(payload) {
         const machineChip = document.createElement("span");
         machineChip.className = "workspace-browser-machine";
         machineChip.textContent = browsingMachine;
+        applyMachineAccent(machineChip, browsingMachine);
         browserPath.appendChild(machineChip);
       }
       const pathText = document.createElement("span");

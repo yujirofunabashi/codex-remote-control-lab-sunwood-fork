@@ -8,7 +8,9 @@
 // there. It also pins the composer's model choice against the `ready` message
 // that used to overwrite it on every reconnect.
 //
-// Run with `node scripts/fleet-machines-smoke.js`.
+// Run with `node scripts/fleet-machines-smoke.js`; pass `--shots` to also drop a
+// screenshot of the two-machine sidebar into `.uploads/fleet-machines-smoke/`,
+// which is the only way to check the machine colours by eye.
 
 const fs = require("fs");
 const http = require("http");
@@ -18,6 +20,8 @@ const { chromium } = require("playwright");
 const root = path.resolve(__dirname, "..");
 const publicDir = path.join(root, "public");
 const token = "smoke-token";
+const wantShots = process.argv.includes("--shots");
+const shotsDir = path.join(root, ".uploads", "fleet-machines-smoke");
 const airOrigin = "http://127.0.0.1:45999";
 const airBridgeId = "air-bridge";
 
@@ -169,13 +173,22 @@ async function run() {
     await page.waitForTimeout(2500);
     await page.locator("#mobileThreads").click();
     await page.waitForTimeout(1500);
+    if (wantShots) {
+      fs.mkdirSync(shotsDir, { recursive: true });
+      await page.screenshot({ path: path.join(shotsDir, "sidebar-two-machines.png") });
+    }
 
     const groups = await page.evaluate(() =>
-      Array.from(document.querySelectorAll(".project-group:not(.hidden-projects)")).map((group) => ({
-        name: group.querySelector(".project-name")?.textContent?.trim() || "",
-        machine: group.querySelector(".project-machine")?.textContent?.trim() || "",
-        rows: Array.from(group.querySelectorAll(".thread-title")).map((node) => node.textContent.trim()),
-      })),
+      Array.from(document.querySelectorAll(".project-group:not(.hidden-projects)")).map((group) => {
+        const chip = group.querySelector(".project-machine");
+        return {
+          name: group.querySelector(".project-name")?.textContent?.trim() || "",
+          machine: chip?.textContent?.trim() || "",
+          accent: chip?.dataset.machine || "",
+          color: chip ? getComputedStyle(chip).color : "",
+          rows: Array.from(group.querySelectorAll(".thread-title")).map((node) => node.textContent.trim()),
+        };
+      }),
     );
 
     const titles = groups.flatMap((group) => group.rows);
@@ -190,6 +203,16 @@ async function run() {
       "one folder name on two Macs is two headings, not one",
       handover.length === 2 && new Set(handover.map((group) => group.machine)).size === 2,
       handover.map((group) => `${group.machine}:${group.name}(${group.rows.length})`).join(" / "),
+    );
+
+    // The label is read at a glance by colour before it is read as a word.
+    const accents = new Map(groups.map((group) => [group.machine, group]));
+    const miniChip = accents.get("mini");
+    const airChip = accents.get("Air");
+    check(
+      "each Mac's label carries that Mac's own colour",
+      miniChip?.accent === "mini" && airChip?.accent === "air" && miniChip.color !== airChip.color,
+      `mini=${miniChip?.accent}/${miniChip?.color} air=${airChip?.accent}/${airChip?.color}`,
     );
 
     // Chosen here, on a bridge whose own model is `sonnet`, and read back after
@@ -240,7 +263,7 @@ async function run() {
     if (!result.ok) failed += 1;
     console.log(`${tag}  ${result.name}${result.detail ? `  (${result.detail})` : ""}`);
   }
-  console.log(`\n${checks.length - failed}/${checks.length} checks passed`);
+  console.log(`\n${checks.length - failed}/${checks.length} checks passed${wantShots ? ` — screenshot in ${path.relative(root, shotsDir)}` : ""}`);
   if (failed) process.exitCode = 1;
 }
 
