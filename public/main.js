@@ -598,6 +598,143 @@ function persistBridgeRegistry() {
   };
   saveBridgeLocalTokens();
   writeJsonStorage(bridgeRegistryStorageKey, bridgeRegistry);
+  scheduleBridgeRegistryBackup();
+}
+
+// The registry backup lives on the bridge this app was installed from, so it
+// survives the phone deleting the Home Screen icon and everything under it.
+// Two rules keep the recovery from becoming its own kind of loss: nothing is
+// ever pushed before a restore has succeeded, and a failed restore is not a
+// restore. Anything else lets a freshly installed app - which legitimately
+// knows about no machines at all - overwrite the list it came back for.
+function bridgeRegistryStore() {
+  return bridgeById(homeBridgeId);
+}
+
+async function bridgeRegistryRequest(method, body = null) {
+  const bridge = bridgeRegistryStore();
+  if (!bridge) throw new Error("home bridge is not registered yet");
+  const response = await fetchWithTimeout(urlWithBridgeToken("/api/bridge/registry", bridge), {
+    method,
+    headers: authHeadersForBridge(bridge, body ? { "content-type": "application/json" } : {}),
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+  let result = {};
+  try {
+    result = await response.json();
+  } catch {
+    result = {};
+  }
+  return { ok: response.ok, status: response.status, result };
+}
+
+// Session-only tokens are excluded by construction rather than by filtering
+// later: "remember this on the device" was already the owner's answer to
+// whether the token may be written down.
+function bridgeRegistryTokensForBackup() {
+  const tokens = {};
+  for (const entry of bridgeRegistry.bridges || []) {
+    if (!entry?.id || entry.rememberToken === false) continue;
+    const value = bridgeLocalTokens[entry.id] || (entry.id === homeBridgeId ? storedToken || token : "");
+    if (value) tokens[entry.id] = String(value);
+  }
+  return tokens;
+}
+
+function bridgeRegistryBackupPayload() {
+  return {
+    revision: bridgeRegistryRevision,
+    bridges: (bridgeRegistry.bridges || []).map((entry) => ({ ...entry, token: "" })),
+    tokens: bridgeRegistryTokensForBackup(),
+  };
+}
+
+function applyRemoteBridgeRegistry(remote = {}) {
+  const before = new Set((bridgeRegistry.bridges || []).map((entry) => entry.id));
+  bridgeRegistry = uiUtils.mergeBridgeRegistries ? uiUtils.mergeBridgeRegistries(bridgeRegistry, remote) : bridgeRegistry;
+  bridgeLocalTokens = uiUtils.mergeBridgeTokens ? uiUtils.mergeBridgeTokens(bridgeLocalTokens, remote.tokens) : bridgeLocalTokens;
+  saveBridgeLocalTokens();
+  writeJsonStorage(bridgeRegistryStorageKey, bridgeRegistry);
+  return (bridgeRegistry.bridges || []).filter((entry) => !before.has(entry.id)).length;
+}
+
+async function restoreBridgeRegistryFromHome() {
+  if (bridgeRegistryRestored) return true;
+  if (bridgeRegistryRestorePromise) return bridgeRegistryRestorePromise;
+  bridgeRegistryRestoreAttemptedAt = Date.now();
+  bridgeRegistryRestorePromise = (async () => {
+    const { ok, status, result } = await bridgeRegistryRequest("GET");
+    if (!ok) {
+      if (result?.code === "registry-unreadable") bridgeRegistryBlocked = result.error || "registry is unreadable";
+      throw new Error(result?.error || `${status}`);
+    }
+    bridgeRegistryRevision = Number(result.revision || 0);
+    const restored = applyRemoteBridgeRegistry(result);
+    bridgeRegistryRestored = true;
+    bridgeRegistryBlocked = "";
+    if (restored > 0) {
+      renderFleet();
+      refreshFleet({ force: true });
+      showToast(`保存済みの接続先 ${restored} 件を復元しました`);
+    }
+    // The device may have learned about machines while the backup was
+    // unreachable, so the first push after a restore is what reconciles them.
+    scheduleBridgeRegistryBackup();
+    return true;
+  })()
+    .catch((error) => {
+      console.warn("bridge registry restore failed:", error?.message || error);
+      return false;
+    })
+    .finally(() => {
+      bridgeRegistryRestorePromise = null;
+    });
+  return bridgeRegistryRestorePromise;
+}
+
+function scheduleBridgeRegistryBackup() {
+  if (bridgeRegistryBlocked) return;
+  if (!bridgeRegistryRestored) {
+    if (Date.now() - bridgeRegistryRestoreAttemptedAt >= bridgeRegistryRestoreRetryMs) restoreBridgeRegistryFromHome();
+    return;
+  }
+  if (bridgeRegistryBackupTimer) window.clearTimeout(bridgeRegistryBackupTimer);
+  bridgeRegistryBackupTimer = window.setTimeout(() => {
+    bridgeRegistryBackupTimer = null;
+    pushBridgeRegistryBackup();
+  }, bridgeRegistryBackupDebounceMs);
+}
+
+async function pushBridgeRegistryBackup(attempt = 0) {
+  if (!bridgeRegistryRestored || bridgeRegistryBlocked) return false;
+  try {
+    const { ok, status, result } = await bridgeRegistryRequest("POST", bridgeRegistryBackupPayload());
+    if (ok) {
+      bridgeRegistryRevision = Number(result.revision || bridgeRegistryRevision);
+      return true;
+    }
+    if (result?.code === "registry-unreadable") {
+      // Overwriting a backup we cannot read would destroy the only copy of
+      // whatever is still in it, so stop and let the owner decide.
+      bridgeRegistryBlocked = result.error || "registry is unreadable";
+      showToast("接続先のバックアップを読めません。復旧するまで保存を止めます", "warn");
+      return false;
+    }
+    // Another device wrote first. Its copy came back with the conflict, so
+    // merge both lists and try once more rather than dropping either.
+    if (status === 409 && result?.current && attempt < 1) {
+      bridgeRegistryRevision = Number(result.current.revision || 0);
+      if (applyRemoteBridgeRegistry(result.current) > 0) renderFleet();
+      return pushBridgeRegistryBackup(attempt + 1);
+    }
+    console.warn("bridge registry backup failed:", result?.error || status);
+    return false;
+  } catch (error) {
+    // A push that never reached the bridge leaves the backup exactly as it
+    // was, which is the safe outcome; the next change retries.
+    console.warn("bridge registry backup failed:", error?.message || error);
+    return false;
+  }
 }
 
 function updateActiveBridgeStorage() {
@@ -805,6 +942,16 @@ let firstUseHints = readJsonStorage(firstUseHintsStorageKey, {});
 let bridgeRegistry = readJsonStorage(bridgeRegistryStorageKey, { version: 1, bridges: [] });
 let bridgeLocalTokens = readJsonStorage(bridgeLocalTokensStorageKey, {});
 let bridgeViewState = readJsonStorage(bridgeViewStateStorageKey, {});
+// Declared ahead of the first ensureHomeBridge() call, which persists the
+// registry - and therefore reaches the backup scheduler - during startup.
+const bridgeRegistryBackupDebounceMs = 1500;
+const bridgeRegistryRestoreRetryMs = 30_000;
+let bridgeRegistryRestored = false;
+let bridgeRegistryRestorePromise = null;
+let bridgeRegistryRestoreAttemptedAt = 0;
+let bridgeRegistryRevision = 0;
+let bridgeRegistryBackupTimer = null;
+let bridgeRegistryBlocked = "";
 // Opening on the attention filter made a quiet moment look like a lost account:
 // the list was filtered, not empty, and nothing on screen said so. Start from
 // the unfiltered view and let the narrower ones be asked for.
@@ -931,6 +1078,11 @@ try {
 if (!bridgeById(activeBridgeId)) activeBridgeId = homeBridgeId;
 token = effectiveBridgeToken(activeBridge()) || token;
 getBridgeState(activeBridgeId).selectedThread = selectedThread;
+// Usually joins the attempt ensureHomeBridge() already started, and covers the
+// case where it returned early. Either way the first await hands control back,
+// so the rest of this module - including the DOM bindings renderFleet() needs -
+// is evaluated before any restored bridge reaches the screen.
+restoreBridgeRegistryFromHome();
 
 function sanitizeHexColor(value) {
   if (uiUtils.sanitizeHexColor) return uiUtils.sanitizeHexColor(value);
@@ -7168,6 +7320,10 @@ function renderTokenRecoveryForm(container) {
       ensureHomeBridge();
     }
     meta.textContent = "接続キーを保存しました";
+    // The first restore attempt fails without a token, and this is the moment
+    // one exists - so a reinstalled app recovers its machines here rather than
+    // waiting for the owner to change something else.
+    restoreBridgeRegistryFromHome();
     connect({ preserveHistory: true });
   });
   container.appendChild(form);

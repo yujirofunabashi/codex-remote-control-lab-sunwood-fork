@@ -7,6 +7,14 @@ const path = require("path");
 const { execFileSync, spawn } = require("child_process");
 const WebSocket = require("ws");
 const { bridgeKeyForRequest, bridgeMatchesWorkdir, shouldDisposeIdleBridge, shouldPromoteBridgeKey, shouldReplaceBridgeForWorkdir } = require("./bridge-state");
+const {
+  RegistryConflictError,
+  RegistryUnreadableError,
+  readRegistry: readBridgeRegistryBackup,
+  registryKeyPath,
+  registryPathForPort,
+  writeRegistry: writeBridgeRegistryBackup,
+} = require("./bridge-registry-store");
 const { debugLog, debugLogPath, debugTimer, isDebugEnabled, redactSensitiveText } = require("./debug-log");
 const { isHistorySyncEnabled, runHistorySync } = require("./history-sync");
 const { bridgeUrls, eventTypeLabel, notificationTargets, notifyBridgeUrls, notifyEvent, notifyTaskEvent, stripTokenFromUrl } = require("./phone-notify");
@@ -436,6 +444,10 @@ const model = providerModels[agentProvider] || defaultModelForProvider(agentProv
 const historySyncEnabled = historySyncEnabledFromEnv(process.env, { launchEnvKeys });
 const tokenPath = path.join(root, ".phone-token");
 const workspacePrefsPath = path.join(root, ".phone-workspaces.json");
+// Keyed by port, not by anything the phone holds: a reinstalled PWA has no
+// surviving id of its own to ask for its backup with.
+const bridgeRegistryPath = registryPathForPort(root, uiPort);
+const bridgeRegistryKeyPath = registryKeyPath(root);
 const rateLimitCacheTtlMs = positiveNumber(process.env.PHONE_RATE_LIMIT_CACHE_TTL_MS, 5 * 60 * 1000);
 const rateLimitRefreshTimeoutMs = positiveNumber(process.env.PHONE_RATE_LIMIT_REFRESH_TIMEOUT_MS, 6000);
 const uploadDir = path.join(root, ".uploads");
@@ -4834,6 +4846,49 @@ async function main() {
     if (url.pathname === "/api/bridge/info") {
       if (!requireToken(url, phoneToken, res)) return;
       sendJson(res, 200, bridgeInfoPayload());
+      return;
+    }
+    // The phone's own copy of the bridge list dies with the Home Screen icon,
+    // so this slot keeps the last synced copy for the reinstall that follows.
+    // Every failure answers with a non-200: a client that mistook an error for
+    // "no backup yet" would push its empty registry over the real one.
+    if (url.pathname === "/api/bridge/registry") {
+      if (!requireToken(url, phoneToken, res)) return;
+      const store = { filePath: bridgeRegistryPath, keyPath: bridgeRegistryKeyPath };
+      if (req.method === "GET") {
+        try {
+          sendJson(res, 200, { ok: true, ...readBridgeRegistryBackup(store) });
+        } catch (error) {
+          const code = error instanceof RegistryUnreadableError ? error.code : "registry-error";
+          sendJson(res, 409, { error: error.message, code });
+        }
+        return;
+      }
+      if (req.method === "POST") {
+        try {
+          const body = await readJsonBody(req);
+          if (!Array.isArray(body.bridges)) throw new Error("bridges must be an array");
+          sendJson(res, 200, {
+            ok: true,
+            ...writeBridgeRegistryBackup({
+              ...store,
+              bridges: body.bridges,
+              tokens: body.tokens,
+              expectedRevision: body.revision,
+            }),
+          });
+        } catch (error) {
+          if (error instanceof RegistryConflictError) {
+            // The current copy rides along so the phone can merge and retry
+            // instead of asking the owner to re-register machines by hand.
+            sendJson(res, 409, { error: error.message, code: error.code, current: error.current || null });
+            return;
+          }
+          sendJson(res, 400, { error: error.message });
+        }
+        return;
+      }
+      sendJson(res, 405, { error: "method not allowed" });
       return;
     }
     if (url.pathname === "/site.webmanifest") {

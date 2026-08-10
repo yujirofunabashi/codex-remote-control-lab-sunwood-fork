@@ -32,6 +32,8 @@ const {
   pwaManifestTokenIssues,
   redactSensitiveText,
   removeBridgeFromRegistry,
+  mergeBridgeRegistries,
+  mergeBridgeTokens,
   resumeCommandForThread,
   safeJsonParse,
   sameWorkspaceThreadRecord,
@@ -282,6 +284,54 @@ test("bridge registry helpers dedupe by base URL and keep thread keys bridge sco
   assert.doesNotMatch(JSON.stringify(registry), /[?&]token=|\"token\":\"b\"/);
   assert.equal(bridgeThreadKey(first.id, "thread-123"), `${first.id}::thread-123`);
   assert.equal(removeBridgeFromRegistry(registry, first.id).bridges.length, 0);
+});
+
+test("restoring a backup unions both lists instead of replacing either", () => {
+  const local = { version: 1, bridges: [{ id: "home", baseUrl: "http://127.0.0.1:45214", label: "home", updatedAt: 20, createdAt: 20 }] };
+  const remote = {
+    version: 1,
+    bridges: [
+      { id: "home", baseUrl: "http://127.0.0.1:45214", label: "stale home", updatedAt: 5, createdAt: 5, lastUsedAt: 50 },
+      { id: "air", baseUrl: "http://100.64.0.2:45214", label: "air", updatedAt: 9, createdAt: 9 },
+    ],
+  };
+  const merged = mergeBridgeRegistries(local, remote);
+  assert.deepEqual(
+    merged.bridges.map((bridge) => bridge.id),
+    ["home", "air"],
+  );
+  // The device's own edit is newer, so it wins the label while the backup
+  // still contributes the older createdAt and the newer lastUsedAt.
+  assert.equal(merged.bridges[0].label, "home");
+  assert.equal(merged.bridges[0].createdAt, 5);
+  assert.equal(merged.bridges[0].lastUsedAt, 50);
+  assert.equal(merged.bridges[1].label, "air");
+});
+
+test("a newer backup entry wins over an older local copy", () => {
+  const local = { version: 1, bridges: [{ id: "mini", baseUrl: "http://127.0.0.1:45214", label: "old", updatedAt: 1 }] };
+  const remote = { version: 1, bridges: [{ id: "mini", baseUrl: "http://127.0.0.1:45214", label: "new", updatedAt: 99 }] };
+  assert.equal(mergeBridgeRegistries(local, remote).bridges[0].label, "new");
+});
+
+test("merging an empty backup keeps every bridge the device already had", () => {
+  const local = { version: 1, bridges: [{ id: "home", baseUrl: "http://127.0.0.1:45214" }] };
+  assert.equal(mergeBridgeRegistries(local, { version: 1, bridges: [] }).bridges.length, 1);
+  assert.equal(mergeBridgeRegistries(local, {}).bridges.length, 1);
+});
+
+test("merged registries never carry a token in the bridge list", () => {
+  const merged = mergeBridgeRegistries(
+    { version: 1, bridges: [{ id: "home", baseUrl: "http://127.0.0.1:45214", token: "local-secret" }] },
+    { version: 1, bridges: [{ id: "air", baseUrl: "http://100.64.0.2:45214", token: "remote-secret" }] },
+  );
+  assert.doesNotMatch(JSON.stringify(merged), /secret/);
+});
+
+test("a token typed on this device outranks the backed-up one", () => {
+  assert.deepEqual(mergeBridgeTokens({ home: "fresh" }, { home: "stale", air: "air-token" }), { home: "fresh", air: "air-token" });
+  assert.deepEqual(mergeBridgeTokens({ home: "" }, { home: "stale" }), { home: "stale" });
+  assert.deepEqual(mergeBridgeTokens({}, {}), {});
 });
 
 test("thread inbox status derivation prioritizes actionable work", () => {

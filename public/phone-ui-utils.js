@@ -444,6 +444,63 @@
     return { ...registry, version: 1, bridges: current.filter((bridge) => bridge.id !== bridgeId) };
   }
 
+  function mergeBridgeEntries(local, remote) {
+    const winner = Number(remote.updatedAt || 0) > Number(local.updatedAt || 0) ? remote : local;
+    const loser = winner === local ? remote : local;
+    const createdCandidates = [Number(local.createdAt || 0), Number(remote.createdAt || 0)].filter((value) => value > 0);
+    return {
+      ...loser,
+      ...winner,
+      token: "",
+      createdAt: createdCandidates.length ? Math.min(...createdCandidates) : Number(winner.createdAt || 0),
+      lastUsedAt: Math.max(Number(local.lastUsedAt || 0), Number(remote.lastUsedAt || 0)),
+    };
+  }
+
+  // Restoring a backup is a union, never a replacement. The device may have
+  // bridges the backup predates, and the backup has the ones the device lost;
+  // dropping either half turns a recovery into a second act of forgetting.
+  function mergeBridgeRegistries(local = {}, remote = {}) {
+    const localBridges = Array.isArray(local.bridges) ? local.bridges : [];
+    const remoteBridges = Array.isArray(remote.bridges) ? remote.bridges : [];
+    const remoteById = new Map();
+    for (const bridge of remoteBridges) {
+      if (bridge && bridge.id) remoteById.set(String(bridge.id), bridge);
+    }
+    const merged = [];
+    const used = new Set();
+    for (const bridge of localBridges) {
+      if (!bridge || !bridge.id) continue;
+      const id = String(bridge.id);
+      if (used.has(id)) continue;
+      used.add(id);
+      const remoteEntry = remoteById.get(id);
+      merged.push(remoteEntry ? mergeBridgeEntries(bridge, remoteEntry) : { ...bridge, token: "" });
+    }
+    for (const bridge of remoteBridges) {
+      if (!bridge || !bridge.id) continue;
+      const id = String(bridge.id);
+      if (used.has(id)) continue;
+      used.add(id);
+      merged.push({ ...bridge, token: "" });
+    }
+    return { ...local, version: 1, bridges: merged };
+  }
+
+  // A token typed on this device outranks the backed-up one: it is the one the
+  // owner just proved works.
+  function mergeBridgeTokens(localTokens = {}, remoteTokens = {}) {
+    const out = {};
+    for (const source of [remoteTokens, localTokens]) {
+      if (!source || typeof source !== "object") continue;
+      for (const [id, value] of Object.entries(source)) {
+        const token = String(value === undefined || value === null ? "" : value);
+        if (token) out[String(id)] = token;
+      }
+    }
+    return out;
+  }
+
   function normalizeTerminalKind(kind) {
     const value = String(kind || "").toLowerCase();
     if (terminalKinds.has(value)) return value;
@@ -799,6 +856,8 @@
     bridgeThreadKey,
     upsertBridgeRegistry,
     removeBridgeFromRegistry,
+    mergeBridgeRegistries,
+    mergeBridgeTokens,
     normalizeTerminalKind,
     inferTerminalKindFromText,
     normalizeTerminalEntry,

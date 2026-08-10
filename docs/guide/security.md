@@ -8,7 +8,7 @@ This project is intentionally local-first.
 - The phone bridge is the only LAN-facing server.
 - Page, API, and WebSocket bridge requests require the same token.
 - `.phone-token`, `.uploads/`, `.codex-home*/`, logs, and session databases stay out of Git.
-- `.phone-fleet.local.json`, `.phone-bridges.local.json`, and browser bridge registry state are local-only.
+- `.phone-fleet.local.json`, `.phone-bridges.local.json`, `.phone-bridges.<port>.local.json`, `.phone-registry-key`, and browser bridge registry state are local-only.
 - Startup notification credentials and tokenized URL messages should stay in private/protected notification accounts, topics, or channels.
 
 ## Do Not Do This
@@ -24,6 +24,8 @@ For remote access outside a trusted local network, prefer:
 ## Token Handling
 
 The bridge creates `.phone-token` with mode `0600` when `PHONE_TOKEN` is not provided. Delete `.phone-token` to rotate the generated token.
+
+Each bridge also keeps the phone's list of connections in `.phone-bridges.<port>.local.json` so a reinstalled Home Screen app can recover it. The bridge tokens inside that file are encrypted with AES-256-GCM under `.phone-registry-key`, which is generated beside it with mode `0600`; the rest of the file, such as base URLs and labels, stays readable. Tokens the phone was told not to remember are never sent to the backup. The encryption keeps tokens out of a stray copy of the JSON — a backup sweep, a pasted file — and is not a defence against someone who already has the account. Delete both files together to discard the backup; deleting only the key leaves a registry that fails closed and stops syncing until it is removed.
 
 ## Beginner Runtime Notes
 

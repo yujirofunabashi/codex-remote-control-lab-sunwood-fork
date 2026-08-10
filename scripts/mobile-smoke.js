@@ -88,6 +88,12 @@ function startServer() {
 // bridge stores it and the sidebar reads it back.
 let hiddenProjects = [];
 
+// The app asks its home bridge for the connection list on load, so that the
+// list survives the Home Screen icon being deleted. Nothing here is under
+// test; the mock exists so the request is answered rather than logged as an
+// error by the console check.
+let registryBackup = { version: 1, revision: 0, updatedAt: 0, bridges: [], tokens: {} };
+
 async function mockApi(page, origin) {
   await page.route("**/*", async (route) => {
     const url = new URL(route.request().url());
@@ -109,6 +115,19 @@ async function mockApi(page, origin) {
           uiPort: artifactBridge ? 45224 : 45214,
         },
       });
+    }
+    if (url.pathname === "/api/bridge/registry") {
+      if (route.request().method() === "POST") {
+        const body = JSON.parse(route.request().postData() || "{}");
+        registryBackup = {
+          version: 1,
+          revision: Number(body.revision || 0) + 1,
+          updatedAt: Date.now(),
+          bridges: Array.isArray(body.bridges) ? body.bridges : [],
+          tokens: body.tokens && typeof body.tokens === "object" ? body.tokens : {},
+        };
+      }
+      return route.fulfill({ json: { ok: true, ...registryBackup } });
     }
     if (url.pathname === "/api/threads") {
       const listed = (artifactBridge ? threads : staleThreadList).filter((thread) => !hiddenProjects.includes(thread.cwd));

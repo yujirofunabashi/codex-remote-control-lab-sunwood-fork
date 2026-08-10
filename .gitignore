@@ -12,6 +12,8 @@ CLAUDE.md
 .phone-token
 .phone-workspaces.json
 .phone-bridges.local.json
+.phone-bridges.*.local.json
+.phone-registry-key
 .phone-fleet.local.json
 .phone-rate-limits*.json
 .uploads/
