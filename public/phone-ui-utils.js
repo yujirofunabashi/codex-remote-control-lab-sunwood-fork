@@ -421,6 +421,14 @@
     return `${String(bridgeId || "home") || "home"}::${String(threadId || "new") || "new"}`;
   }
 
+  // The service worker fetches each shell file on its own, so a phone can end
+  // up running a new main.js beside a cached older copy of this file. main.js
+  // checks this number before it will sync anything: without it the merge
+  // helpers below are absent, and syncing would mean pushing an unmerged list
+  // over the backup. Raise it when a change here would make an older main.js
+  // merge incorrectly.
+  const bridgeRegistrySyncVersion = 1;
+
   function registryTombstones(registry = {}) {
     return Array.isArray(registry.deleted) ? registry.deleted.filter((record) => record && record.id) : [];
   }
@@ -914,6 +922,7 @@
     bridgeThreadKey,
     upsertBridgeRegistry,
     removeBridgeFromRegistry,
+    bridgeRegistrySyncVersion,
     mergeBridgeRegistries,
     mergeBridgeTokens,
     normalizeTerminalKind,

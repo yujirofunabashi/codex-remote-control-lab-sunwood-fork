@@ -1,7 +1,9 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
+const { spawn } = require("node:child_process");
 
 const {
   RegistryConflictError,
@@ -311,46 +313,156 @@ test("tombstones collapse to the newest record per bridge", () => {
   assert.deepEqual(records, [{ id: "air", deletedAt: 90 }]);
 });
 
+// A file written by the first released version of the store: schema v1, no
+// removal records, tokens as bare strings, and the AAD that version bound its
+// secrets with.
+function writeVersionOneBackup(store, { bridges, tokens, revision = 3 }) {
+  const key = crypto.randomBytes(32);
+  fs.writeFileSync(store.keyPath, `${key.toString("base64")}\n`, { mode: 0o600 });
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
+  cipher.setAAD(Buffer.from(`1:${revision}`, "utf8"));
+  const data = Buffer.concat([cipher.update(JSON.stringify(tokens), "utf8"), cipher.final()]);
+  const payload = {
+    version: 1,
+    revision,
+    updatedAt: 1,
+    bridges,
+    secrets: { alg: "aes-256-gcm", iv: iv.toString("base64"), tag: cipher.getAuthTag().toString("base64"), data: data.toString("base64") },
+  };
+  fs.writeFileSync(store.filePath, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 });
+}
+
 test("a v1 backup is still readable and is rewritten as v2", () => {
   withTempDir((dir) => {
     const store = storeFor(dir);
-    writeRegistry({ ...store, bridges: sampleBridges, tokens: { "mini-45214": "token-mini" }, expectedRevision: 0 });
-    const parsed = JSON.parse(fs.readFileSync(store.filePath, "utf8"));
-    assert.equal(parsed.version, 2);
+    writeVersionOneBackup(store, { bridges: sampleBridges, tokens: { "mini-45214": "token-mini" } });
 
     const registry = readRegistry(store);
     assert.equal(registry.version, 2);
+    assert.equal(registry.revision, 3);
     assert.deepEqual(registry.deleted, []);
+    assert.deepEqual(registry.tokens, { "mini-45214": { token: "token-mini", updatedAt: 0 } });
+
+    const written = writeRegistry({ ...store, bridges: sampleBridges, tokens: registry.tokens, expectedRevision: 3 });
+    assert.equal(written.revision, 4);
+    assert.equal(JSON.parse(fs.readFileSync(store.filePath, "utf8")).version, 2);
+    assert.deepEqual(readRegistry(store).tokens, { "mini-45214": { token: "token-mini", updatedAt: 0 } });
   });
 });
 
-test("concurrent first-time key creation settles on one key", () => {
+test("processes racing to create the key settle on one of them", async () => {
+  const dir = fs.mkdtempSync(path.join(path.resolve(__dirname, ".."), ".tmp-bridge-registry-"));
+  const ports = [45214, 45224, 45234, 45244];
+  const script = `
+    const { registryKeyPath, registryPathForPort, writeRegistry } = require(${JSON.stringify(path.join(__dirname, "bridge-registry-store.js"))});
+    const dir = process.argv[1];
+    const port = process.argv[2];
+    writeRegistry({
+      filePath: registryPathForPort(dir, port),
+      keyPath: registryKeyPath(dir),
+      bridges: [{ id: "slot-" + port, baseUrl: "http://127.0.0.1:" + port }],
+      tokens: { ["slot-" + port]: "token-" + port },
+      expectedRevision: 0,
+    });
+  `;
+  try {
+    // Started together and left to collide: the first-run window this closes
+    // only exists between one process creating the key file and writing it.
+    const runs = ports.map(
+      (port) =>
+        new Promise((resolve) => {
+          const child = spawn(process.execPath, ["-e", script, dir, String(port)], { stdio: ["ignore", "ignore", "pipe"] });
+          let stderr = "";
+          child.stderr.on("data", (chunk) => {
+            stderr += chunk;
+          });
+          child.on("close", (code) => resolve({ port, code, stderr }));
+        }),
+    );
+    const results = await Promise.all(runs);
+    assert.deepEqual(
+      results.filter((result) => result.code !== 0),
+      [],
+      results.map((result) => `${result.port}: ${result.stderr}`).join("\n"),
+    );
+    for (const port of ports) {
+      const store = storeFor(dir, port);
+      assert.equal(readRegistry(store).tokens[`slot-${port}`].token, `token-${port}`);
+    }
+    assert.deepEqual(
+      fs.readdirSync(dir).filter((name) => name.endsWith(".tmp")),
+      [],
+    );
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a backup that cannot be published leaves the previous one readable", () => {
+  for (const failing of ["renameSync", "fsyncSync"]) {
+    withTempDir((dir) => {
+      const store = storeFor(dir);
+      writeRegistry({ ...store, bridges: sampleBridges, tokens: { "mini-45214": "token-mini" }, expectedRevision: 0 });
+      const before = fs.readFileSync(store.filePath, "utf8");
+
+      const original = fs[failing];
+      fs[failing] = () => {
+        const error = new Error("no space left on device");
+        error.code = "ENOSPC";
+        throw error;
+      };
+      try {
+        assert.throws(() => writeRegistry({ ...store, bridges: [sampleBridges[0]], tokens: {}, expectedRevision: 1 }), /no space left/);
+      } finally {
+        fs[failing] = original;
+      }
+
+      // The live file is only ever replaced by a rename, so a write that dies
+      // partway leaves the last good backup exactly as it was.
+      assert.equal(fs.readFileSync(store.filePath, "utf8"), before);
+      assert.equal(readRegistry(store).bridges.length, 2);
+      assert.deepEqual(
+        fs.readdirSync(dir).filter((name) => name.endsWith(".tmp")),
+        [],
+      );
+    });
+  }
+});
+
+test("a key is never published half-written", () => {
   withTempDir((dir) => {
-    const first = storeFor(dir, 45214);
-    const second = storeFor(dir, 45224);
-    writeRegistry({ ...first, bridges: sampleBridges, tokens: { "mini-45214": "token-a" }, expectedRevision: 0 });
-    const keyAfterFirst = fs.readFileSync(first.keyPath, "utf8");
-    writeRegistry({ ...second, bridges: sampleBridges, tokens: { "mini-45214": "token-b" }, expectedRevision: 0 });
+    const store = storeFor(dir);
+    const original = fs.fsyncSync;
+    fs.fsyncSync = () => {
+      const error = new Error("disk gone");
+      error.code = "EIO";
+      throw error;
+    };
+    try {
+      assert.throws(() => writeRegistry({ ...store, bridges: sampleBridges, tokens: {}, expectedRevision: 0 }), /disk gone/);
+    } finally {
+      fs.fsyncSync = original;
+    }
 
-    // The second slot must adopt the existing key rather than mint one, or the
-    // first slot's backup becomes undecryptable.
-    assert.equal(fs.readFileSync(second.keyPath, "utf8"), keyAfterFirst);
-    assert.equal(readRegistry(first).tokens["mini-45214"].token, "token-a");
-    assert.equal(readRegistry(second).tokens["mini-45214"].token, "token-b");
+    // Nothing at the key's own path until it is complete: another slot reading
+    // mid-creation would otherwise find an empty file and call a good key
+    // malformed, which fails the sync closed for no reason.
+    assert.equal(fs.existsSync(store.keyPath), false);
+    assert.deepEqual(
+      fs.readdirSync(dir).filter((name) => name.endsWith(".tmp")),
+      [],
+    );
   });
 });
 
-test("a failed write leaves the previous backup readable", () => {
+test("a stale revision is refused before anything is written", () => {
   withTempDir((dir) => {
     const store = storeFor(dir);
     writeRegistry({ ...store, bridges: sampleBridges, tokens: { "mini-45214": "token-mini" }, expectedRevision: 0 });
     const before = fs.readFileSync(store.filePath, "utf8");
-
-    // Nothing is written through the live file, so an interrupted write cannot
-    // leave a half-serialized registry behind.
     assert.throws(() => writeRegistry({ ...store, bridges: sampleBridges, tokens: {}, expectedRevision: 99 }), RegistryConflictError);
     assert.equal(fs.readFileSync(store.filePath, "utf8"), before);
-    assert.deepEqual(fs.readdirSync(dir).filter((name) => name.endsWith(".tmp")), []);
   });
 });
 

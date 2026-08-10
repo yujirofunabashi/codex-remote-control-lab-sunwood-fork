@@ -65,14 +65,14 @@ function registryKeyPath(root) {
 function writeAtomicPrivateFile(filePath, contents) {
   const tempPath = `${filePath}.${process.pid}.tmp`;
   fs.rmSync(tempPath, { force: true });
-  const fd = fs.openSync(tempPath, "wx", 0o600);
   try {
-    fs.writeFileSync(fd, contents);
-    fs.fsyncSync(fd);
-  } finally {
-    fs.closeSync(fd);
-  }
-  try {
+    const fd = fs.openSync(tempPath, "wx", 0o600);
+    try {
+      fs.writeFileSync(fd, contents);
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
     fs.renameSync(tempPath, filePath);
   } catch (error) {
     fs.rmSync(tempPath, { force: true });
@@ -92,22 +92,41 @@ function readKeyFile(keyPath) {
 // JSON alone - swept into a backup, pasted into a chat - carries no tokens.
 // It is not protection against someone who already has the account.
 //
-// Every bridge process in one checkout shares this file, so creation is
-// exclusive: two slots starting together must not each mint a key and leave
-// the loser's backup undecryptable.
+// Every bridge process in one checkout shares this file. Creating it in place
+// would publish an empty path between open and write, and a second slot
+// reading exactly then would call a perfectly good key malformed. So the key
+// is written to a private temp file first and linked into place: link fails if
+// the name is taken, which keeps creation exclusive, and a reader never sees a
+// half-written key.
+function publishRegistryKey(keyPath, key) {
+  const tempPath = `${keyPath}.${process.pid}.tmp`;
+  fs.rmSync(tempPath, { force: true });
+  try {
+    const fd = fs.openSync(tempPath, "wx", 0o600);
+    try {
+      fs.writeFileSync(fd, `${key.toString("base64")}\n`);
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    fs.linkSync(tempPath, keyPath);
+    return true;
+  } catch (error) {
+    if (error.code === "EEXIST") return false;
+    throw error;
+  } finally {
+    fs.rmSync(tempPath, { force: true });
+  }
+}
+
 function loadRegistryKey(keyPath) {
   const existing = readKeyFile(keyPath);
   if (existing) return existing;
   const key = crypto.randomBytes(keyBytes);
-  try {
-    fs.writeFileSync(keyPath, `${key.toString("base64")}\n`, { mode: 0o600, flag: "wx" });
-    return key;
-  } catch (error) {
-    if (error.code !== "EEXIST") throw error;
-    const raced = readKeyFile(keyPath);
-    if (!raced) throw new RegistryUnreadableError("registry key is malformed");
-    return raced;
-  }
+  if (publishRegistryKey(keyPath, key)) return key;
+  const raced = readKeyFile(keyPath);
+  if (!raced) throw new RegistryUnreadableError("registry key is malformed");
+  return raced;
 }
 
 function secretsAad(revision) {

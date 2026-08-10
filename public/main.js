@@ -648,6 +648,15 @@ function bridgeRegistryStore() {
   return bridgeById(homeBridgeId);
 }
 
+// The service worker answers each shell file on its own and falls back to its
+// cache per file, so this page can be running beside an older cached
+// phone-ui-utils.js that has no merge helpers. Syncing then would mean pushing
+// an unmerged list over the backup - the exact loss the restore exists to
+// prevent - so a shell that cannot merge does not sync at all.
+function bridgeRegistrySyncSupported() {
+  return Number(uiUtils.bridgeRegistrySyncVersion || 0) >= requiredBridgeRegistrySyncVersion;
+}
+
 async function bridgeRegistryRequest(method, body = null) {
   const bridge = bridgeRegistryStore();
   if (!bridge) throw new Error("home bridge is not registered yet");
@@ -688,7 +697,6 @@ function bridgeRegistryBackupPayload() {
 }
 
 function applyRemoteBridgeRegistry(remote = {}) {
-  if (!uiUtils.mergeBridgeRegistries || !uiUtils.mergeBridgeTokens) return 0;
   const before = new Set((bridgeRegistry.bridges || []).map((entry) => entry.id));
   bridgeRegistry = uiUtils.mergeBridgeRegistries(bridgeRegistry, remote);
   // Merged against the surviving list, so a token cannot outlive the bridge it
@@ -704,6 +712,7 @@ async function restoreBridgeRegistryFromHome() {
   if (bridgeRegistryRestorePromise) return bridgeRegistryRestorePromise;
   bridgeRegistryRestoreAttemptedAt = Date.now();
   bridgeRegistryRestorePromise = (async () => {
+    if (!bridgeRegistrySyncSupported()) throw new Error("this app shell cannot merge a registry backup");
     const { ok, status, result } = await bridgeRegistryRequest("GET");
     if (!ok) {
       if (result?.code === "registry-unreadable") bridgeRegistryBlocked = result.error || "registry is unreadable";
@@ -747,7 +756,7 @@ function scheduleBridgeRegistryBackup() {
 }
 
 async function pushBridgeRegistryBackup(attempt = 0) {
-  if (!bridgeRegistryRestored || bridgeRegistryBlocked) return false;
+  if (!bridgeRegistryRestored || bridgeRegistryBlocked || !bridgeRegistrySyncSupported()) return false;
   try {
     const { ok, status, result } = await bridgeRegistryRequest("POST", bridgeRegistryBackupPayload());
     if (ok) {
@@ -990,6 +999,8 @@ let bridgeViewState = readJsonStorage(bridgeViewStateStorageKey, {});
 // registry - and therefore reaches the backup scheduler - during startup.
 const bridgeRegistryBackupDebounceMs = 1500;
 const bridgeRegistryRestoreRetryMs = 30_000;
+// Raised in step with phone-ui-utils.js when its merge behaviour changes.
+const requiredBridgeRegistrySyncVersion = 1;
 let bridgeRegistryRestored = false;
 let bridgeRegistryRestorePromise = null;
 let bridgeRegistryRestoreAttemptedAt = 0;

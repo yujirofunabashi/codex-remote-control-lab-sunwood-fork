@@ -35,6 +35,16 @@ const mime = new Map([
 
 const checks = [];
 
+// The service worker fetches each shell file separately and falls back to its
+// cache per file, so a phone can run this release's main.js beside a cached
+// phone-ui-utils.js from before the registry sync existed. Serving the helper
+// bundle with those exports removed reproduces that pairing.
+let serveLegacyHelpers = false;
+
+function legacyHelperBundle(source) {
+  return source.replace(/^\s*(bridgeRegistrySyncVersion|mergeBridgeRegistries|mergeBridgeTokens),\n/gm, "");
+}
+
 function check(name, ok, detail = "") {
   checks.push({ name, ok: Boolean(ok), detail });
 }
@@ -117,8 +127,9 @@ function startServer(store) {
     if (!isInsideDir(publicDir, file)) return res.writeHead(403).end("Forbidden");
     return fs.readFile(file, (error, data) => {
       if (error) return res.writeHead(404).end("Not found");
+      const body = serveLegacyHelpers && pathname === "/phone-ui-utils.js" ? legacyHelperBundle(data.toString("utf8")) : data;
       res.writeHead(200, { "content-type": mime.get(path.extname(file)) || "application/octet-stream" });
-      res.end(data);
+      res.end(body);
     });
   });
   return new Promise((resolve, reject) => {
@@ -273,6 +284,30 @@ async function run() {
       afterStale.bridges.map((bridge) => bridge.id).join(", "),
     );
     check("its token stays dropped", !afterStale.tokens?.[remoteBridgeId]);
+
+    // A phone whose cached helper bundle predates the sync. It cannot merge,
+    // so it must not sync: pushing its own list would put the deleted bridge
+    // back and drop whatever the backup knows that it does not.
+    serveLegacyHelpers = true;
+    const beforeMixed = readRegistry(store);
+    const mixed = await openContext(browser, origin, {
+      registry: { version: 1, bridges: [homeBridge, knownBridge] },
+      tokens: { [remoteBridgeId]: remoteBridgeToken },
+      tokenTimes: { [remoteBridgeId]: 10 },
+    });
+    const capability = await mixed.page.evaluate(() => Number(window.CodexPhoneUiUtils?.bridgeRegistrySyncVersion || 0));
+    await mixed.page.waitForTimeout(4000);
+    await mixed.context.close();
+    serveLegacyHelpers = false;
+
+    const afterMixed = readRegistry(store);
+    check("the old helper bundle really lacks the sync capability", capability === 0, `version ${capability}`);
+    check("a shell that cannot merge does not write to the backup", afterMixed.revision === beforeMixed.revision, `revision ${afterMixed.revision}`);
+    check(
+      "it does not resurrect the deleted bridge",
+      !afterMixed.bridges.some((bridge) => bridge.id === remoteBridgeId),
+      afterMixed.bridges.map((bridge) => bridge.id).join(", "),
+    );
   } finally {
     if (browser) await browser.close();
     await new Promise((resolve) => server.close(resolve));
