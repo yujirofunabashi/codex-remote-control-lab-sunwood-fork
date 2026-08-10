@@ -10,16 +10,27 @@
 // The file is keyed by the bridge's UI port rather than by any client-side id:
 // a reinstalled PWA has no surviving id to look itself up with, and the port is
 // what still identifies the slot after the phone forgot everything.
+//
+// Restoring is a merge, which is why deletions are recorded rather than
+// implied: an absent bridge cannot be told apart from one the other side has
+// not heard about yet, so a plain union quietly resurrects everything that was
+// ever removed. Tokens carry their own timestamp for the same reason - the
+// newest one wins instead of whichever device happened to sync last.
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 
-const fileVersion = 1;
+const fileVersion = 2;
+const readableVersions = new Set([1, 2]);
 const keyBytes = 32;
 const ivBytes = 12;
 const cipherAlg = "aes-256-gcm";
 const maxBridges = 64;
+const maxTombstones = 256;
 const maxTextLength = 512;
+// Long enough that a phone left in a drawer for a season still learns about a
+// deletion, short enough that the list cannot grow without bound.
+const tombstoneTtlMs = 90 * 24 * 60 * 60 * 1000;
 const bridgeKinds = new Set(["lan", "ssh-forward", "vpn", "mesh", "local"]);
 
 class RegistryConflictError extends Error {
@@ -49,28 +60,54 @@ function registryKeyPath(root) {
   return path.join(root, ".phone-registry-key");
 }
 
-function writePrivateFile(filePath, contents) {
-  fs.writeFileSync(filePath, contents, { mode: 0o600 });
+// Rename is the only step that changes what a reader sees, so a crash or a full
+// disk leaves the previous backup intact instead of a truncated one.
+function writeAtomicPrivateFile(filePath, contents) {
+  const tempPath = `${filePath}.${process.pid}.tmp`;
+  fs.rmSync(tempPath, { force: true });
+  const fd = fs.openSync(tempPath, "wx", 0o600);
   try {
-    fs.chmodSync(filePath, 0o600);
-  } catch {
-    // Some filesystems reject chmod; the mode on create is the important one.
+    fs.writeFileSync(fd, contents);
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
   }
+  try {
+    fs.renameSync(tempPath, filePath);
+  } catch (error) {
+    fs.rmSync(tempPath, { force: true });
+    throw error;
+  }
+}
+
+function readKeyFile(keyPath) {
+  if (!fs.existsSync(keyPath)) return null;
+  const raw = fs.readFileSync(keyPath, "utf8").trim();
+  const key = Buffer.from(raw, "base64");
+  if (key.length !== keyBytes) throw new RegistryUnreadableError("registry key is malformed");
+  return key;
 }
 
 // The key lives beside the registry rather than inside it, so a copy of the
 // JSON alone - swept into a backup, pasted into a chat - carries no tokens.
 // It is not protection against someone who already has the account.
+//
+// Every bridge process in one checkout shares this file, so creation is
+// exclusive: two slots starting together must not each mint a key and leave
+// the loser's backup undecryptable.
 function loadRegistryKey(keyPath) {
-  if (fs.existsSync(keyPath)) {
-    const raw = fs.readFileSync(keyPath, "utf8").trim();
-    const key = Buffer.from(raw, "base64");
-    if (key.length !== keyBytes) throw new RegistryUnreadableError("registry key is malformed");
-    return key;
-  }
+  const existing = readKeyFile(keyPath);
+  if (existing) return existing;
   const key = crypto.randomBytes(keyBytes);
-  writePrivateFile(keyPath, `${key.toString("base64")}\n`);
-  return key;
+  try {
+    fs.writeFileSync(keyPath, `${key.toString("base64")}\n`, { mode: 0o600, flag: "wx" });
+    return key;
+  } catch (error) {
+    if (error.code !== "EEXIST") throw error;
+    const raced = readKeyFile(keyPath);
+    if (!raced) throw new RegistryUnreadableError("registry key is malformed");
+    return raced;
+  }
 }
 
 function secretsAad(revision) {
@@ -91,12 +128,12 @@ function encryptTokens(tokens, key, revision) {
   };
 }
 
-function decryptTokens(secrets, key, revision) {
+function decryptTokens(secrets, key, revision, version) {
   if (!secrets || typeof secrets !== "object") return {};
   if (secrets.alg !== cipherAlg) throw new RegistryUnreadableError("unsupported registry encryption");
   try {
     const decipher = crypto.createDecipheriv(cipherAlg, key, Buffer.from(String(secrets.iv || ""), "base64"));
-    decipher.setAAD(secretsAad(revision));
+    decipher.setAAD(Buffer.from(`${version}:${Number(revision) || 0}`, "utf8"));
     decipher.setAuthTag(Buffer.from(String(secrets.tag || ""), "base64"));
     const out = Buffer.concat([decipher.update(Buffer.from(String(secrets.data || ""), "base64")), decipher.final()]);
     const parsed = JSON.parse(out.toString("utf8"));
@@ -164,6 +201,54 @@ function sanitizeBridges(bridges) {
   return out;
 }
 
+function sanitizeTombstones(deleted, { now = 0, prune = false } = {}) {
+  if (!Array.isArray(deleted)) return [];
+  const byId = new Map();
+  for (const record of deleted) {
+    if (!record || typeof record !== "object") continue;
+    const id = trimmedText(record.id, 128);
+    if (!id) continue;
+    const deletedAt = finiteNumber(record.deletedAt);
+    if (deletedAt <= 0) continue;
+    if (prune && now > 0 && now - deletedAt > tombstoneTtlMs) continue;
+    const existing = byId.get(id);
+    if (!existing || deletedAt > existing.deletedAt) byId.set(id, { id, deletedAt });
+  }
+  return Array.from(byId.values())
+    .sort((left, right) => right.deletedAt - left.deletedAt)
+    .slice(0, maxTombstones);
+}
+
+// A bridge cannot be both listed and deleted. Whichever record is newer decides,
+// so a re-added bridge survives its own old tombstone and a deletion survives an
+// older copy of the entry.
+function reconcileTombstones(bridges, tombstones) {
+  const deletedById = new Map(tombstones.map((record) => [record.id, record]));
+  const keptBridges = [];
+  const keptTombstones = [];
+  for (const bridge of bridges) {
+    const tombstone = deletedById.get(bridge.id);
+    if (tombstone && tombstone.deletedAt >= bridge.updatedAt) continue;
+    if (tombstone) deletedById.delete(bridge.id);
+    keptBridges.push(bridge);
+  }
+  for (const record of tombstones) {
+    if (deletedById.has(record.id)) keptTombstones.push(record);
+  }
+  return { bridges: keptBridges, deleted: keptTombstones };
+}
+
+function sanitizeTokenRecord(value) {
+  if (value === undefined || value === null) return null;
+  if (typeof value === "string") {
+    const token = value.slice(0, maxTextLength);
+    return token ? { token, updatedAt: 0 } : null;
+  }
+  if (typeof value !== "object") return null;
+  const token = String(value.token === undefined || value.token === null ? "" : value.token).slice(0, maxTextLength);
+  return token ? { token, updatedAt: finiteNumber(value.updatedAt) } : null;
+}
+
 function sanitizeTokens(tokens, bridges) {
   if (!tokens || typeof tokens !== "object" || Array.isArray(tokens)) return {};
   const allowed = new Map(bridges.map((bridge) => [bridge.id, bridge]));
@@ -171,14 +256,14 @@ function sanitizeTokens(tokens, bridges) {
   for (const [id, value] of Object.entries(tokens)) {
     const bridge = allowed.get(String(id));
     if (!bridge || bridge.rememberToken === false) continue;
-    const token = String(value === undefined || value === null ? "" : value).slice(0, maxTextLength);
-    if (token) out[bridge.id] = token;
+    const record = sanitizeTokenRecord(value);
+    if (record) out[bridge.id] = record;
   }
   return out;
 }
 
 function emptyRegistry() {
-  return { version: fileVersion, revision: 0, updatedAt: 0, bridges: [], tokens: {} };
+  return { version: fileVersion, revision: 0, updatedAt: 0, bridges: [], deleted: [], tokens: {} };
 }
 
 function readRegistry({ filePath, keyPath }) {
@@ -192,19 +277,27 @@ function readRegistry({ filePath, keyPath }) {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new RegistryUnreadableError("registry file is not an object");
   }
-  if (Number(parsed.version) !== fileVersion) {
+  const version = Number(parsed.version);
+  if (!readableVersions.has(version)) {
     throw new RegistryUnreadableError(`unsupported registry version: ${parsed.version}`);
   }
   const revision = finiteNumber(parsed.revision);
-  const bridges = sanitizeBridges(parsed.bridges);
+  const reconciled = reconcileTombstones(sanitizeBridges(parsed.bridges), sanitizeTombstones(parsed.deleted));
   const key = loadRegistryKey(keyPath);
-  const tokens = sanitizeTokens(decryptTokens(parsed.secrets, key, revision), bridges);
-  return { version: fileVersion, revision, updatedAt: finiteNumber(parsed.updatedAt), bridges, tokens };
+  const tokens = sanitizeTokens(decryptTokens(parsed.secrets, key, revision, version), reconciled.bridges);
+  return {
+    version: fileVersion,
+    revision,
+    updatedAt: finiteNumber(parsed.updatedAt),
+    bridges: reconciled.bridges,
+    deleted: reconciled.deleted,
+    tokens,
+  };
 }
 
 // Optimistic concurrency, because two phones syncing the same bridge is normal
 // and a silent last-writer-wins would quietly delete the other one's machines.
-function writeRegistry({ filePath, keyPath, bridges, tokens, expectedRevision, now = Date.now() }) {
+function writeRegistry({ filePath, keyPath, bridges, tokens, deleted, expectedRevision, now = Date.now() }) {
   let current;
   try {
     current = readRegistry({ filePath, keyPath });
@@ -221,19 +314,30 @@ function writeRegistry({ filePath, keyPath, bridges, tokens, expectedRevision, n
   if (expected !== current.revision) {
     throw new RegistryConflictError("registry revision conflict", { current });
   }
-  const nextBridges = sanitizeBridges(bridges);
-  const nextTokens = sanitizeTokens(tokens, nextBridges);
+  const reconciled = reconcileTombstones(
+    sanitizeBridges(bridges),
+    sanitizeTombstones(deleted, { now: finiteNumber(now), prune: true }),
+  );
+  const nextTokens = sanitizeTokens(tokens, reconciled.bridges);
   const revision = current.revision + 1;
   const key = loadRegistryKey(keyPath);
   const payload = {
     version: fileVersion,
     revision,
     updatedAt: finiteNumber(now),
-    bridges: nextBridges,
+    bridges: reconciled.bridges,
+    deleted: reconciled.deleted,
     secrets: encryptTokens(nextTokens, key, revision),
   };
-  writePrivateFile(filePath, `${JSON.stringify(payload, null, 2)}\n`);
-  return { version: fileVersion, revision, updatedAt: payload.updatedAt, bridges: nextBridges, tokens: nextTokens };
+  writeAtomicPrivateFile(filePath, `${JSON.stringify(payload, null, 2)}\n`);
+  return {
+    version: fileVersion,
+    revision,
+    updatedAt: payload.updatedAt,
+    bridges: reconciled.bridges,
+    deleted: reconciled.deleted,
+    tokens: nextTokens,
+  };
 }
 
 module.exports = {
@@ -242,9 +346,12 @@ module.exports = {
   emptyRegistry,
   fileVersion,
   readRegistry,
+  reconcileTombstones,
   registryKeyPath,
   registryPathForPort,
   sanitizeBridges,
   sanitizeTokens,
+  sanitizeTombstones,
+  tombstoneTtlMs,
   writeRegistry,
 };

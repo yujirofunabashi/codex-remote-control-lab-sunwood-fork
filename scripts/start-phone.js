@@ -4873,6 +4873,7 @@ async function main() {
             ...writeBridgeRegistryBackup({
               ...store,
               bridges: body.bridges,
+              deleted: body.deleted,
               tokens: body.tokens,
               expectedRevision: body.revision,
             }),

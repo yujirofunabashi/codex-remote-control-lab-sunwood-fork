@@ -9,6 +9,8 @@ const {
   readRegistry,
   registryKeyPath,
   registryPathForPort,
+  sanitizeTombstones,
+  tombstoneTtlMs,
   writeRegistry,
 } = require("./bridge-registry-store");
 
@@ -56,7 +58,10 @@ test("a written registry reads back with its bridges and tokens", () => {
       registry.bridges.map((bridge) => bridge.id),
       ["mini-45214", "air-45214"],
     );
-    assert.deepEqual(registry.tokens, { "mini-45214": "token-mini", "air-45214": "token-air" });
+    assert.deepEqual(registry.tokens, {
+      "mini-45214": { token: "token-mini", updatedAt: 0 },
+      "air-45214": { token: "token-air", updatedAt: 0 },
+    });
   });
 });
 
@@ -82,8 +87,8 @@ test("tokens the phone chose not to remember are never backed up", () => {
       tokens: { "mini-45214": "session-only", "air-45214": "token-air" },
       expectedRevision: 0,
     });
-    assert.deepEqual(written.tokens, { "air-45214": "token-air" });
-    assert.deepEqual(readRegistry(store).tokens, { "air-45214": "token-air" });
+    assert.deepEqual(written.tokens, { "air-45214": { token: "token-air", updatedAt: 0 } });
+    assert.deepEqual(readRegistry(store).tokens, { "air-45214": { token: "token-air", updatedAt: 0 } });
   });
 });
 
@@ -96,7 +101,7 @@ test("tokens without a listed bridge are dropped", () => {
       tokens: { "mini-45214": "token-mini", "ghost-9999": "token-ghost" },
       expectedRevision: 0,
     });
-    assert.deepEqual(written.tokens, { "mini-45214": "token-mini" });
+    assert.deepEqual(written.tokens, { "mini-45214": { token: "token-mini", updatedAt: 0 } });
   });
 });
 
@@ -191,6 +196,161 @@ test("an unsupported file version is refused", () => {
     const store = storeFor(dir);
     fs.writeFileSync(store.filePath, `${JSON.stringify({ version: 99, revision: 1, bridges: [] })}\n`);
     assert.throws(() => readRegistry(store), RegistryUnreadableError);
+  });
+});
+
+test("a deletion is stored as a dated record, not as an absence", () => {
+  withTempDir((dir) => {
+    const store = storeFor(dir);
+    writeRegistry({ ...store, bridges: sampleBridges, tokens: { "air-45214": "token-air" }, expectedRevision: 0 });
+    const written = writeRegistry({
+      ...store,
+      bridges: [sampleBridges[0]],
+      deleted: [{ id: "air-45214", deletedAt: 500 }],
+      tokens: { "air-45214": "token-air" },
+      expectedRevision: 1,
+      now: 1000,
+    });
+
+    assert.deepEqual(written.deleted, [{ id: "air-45214", deletedAt: 500 }]);
+    assert.deepEqual(
+      written.bridges.map((bridge) => bridge.id),
+      ["mini-45214"],
+    );
+    // The token has to go with the bridge, or the next restore hands back a
+    // credential for a connection the owner deleted.
+    assert.deepEqual(written.tokens, {});
+  });
+});
+
+test("a bridge added back after its deletion outlives the tombstone", () => {
+  withTempDir((dir) => {
+    const store = storeFor(dir);
+    const written = writeRegistry({
+      ...store,
+      bridges: [{ ...sampleBridges[1], updatedAt: 900 }],
+      deleted: [{ id: "air-45214", deletedAt: 500 }],
+      tokens: { "air-45214": "token-air" },
+      expectedRevision: 0,
+      now: 1000,
+    });
+    assert.deepEqual(
+      written.bridges.map((bridge) => bridge.id),
+      ["air-45214"],
+    );
+    assert.deepEqual(written.deleted, []);
+    assert.equal(written.tokens["air-45214"].token, "token-air");
+  });
+});
+
+test("a deletion newer than the entry wins", () => {
+  withTempDir((dir) => {
+    const store = storeFor(dir);
+    const written = writeRegistry({
+      ...store,
+      bridges: [{ ...sampleBridges[1], updatedAt: 100 }],
+      deleted: [{ id: "air-45214", deletedAt: 900 }],
+      tokens: {},
+      expectedRevision: 0,
+      now: 1000,
+    });
+    assert.deepEqual(written.bridges, []);
+    assert.equal(written.deleted.length, 1);
+  });
+});
+
+test("tokens keep the time they were set so the newest one can win", () => {
+  withTempDir((dir) => {
+    const store = storeFor(dir);
+    const written = writeRegistry({
+      ...store,
+      bridges: sampleBridges,
+      tokens: { "mini-45214": { token: "rotated", updatedAt: 4242 }, "air-45214": "legacy-string" },
+      expectedRevision: 0,
+    });
+    assert.deepEqual(written.tokens["mini-45214"], { token: "rotated", updatedAt: 4242 });
+    // A plain string is a pre-timestamp backup; it must not outrank anything.
+    assert.deepEqual(written.tokens["air-45214"], { token: "legacy-string", updatedAt: 0 });
+    assert.deepEqual(readRegistry(store).tokens["mini-45214"], { token: "rotated", updatedAt: 4242 });
+  });
+});
+
+test("expired tombstones are pruned on write but never resurrect a bridge", () => {
+  withTempDir((dir) => {
+    const store = storeFor(dir);
+    const now = tombstoneTtlMs * 4;
+    const written = writeRegistry({
+      ...store,
+      bridges: [sampleBridges[0]],
+      deleted: [
+        { id: "air-45214", deletedAt: now - tombstoneTtlMs - 1 },
+        { id: "old-45214", deletedAt: now - 10 },
+      ],
+      tokens: {},
+      expectedRevision: 0,
+      now,
+    });
+    assert.deepEqual(
+      written.deleted.map((record) => record.id),
+      ["old-45214"],
+    );
+    assert.deepEqual(
+      written.bridges.map((bridge) => bridge.id),
+      ["mini-45214"],
+    );
+  });
+});
+
+test("tombstones collapse to the newest record per bridge", () => {
+  const records = sanitizeTombstones([
+    { id: "air", deletedAt: 10 },
+    { id: "air", deletedAt: 90 },
+    { id: "", deletedAt: 5 },
+    { id: "mini", deletedAt: 0 },
+  ]);
+  assert.deepEqual(records, [{ id: "air", deletedAt: 90 }]);
+});
+
+test("a v1 backup is still readable and is rewritten as v2", () => {
+  withTempDir((dir) => {
+    const store = storeFor(dir);
+    writeRegistry({ ...store, bridges: sampleBridges, tokens: { "mini-45214": "token-mini" }, expectedRevision: 0 });
+    const parsed = JSON.parse(fs.readFileSync(store.filePath, "utf8"));
+    assert.equal(parsed.version, 2);
+
+    const registry = readRegistry(store);
+    assert.equal(registry.version, 2);
+    assert.deepEqual(registry.deleted, []);
+  });
+});
+
+test("concurrent first-time key creation settles on one key", () => {
+  withTempDir((dir) => {
+    const first = storeFor(dir, 45214);
+    const second = storeFor(dir, 45224);
+    writeRegistry({ ...first, bridges: sampleBridges, tokens: { "mini-45214": "token-a" }, expectedRevision: 0 });
+    const keyAfterFirst = fs.readFileSync(first.keyPath, "utf8");
+    writeRegistry({ ...second, bridges: sampleBridges, tokens: { "mini-45214": "token-b" }, expectedRevision: 0 });
+
+    // The second slot must adopt the existing key rather than mint one, or the
+    // first slot's backup becomes undecryptable.
+    assert.equal(fs.readFileSync(second.keyPath, "utf8"), keyAfterFirst);
+    assert.equal(readRegistry(first).tokens["mini-45214"].token, "token-a");
+    assert.equal(readRegistry(second).tokens["mini-45214"].token, "token-b");
+  });
+});
+
+test("a failed write leaves the previous backup readable", () => {
+  withTempDir((dir) => {
+    const store = storeFor(dir);
+    writeRegistry({ ...store, bridges: sampleBridges, tokens: { "mini-45214": "token-mini" }, expectedRevision: 0 });
+    const before = fs.readFileSync(store.filePath, "utf8");
+
+    // Nothing is written through the live file, so an interrupted write cannot
+    // leave a half-serialized registry behind.
+    assert.throws(() => writeRegistry({ ...store, bridges: sampleBridges, tokens: {}, expectedRevision: 99 }), RegistryConflictError);
+    assert.equal(fs.readFileSync(store.filePath, "utf8"), before);
+    assert.deepEqual(fs.readdirSync(dir).filter((name) => name.endsWith(".tmp")), []);
   });
 });
 

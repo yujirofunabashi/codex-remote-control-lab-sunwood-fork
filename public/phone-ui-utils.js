@@ -421,6 +421,10 @@
     return `${String(bridgeId || "home") || "home"}::${String(threadId || "new") || "new"}`;
   }
 
+  function registryTombstones(registry = {}) {
+    return Array.isArray(registry.deleted) ? registry.deleted.filter((record) => record && record.id) : [];
+  }
+
   function upsertBridgeRegistry(registry = {}, entry = {}) {
     const normalized = normalizeBridgeEntry(entry);
     if (!normalized) return registry && typeof registry === "object" ? registry : { version: 1, bridges: [] };
@@ -436,12 +440,21 @@
       }
     }
     if (!inserted) next.push({ ...normalized, token: "" });
-    return { ...registry, version: 1, bridges: next };
+    // Adding a bridge back is a deliberate act and outranks the record of it
+    // having once been removed.
+    return { ...registry, version: 1, bridges: next, deleted: registryTombstones(registry).filter((record) => record.id !== normalized.id) };
   }
 
-  function removeBridgeFromRegistry(registry = {}, bridgeId = "") {
+  // Removal leaves a dated marker behind. Without one, the next restore cannot
+  // tell "this device deleted it" from "this device has not heard of it yet",
+  // and every deletion comes back on the following sync.
+  function removeBridgeFromRegistry(registry = {}, bridgeId = "", options = {}) {
+    const id = String(bridgeId || "");
     const current = Array.isArray(registry.bridges) ? registry.bridges : [];
-    return { ...registry, version: 1, bridges: current.filter((bridge) => bridge.id !== bridgeId) };
+    const deletedAt = Number(options.now || Date.now());
+    const deleted = registryTombstones(registry).filter((record) => record.id !== id);
+    if (id) deleted.push({ id, deletedAt });
+    return { ...registry, version: 1, bridges: current.filter((bridge) => bridge.id !== id), deleted };
   }
 
   function mergeBridgeEntries(local, remote) {
@@ -457,45 +470,90 @@
     };
   }
 
-  // Restoring a backup is a union, never a replacement. The device may have
-  // bridges the backup predates, and the backup has the ones the device lost;
-  // dropping either half turns a recovery into a second act of forgetting.
+  function mergeTombstones(local = {}, remote = {}) {
+    const byId = new Map();
+    for (const record of [...registryTombstones(local), ...registryTombstones(remote)]) {
+      const id = String(record.id);
+      const deletedAt = Number(record.deletedAt || 0);
+      if (!id || deletedAt <= 0) continue;
+      const existing = byId.get(id);
+      if (!existing || deletedAt > existing.deletedAt) byId.set(id, { id, deletedAt });
+    }
+    return byId;
+  }
+
+  // Restoring a backup is a union of what both sides still have, minus what
+  // either side has since deleted. The device may hold bridges the backup
+  // predates, and the backup holds the ones the device lost; dropping either
+  // half turns a recovery into a second act of forgetting, while ignoring the
+  // deletions turns every removal into something that grows back.
   function mergeBridgeRegistries(local = {}, remote = {}) {
     const localBridges = Array.isArray(local.bridges) ? local.bridges : [];
     const remoteBridges = Array.isArray(remote.bridges) ? remote.bridges : [];
+    const tombstones = mergeTombstones(local, remote);
     const remoteById = new Map();
     for (const bridge of remoteBridges) {
       if (bridge && bridge.id) remoteById.set(String(bridge.id), bridge);
     }
     const merged = [];
     const used = new Set();
+    const survives = (entry) => {
+      const tombstone = tombstones.get(String(entry.id));
+      if (!tombstone) return true;
+      // A bridge added back after it was deleted outlives its own tombstone.
+      if (Number(entry.updatedAt || 0) > tombstone.deletedAt) {
+        tombstones.delete(String(entry.id));
+        return true;
+      }
+      return false;
+    };
     for (const bridge of localBridges) {
       if (!bridge || !bridge.id) continue;
       const id = String(bridge.id);
       if (used.has(id)) continue;
       used.add(id);
       const remoteEntry = remoteById.get(id);
-      merged.push(remoteEntry ? mergeBridgeEntries(bridge, remoteEntry) : { ...bridge, token: "" });
+      const entry = remoteEntry ? mergeBridgeEntries(bridge, remoteEntry) : { ...bridge, token: "" };
+      if (survives(entry)) merged.push(entry);
     }
     for (const bridge of remoteBridges) {
       if (!bridge || !bridge.id) continue;
       const id = String(bridge.id);
       if (used.has(id)) continue;
       used.add(id);
-      merged.push({ ...bridge, token: "" });
+      const entry = { ...bridge, token: "" };
+      if (survives(entry)) merged.push(entry);
     }
-    return { ...local, version: 1, bridges: merged };
+    return { ...local, version: 1, bridges: merged, deleted: Array.from(tombstones.values()) };
   }
 
-  // A token typed on this device outranks the backed-up one: it is the one the
-  // owner just proved works.
-  function mergeBridgeTokens(localTokens = {}, remoteTokens = {}) {
+  function tokenRecord(value) {
+    if (value === undefined || value === null) return null;
+    if (typeof value === "string") return value ? { token: value, updatedAt: 0 } : null;
+    if (typeof value !== "object") return null;
+    const token = String(value.token === undefined || value.token === null ? "" : value.token);
+    return token ? { token, updatedAt: Number(value.updatedAt || 0) } : null;
+  }
+
+  // The newest token wins, not the nearest one. A device that has been closed
+  // since before a rotation would otherwise push its stale key back over the
+  // working one. Tokens only survive for bridges that still exist and that the
+  // owner asked this device to remember.
+  function mergeBridgeTokens(localTokens = {}, remoteTokens = {}, bridges = []) {
+    const remembered = new Map();
+    for (const bridge of Array.isArray(bridges) ? bridges : []) {
+      if (bridge && bridge.id && bridge.rememberToken !== false) remembered.set(String(bridge.id), bridge);
+    }
     const out = {};
     for (const source of [remoteTokens, localTokens]) {
       if (!source || typeof source !== "object") continue;
-      for (const [id, value] of Object.entries(source)) {
-        const token = String(value === undefined || value === null ? "" : value);
-        if (token) out[String(id)] = token;
+      for (const [rawId, value] of Object.entries(source)) {
+        const id = String(rawId);
+        if (!remembered.has(id)) continue;
+        const record = tokenRecord(value);
+        if (!record) continue;
+        const existing = out[id];
+        if (!existing || record.updatedAt >= existing.updatedAt) out[id] = record;
       }
     }
     return out;

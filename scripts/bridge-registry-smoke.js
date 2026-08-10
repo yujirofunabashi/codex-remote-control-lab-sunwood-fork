@@ -92,7 +92,7 @@ function startServer(store) {
         try {
           return sendJson(200, {
             ok: true,
-            ...writeRegistry({ ...store, bridges: body.bridges, tokens: body.tokens, expectedRevision: body.revision }),
+            ...writeRegistry({ ...store, bridges: body.bridges, deleted: body.deleted, tokens: body.tokens, expectedRevision: body.revision }),
           });
         } catch (error) {
           if (error instanceof RegistryConflictError) {
@@ -155,6 +155,37 @@ async function readClientRegistry(page) {
   }));
 }
 
+// `seed` is the localStorage a phone would already be carrying; omit it for the
+// blank slate a reinstalled Home Screen app starts from.
+async function openContext(browser, origin, seed = null) {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await stubWebSocket(page);
+  if (seed) {
+    await page.addInitScript((payload) => {
+      localStorage.setItem("codexPhoneBridgeRegistry:v1", JSON.stringify(payload.registry));
+      localStorage.setItem("codexPhoneBridgeTokens:v1", JSON.stringify(payload.tokens || {}));
+      localStorage.setItem("codexPhoneBridgeTokenTimes:v1", JSON.stringify(payload.tokenTimes || {}));
+    }, seed);
+  }
+  await page.goto(`${origin}/?token=${token}`, { waitUntil: "domcontentloaded" });
+  return { context, page };
+}
+
+function currentBackup(store) {
+  if (!fs.existsSync(store.filePath)) return { bridges: [], deleted: [], tokens: {} };
+  return readRegistry(store);
+}
+
+async function waitForBackup(page, store, predicate) {
+  let backup = currentBackup(store);
+  for (let attempt = 0; attempt < 40 && !predicate(backup); attempt += 1) {
+    await page.waitForTimeout(250);
+    backup = currentBackup(store);
+  }
+  return backup;
+}
+
 async function run() {
   const tempDir = fs.mkdtempSync(path.join(root, ".tmp-registry-smoke-"));
   const store = { filePath: registryPathForPort(tempDir, 45214), keyPath: registryKeyPath(tempDir) };
@@ -165,30 +196,17 @@ async function run() {
     browser = await chromium.launch();
 
     // A phone that already knows about a second machine, syncing it upward.
-    const seeded = await browser.newContext();
-    const seedPage = await seeded.newPage();
-    await stubWebSocket(seedPage);
-    await seedPage.addInitScript(
-      ([bridgeId, baseUrl, bridgeToken]) => {
-        localStorage.setItem(
-          "codexPhoneBridgeRegistry:v1",
-          JSON.stringify({ version: 1, bridges: [{ id: bridgeId, label: "Air", baseUrl, kind: "mesh", rememberToken: true, updatedAt: 10 }] }),
-        );
-        localStorage.setItem("codexPhoneBridgeTokens:v1", JSON.stringify({ [bridgeId]: bridgeToken }));
-      },
-      [remoteBridgeId, remoteBridgeUrl, remoteBridgeToken],
-    );
-    await seedPage.goto(`${origin}/?token=${token}`, { waitUntil: "domcontentloaded" });
-
-    let backup = { bridges: [] };
-    for (let attempt = 0; attempt < 40 && backup.bridges.length < 2; attempt += 1) {
-      await seedPage.waitForTimeout(250);
-      backup = fs.existsSync(store.filePath) ? readRegistry(store) : { bridges: [], tokens: {} };
-    }
-    await seeded.close();
+    const knownBridge = { id: remoteBridgeId, label: "Air", baseUrl: remoteBridgeUrl, kind: "mesh", rememberToken: true, updatedAt: 10 };
+    const seeded = await openContext(browser, origin, {
+      registry: { version: 1, bridges: [knownBridge] },
+      tokens: { [remoteBridgeId]: remoteBridgeToken },
+      tokenTimes: { [remoteBridgeId]: 10 },
+    });
+    const backup = await waitForBackup(seeded.page, store, (current) => current.bridges.length >= 2);
+    await seeded.context.close();
 
     check("a synced registry reaches the bridge", backup.bridges.length === 2, `${backup.bridges.length} bridges`);
-    check("the remembered token is backed up", backup.tokens?.[remoteBridgeId] === remoteBridgeToken);
+    check("the remembered token is backed up", backup.tokens?.[remoteBridgeId]?.token === remoteBridgeToken);
 
     const raw = fs.readFileSync(store.filePath, "utf8");
     check("the backup file holds no plaintext token", !raw.includes(remoteBridgeToken) && !raw.includes(token));
@@ -200,11 +218,8 @@ async function run() {
 
     // The reinstall: a context with nothing in storage, exactly like a Home
     // Screen app added back from the install URL.
-    const restored = await browser.newContext();
-    const restorePage = await restored.newPage();
-    await stubWebSocket(restorePage);
-    await restorePage.goto(`${origin}/?token=${token}`, { waitUntil: "domcontentloaded" });
-    await restorePage
+    const restored = await openContext(browser, origin);
+    await restored.page
       .waitForFunction(
         (bridgeId) => {
           const parsed = JSON.parse(localStorage.getItem("codexPhoneBridgeRegistry:v1") || "null");
@@ -214,8 +229,8 @@ async function run() {
         { timeout: 15_000 },
       )
       .catch(() => null);
-    const client = await readClientRegistry(restorePage);
-    await restored.close();
+    const client = await readClientRegistry(restored.page);
+    await restored.context.close();
 
     const restoredIds = (client.registry?.bridges || []).map((bridge) => bridge.id);
     check("an empty install recovers both bridges", restoredIds.length === 2, restoredIds.join(", ") || "none");
@@ -224,6 +239,40 @@ async function run() {
 
     const afterRestore = readRegistry(store);
     check("the empty install did not overwrite the backup", afterRestore.bridges.length === 2, `${afterRestore.bridges.length} bridges`);
+
+    // A device that deleted the Air: the registry it carries is what
+    // removeBridge() leaves behind, entry gone and the removal dated.
+    const homeBridge = afterRestore.bridges.find((bridge) => bridge.id !== remoteBridgeId);
+    const deleter = await openContext(browser, origin, {
+      registry: { version: 1, bridges: [homeBridge], deleted: [{ id: remoteBridgeId, deletedAt: Date.now() }] },
+    });
+    const afterDelete = await waitForBackup(deleter.page, store, (current) => current.bridges.length === 1);
+    await deleter.context.close();
+
+    check("a deletion reaches the backup", afterDelete.bridges.length === 1, afterDelete.bridges.map((bridge) => bridge.id).join(", "));
+    check("the removal is recorded, not just absent", afterDelete.deleted.some((record) => record.id === remoteBridgeId));
+    check("the deleted bridge's token is dropped", !afterDelete.tokens?.[remoteBridgeId]);
+
+    // The device that was closed while that happened still lists the Air. It
+    // must learn about the deletion rather than push the bridge back up.
+    const stale = await openContext(browser, origin, {
+      registry: { version: 1, bridges: [homeBridge, knownBridge] },
+      tokens: { [remoteBridgeId]: remoteBridgeToken },
+      tokenTimes: { [remoteBridgeId]: 10 },
+    });
+    await stale.page.waitForTimeout(4000);
+    const staleClient = await readClientRegistry(stale.page);
+    await stale.context.close();
+
+    const staleIds = (staleClient.registry?.bridges || []).map((bridge) => bridge.id);
+    check("a stale device drops the bridge it missed the deletion of", !staleIds.includes(remoteBridgeId), staleIds.join(", "));
+    const afterStale = readRegistry(store);
+    check(
+      "a stale device does not resurrect it in the backup",
+      !afterStale.bridges.some((bridge) => bridge.id === remoteBridgeId),
+      afterStale.bridges.map((bridge) => bridge.id).join(", "),
+    );
+    check("its token stays dropped", !afterStale.tokens?.[remoteBridgeId]);
   } finally {
     if (browser) await browser.close();
     await new Promise((resolve) => server.close(resolve));

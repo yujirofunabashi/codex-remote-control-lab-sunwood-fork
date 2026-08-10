@@ -92,7 +92,7 @@ let hiddenProjects = [];
 // list survives the Home Screen icon being deleted. Nothing here is under
 // test; the mock exists so the request is answered rather than logged as an
 // error by the console check.
-let registryBackup = { version: 1, revision: 0, updatedAt: 0, bridges: [], tokens: {} };
+let registryBackup = { version: 2, revision: 0, updatedAt: 0, bridges: [], deleted: [], tokens: {} };
 
 async function mockApi(page, origin) {
   await page.route("**/*", async (route) => {
@@ -124,6 +124,7 @@ async function mockApi(page, origin) {
           revision: Number(body.revision || 0) + 1,
           updatedAt: Date.now(),
           bridges: Array.isArray(body.bridges) ? body.bridges : [],
+          deleted: Array.isArray(body.deleted) ? body.deleted : [],
           tokens: body.tokens && typeof body.tokens === "object" ? body.tokens : {},
         };
       }

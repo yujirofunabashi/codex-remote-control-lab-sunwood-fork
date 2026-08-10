@@ -575,6 +575,37 @@ function saveBridgeSessionTokens() {
 
 function saveBridgeLocalTokens() {
   writeJsonStorage(bridgeLocalTokensStorageKey, bridgeLocalTokens);
+  writeJsonStorage(bridgeTokenTimesStorageKey, bridgeTokenUpdatedAt);
+}
+
+// When a token was last set, so the newest one wins a sync rather than the
+// nearest one. Kept beside the tokens instead of inside them because the rest
+// of the app reads bridgeLocalTokens as a plain id-to-string map.
+function stampBridgeToken(bridgeId, at = Date.now()) {
+  if (bridgeId) bridgeTokenUpdatedAt[bridgeId] = Number(at) || Date.now();
+}
+
+function forgetBridgeToken(bridgeId) {
+  delete bridgeLocalTokens[bridgeId];
+  delete bridgeTokenUpdatedAt[bridgeId];
+}
+
+function bridgeTokenRecords() {
+  const records = {};
+  for (const [id, value] of Object.entries(bridgeLocalTokens)) {
+    if (value) records[id] = { token: String(value), updatedAt: Number(bridgeTokenUpdatedAt[id] || 0) };
+  }
+  return records;
+}
+
+function adoptBridgeTokenRecords(records = {}) {
+  bridgeLocalTokens = {};
+  bridgeTokenUpdatedAt = {};
+  for (const [id, record] of Object.entries(records)) {
+    if (!record?.token) continue;
+    bridgeLocalTokens[id] = String(record.token);
+    bridgeTokenUpdatedAt[id] = Number(record.updatedAt || 0);
+  }
 }
 
 function effectiveBridgeToken(entry = {}) {
@@ -584,8 +615,11 @@ function effectiveBridgeToken(entry = {}) {
 function persistBridgeRegistry() {
   const sanitized = [];
   for (const entry of bridgeRegistry.bridges || []) {
-    if (entry.token && entry.rememberToken !== false) bridgeLocalTokens[entry.id] = String(entry.token);
-    if (entry.rememberToken === false) delete bridgeLocalTokens[entry.id];
+    if (entry.token && entry.rememberToken !== false && bridgeLocalTokens[entry.id] !== String(entry.token)) {
+      bridgeLocalTokens[entry.id] = String(entry.token);
+      stampBridgeToken(entry.id);
+    }
+    if (entry.rememberToken === false) forgetBridgeToken(entry.id);
     sanitized.push({
       ...entry,
       baseUrl: uiUtils.normalizeBridgeBaseUrl ? uiUtils.normalizeBridgeBaseUrl(entry.baseUrl || "", location.origin) || entry.baseUrl : entry.baseUrl,
@@ -595,6 +629,9 @@ function persistBridgeRegistry() {
   bridgeRegistry = {
     version: 1,
     bridges: sanitized,
+    // Carried, not rebuilt: dropping the removal records here would let the
+    // next restore grow every deleted bridge back.
+    deleted: Array.isArray(bridgeRegistry.deleted) ? bridgeRegistry.deleted : [],
   };
   saveBridgeLocalTokens();
   writeJsonStorage(bridgeRegistryStorageKey, bridgeRegistry);
@@ -636,7 +673,7 @@ function bridgeRegistryTokensForBackup() {
   for (const entry of bridgeRegistry.bridges || []) {
     if (!entry?.id || entry.rememberToken === false) continue;
     const value = bridgeLocalTokens[entry.id] || (entry.id === homeBridgeId ? storedToken || token : "");
-    if (value) tokens[entry.id] = String(value);
+    if (value) tokens[entry.id] = { token: String(value), updatedAt: Number(bridgeTokenUpdatedAt[entry.id] || 0) };
   }
   return tokens;
 }
@@ -645,14 +682,18 @@ function bridgeRegistryBackupPayload() {
   return {
     revision: bridgeRegistryRevision,
     bridges: (bridgeRegistry.bridges || []).map((entry) => ({ ...entry, token: "" })),
+    deleted: Array.isArray(bridgeRegistry.deleted) ? bridgeRegistry.deleted : [],
     tokens: bridgeRegistryTokensForBackup(),
   };
 }
 
 function applyRemoteBridgeRegistry(remote = {}) {
+  if (!uiUtils.mergeBridgeRegistries || !uiUtils.mergeBridgeTokens) return 0;
   const before = new Set((bridgeRegistry.bridges || []).map((entry) => entry.id));
-  bridgeRegistry = uiUtils.mergeBridgeRegistries ? uiUtils.mergeBridgeRegistries(bridgeRegistry, remote) : bridgeRegistry;
-  bridgeLocalTokens = uiUtils.mergeBridgeTokens ? uiUtils.mergeBridgeTokens(bridgeLocalTokens, remote.tokens) : bridgeLocalTokens;
+  bridgeRegistry = uiUtils.mergeBridgeRegistries(bridgeRegistry, remote);
+  // Merged against the surviving list, so a token cannot outlive the bridge it
+  // belongs to or land on a connection the owner asked not to remember.
+  adoptBridgeTokenRecords(uiUtils.mergeBridgeTokens(bridgeTokenRecords(), remote.tokens, bridgeRegistry.bridges));
   saveBridgeLocalTokens();
   writeJsonStorage(bridgeRegistryStorageKey, bridgeRegistry);
   return (bridgeRegistry.bridges || []).filter((entry) => !before.has(entry.id)).length;
@@ -865,9 +906,10 @@ function setBridgeToken(entry, nextToken, rememberToken = true) {
   if (!entry?.id) return entry;
   if (rememberToken) {
     bridgeLocalTokens[entry.id] = tokenValue;
+    stampBridgeToken(entry.id);
     delete bridgeSessionTokens[entry.id];
   } else {
-    delete bridgeLocalTokens[entry.id];
+    forgetBridgeToken(entry.id);
     bridgeSessionTokens[entry.id] = tokenValue;
   }
   saveBridgeLocalTokens();
@@ -909,6 +951,7 @@ const pwaInstallHintStorageKey = "codexPhonePwaInstallHint:v1";
 const pwaDiagnosticsStorageKey = "codexPhonePwaDiagnostics:v1";
 const bridgeRegistryStorageKey = "codexPhoneBridgeRegistry:v1";
 const bridgeLocalTokensStorageKey = "codexPhoneBridgeTokens:v1";
+const bridgeTokenTimesStorageKey = "codexPhoneBridgeTokenTimes:v1";
 const activeBridgeStorageKey = "codexPhoneActiveBridgeId:v1";
 const bridgeSessionTokensStorageKey = "codexPhoneBridgeSessionTokens:v1";
 const bridgeViewStateStorageKey = "codexPhoneBridgeViewState:v1";
@@ -941,6 +984,7 @@ let chatScrollPositions = readJsonStorage(chatScrollStorageKey, {});
 let firstUseHints = readJsonStorage(firstUseHintsStorageKey, {});
 let bridgeRegistry = readJsonStorage(bridgeRegistryStorageKey, { version: 1, bridges: [] });
 let bridgeLocalTokens = readJsonStorage(bridgeLocalTokensStorageKey, {});
+let bridgeTokenUpdatedAt = readJsonStorage(bridgeTokenTimesStorageKey, {});
 let bridgeViewState = readJsonStorage(bridgeViewStateStorageKey, {});
 // Declared ahead of the first ensureHomeBridge() call, which persists the
 // registry - and therefore reaches the backup scheduler - during startup.
@@ -4867,12 +4911,18 @@ function removeBridge(bridgeId) {
   if (!entry) return;
   if (!window.confirm(`${bridgeDisplayLabel(entry, entry.id)} をこの端末から削除します。接続キーも忘れます。`)) return;
   delete bridgeSessionTokens[bridgeId];
-  delete bridgeLocalTokens[bridgeId];
+  forgetBridgeToken(bridgeId);
   saveBridgeSessionTokens();
   saveBridgeLocalTokens();
+  // The removal record travels with the registry, so the backup - and any
+  // other device restoring from it - stops offering this bridge back.
   bridgeRegistry = uiUtils.removeBridgeFromRegistry
     ? uiUtils.removeBridgeFromRegistry(bridgeRegistry, bridgeId)
-    : { ...bridgeRegistry, bridges: (bridgeRegistry.bridges || []).filter((bridge) => bridge.id !== bridgeId) };
+    : {
+        ...bridgeRegistry,
+        bridges: (bridgeRegistry.bridges || []).filter((bridge) => bridge.id !== bridgeId),
+        deleted: [...(bridgeRegistry.deleted || []).filter((record) => record.id !== bridgeId), { id: bridgeId, deletedAt: Date.now() }],
+      };
   bridgeStates.delete(bridgeId);
   persistBridgeRegistry();
   if (activeBridgeId === bridgeId) setActiveBridge(homeBridgeId, { silent: true });
@@ -4932,8 +4982,9 @@ async function addBridgeEntriesFromInput() {
           delete bridgeSessionTokens[previousId];
           bridgeSessionTokens[entry.id] = parsed.token;
         } else if (previousId !== entry.id) {
-          delete bridgeLocalTokens[previousId];
+          forgetBridgeToken(previousId);
           bridgeLocalTokens[entry.id] = parsed.token;
+          stampBridgeToken(entry.id);
         }
         bridgeRegistry = uiUtils.upsertBridgeRegistry ? uiUtils.upsertBridgeRegistry(bridgeRegistry, entry) : { ...bridgeRegistry, bridges: [...(bridgeRegistry.bridges || []), entry] };
         results.push(`追加: ${bridgeDisplayLabel(entry, entry.id)}`);

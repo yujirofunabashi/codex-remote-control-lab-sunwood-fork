@@ -328,10 +328,94 @@ test("merged registries never carry a token in the bridge list", () => {
   assert.doesNotMatch(JSON.stringify(merged), /secret/);
 });
 
-test("a token typed on this device outranks the backed-up one", () => {
-  assert.deepEqual(mergeBridgeTokens({ home: "fresh" }, { home: "stale", air: "air-token" }), { home: "fresh", air: "air-token" });
-  assert.deepEqual(mergeBridgeTokens({ home: "" }, { home: "stale" }), { home: "stale" });
-  assert.deepEqual(mergeBridgeTokens({}, {}), {});
+const remembered = [
+  { id: "home", rememberToken: true },
+  { id: "air", rememberToken: true },
+];
+
+test("the newest token wins a sync, not the nearest one", () => {
+  // The stale device has been closed since before the rotation; pushing its
+  // own copy back would undo a key change made somewhere else.
+  const merged = mergeBridgeTokens({ home: { token: "stale", updatedAt: 10 } }, { home: { token: "rotated", updatedAt: 99 } }, remembered);
+  assert.deepEqual(merged, { home: { token: "rotated", updatedAt: 99 } });
+});
+
+test("a token this device just set outranks an older backed-up one", () => {
+  const merged = mergeBridgeTokens(
+    { home: { token: "fresh", updatedAt: 99 } },
+    { home: { token: "stale", updatedAt: 10 }, air: { token: "air-token", updatedAt: 5 } },
+    remembered,
+  );
+  assert.deepEqual(merged, { home: { token: "fresh", updatedAt: 99 }, air: { token: "air-token", updatedAt: 5 } });
+});
+
+test("tokens are dropped for bridges that are gone or not remembered", () => {
+  const tokens = { home: { token: "keep", updatedAt: 1 }, air: { token: "drop", updatedAt: 1 }, ghost: { token: "drop", updatedAt: 1 } };
+  const merged = mergeBridgeTokens({}, tokens, [
+    { id: "home", rememberToken: true },
+    { id: "air", rememberToken: false },
+  ]);
+  assert.deepEqual(merged, { home: { token: "keep", updatedAt: 1 } });
+});
+
+test("token maps from before timestamps are accepted without outranking anything", () => {
+  const merged = mergeBridgeTokens({ home: "legacy" }, { home: { token: "timestamped", updatedAt: 1 } }, remembered);
+  assert.deepEqual(merged, { home: { token: "timestamped", updatedAt: 1 } });
+  assert.deepEqual(mergeBridgeTokens({}, {}, remembered), {});
+});
+
+test("a bridge deleted on one device does not grow back from the backup", () => {
+  const local = { version: 1, bridges: [{ id: "home", baseUrl: "http://127.0.0.1:45214" }], deleted: [{ id: "air", deletedAt: 100 }] };
+  const remote = {
+    version: 1,
+    bridges: [
+      { id: "home", baseUrl: "http://127.0.0.1:45214" },
+      { id: "air", baseUrl: "http://100.64.0.2:45214", updatedAt: 50 },
+    ],
+  };
+  const merged = mergeBridgeRegistries(local, remote);
+  assert.deepEqual(
+    merged.bridges.map((bridge) => bridge.id),
+    ["home"],
+  );
+  // The record travels on, so the device that still lists it also drops it.
+  assert.deepEqual(merged.deleted, [{ id: "air", deletedAt: 100 }]);
+});
+
+test("a stale device learns of a deletion it never made", () => {
+  const stale = {
+    version: 1,
+    bridges: [
+      { id: "home", baseUrl: "http://127.0.0.1:45214" },
+      { id: "air", baseUrl: "http://100.64.0.2:45214", updatedAt: 50 },
+    ],
+  };
+  const backup = { version: 1, bridges: [{ id: "home", baseUrl: "http://127.0.0.1:45214" }], deleted: [{ id: "air", deletedAt: 100 }] };
+  assert.deepEqual(
+    mergeBridgeRegistries(stale, backup).bridges.map((bridge) => bridge.id),
+    ["home"],
+  );
+});
+
+test("registering a bridge again after deleting it makes it stay", () => {
+  const local = {
+    version: 1,
+    bridges: [{ id: "air", baseUrl: "http://100.64.0.2:45214", updatedAt: 200 }],
+    deleted: [{ id: "air", deletedAt: 100 }],
+  };
+  const merged = mergeBridgeRegistries(local, { version: 1, bridges: [], deleted: [{ id: "air", deletedAt: 100 }] });
+  assert.deepEqual(
+    merged.bridges.map((bridge) => bridge.id),
+    ["air"],
+  );
+  assert.deepEqual(merged.deleted, []);
+});
+
+test("removing a bridge records when it happened", () => {
+  const registry = { version: 1, bridges: [{ id: "air", baseUrl: "http://100.64.0.2:45214" }] };
+  const removed = removeBridgeFromRegistry(registry, "air", { now: 777 });
+  assert.deepEqual(removed.bridges, []);
+  assert.deepEqual(removed.deleted, [{ id: "air", deletedAt: 777 }]);
 });
 
 test("thread inbox status derivation prioritizes actionable work", () => {
