@@ -473,6 +473,11 @@
       ...loser,
       ...winner,
       token: "",
+      // Whether this device may write the token down is this device's answer,
+      // so another phone's choice never overrides it. Syncing it would let a
+      // remembering device turn off "this screen only" here, and the token
+      // would then be adopted into storage the owner kept it out of.
+      rememberToken: local.rememberToken !== false,
       createdAt: createdCandidates.length ? Math.min(...createdCandidates) : Number(winner.createdAt || 0),
       lastUsedAt: Math.max(Number(local.lastUsedAt || 0), Number(remote.lastUsedAt || 0)),
     };
@@ -508,8 +513,12 @@
     const survives = (entry) => {
       const tombstone = tombstones.get(String(entry.id));
       if (!tombstone) return true;
-      // A bridge added back after it was deleted outlives its own tombstone.
-      if (Number(entry.updatedAt || 0) > tombstone.deletedAt) {
+      // Only a bridge registered again after the deletion outlives its own
+      // tombstone, and registering is the one thing that moves createdAt.
+      // updatedAt cannot be the test: the fleet poll rewrites it every few
+      // seconds, so an app merely left open would look like a deliberate
+      // re-add and would take the removal record down with it.
+      if (Number(entry.createdAt || 0) > tombstone.deletedAt) {
         tombstones.delete(String(entry.id));
         return true;
       }

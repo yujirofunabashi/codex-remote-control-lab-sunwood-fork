@@ -400,7 +400,7 @@ test("a stale device learns of a deletion it never made", () => {
 test("registering a bridge again after deleting it makes it stay", () => {
   const local = {
     version: 1,
-    bridges: [{ id: "air", baseUrl: "http://100.64.0.2:45214", updatedAt: 200 }],
+    bridges: [{ id: "air", baseUrl: "http://100.64.0.2:45214", createdAt: 200 }],
     deleted: [{ id: "air", deletedAt: 100 }],
   };
   const merged = mergeBridgeRegistries(local, { version: 1, bridges: [], deleted: [{ id: "air", deletedAt: 100 }] });
@@ -409,6 +409,30 @@ test("registering a bridge again after deleting it makes it stay", () => {
     ["air"],
   );
   assert.deepEqual(merged.deleted, []);
+});
+
+test("an app left open does not undo another device's deletion", () => {
+  // refreshBridgeState re-reads every bridge every few seconds. If that counted
+  // as registering the bridge again, simply leaving the app on screen would
+  // bring back what another phone deleted - and take the removal record with
+  // it, so no device would remember the deletion at all.
+  const polling = {
+    version: 1,
+    bridges: [{ id: "air", baseUrl: "http://100.64.0.2:45214", createdAt: 10, updatedAt: 999_999 }],
+  };
+  const backup = { version: 1, bridges: [], deleted: [{ id: "air", deletedAt: 100 }] };
+  const merged = mergeBridgeRegistries(polling, backup);
+  assert.deepEqual(merged.bridges, []);
+  assert.deepEqual(merged.deleted, [{ id: "air", deletedAt: 100 }]);
+});
+
+test("this device's choice not to remember a token is not overridden", () => {
+  const local = { version: 1, bridges: [{ id: "air", baseUrl: "http://100.64.0.2:45214", rememberToken: false, updatedAt: 10 }] };
+  const remote = { version: 1, bridges: [{ id: "air", baseUrl: "http://100.64.0.2:45214", rememberToken: true, updatedAt: 999 }] };
+  const merged = mergeBridgeRegistries(local, remote);
+  assert.equal(merged.bridges[0].rememberToken, false);
+  // And so the backed-up token is not adopted into this device's storage.
+  assert.deepEqual(mergeBridgeTokens({}, { air: { token: "air-token", updatedAt: 999 } }, merged.bridges), {});
 });
 
 test("removing a bridge records when it happened", () => {

@@ -179,7 +179,9 @@ async function openContext(browser, origin, seed = null) {
       localStorage.setItem("codexPhoneBridgeTokenTimes:v1", JSON.stringify(payload.tokenTimes || {}));
     }, seed);
   }
-  await page.goto(`${origin}/?token=${token}`, { waitUntil: "domcontentloaded" });
+  // The registry re-read is five minutes apart in normal use; the check would
+  // otherwise have to run for that long to see a device converge.
+  await page.goto(`${origin}/?token=${token}&registryRefreshMs=4000`, { waitUntil: "domcontentloaded" });
   return { context, page };
 }
 
@@ -207,7 +209,19 @@ async function run() {
     browser = await chromium.launch();
 
     // A phone that already knows about a second machine, syncing it upward.
-    const knownBridge = { id: remoteBridgeId, label: "Air", baseUrl: remoteBridgeUrl, kind: "mesh", rememberToken: true, updatedAt: 10 };
+    // Timestamps are current, not 1970: a bridge whose dates are older than
+    // every tombstone would pass the deletion checks below for the wrong
+    // reason.
+    const registeredAt = Date.now();
+    const knownBridge = {
+      id: remoteBridgeId,
+      label: "Air",
+      baseUrl: remoteBridgeUrl,
+      kind: "mesh",
+      rememberToken: true,
+      createdAt: registeredAt,
+      updatedAt: registeredAt,
+    };
     const seeded = await openContext(browser, origin, {
       registry: { version: 1, bridges: [knownBridge] },
       tokens: { [remoteBridgeId]: remoteBridgeToken },
@@ -251,9 +265,22 @@ async function run() {
     const afterRestore = readRegistry(store);
     check("the empty install did not overwrite the backup", afterRestore.bridges.length === 2, `${afterRestore.bridges.length} bridges`);
 
-    // A device that deleted the Air: the registry it carries is what
-    // removeBridge() leaves behind, entry gone and the removal dated.
     const homeBridge = afterRestore.bridges.find((bridge) => bridge.id !== remoteBridgeId);
+
+    // The phone that is simply left on screen. It is opened BEFORE the
+    // deletion and kept open across it, because that ordering is the whole
+    // problem: its fleet poll re-reads the Air every few seconds, and if that
+    // counts as registering the bridge again, the deletion never survives.
+    const openDevice = await openContext(browser, origin, {
+      // Carrying the home bridge's token too, so this really is a device with
+      // nothing new to say: anything it writes is something it should not.
+      registry: { version: 1, bridges: [homeBridge, knownBridge] },
+      tokens: { [remoteBridgeId]: remoteBridgeToken, [homeBridge.id]: token },
+      tokenTimes: { [remoteBridgeId]: registeredAt, [homeBridge.id]: backup.tokens[homeBridge.id]?.updatedAt || registeredAt },
+    });
+    await openDevice.page.waitForTimeout(9000);
+
+    // A second device deletes the Air while the first one is still watching it.
     const deleter = await openContext(browser, origin, {
       registry: { version: 1, bridges: [homeBridge], deleted: [{ id: remoteBridgeId, deletedAt: Date.now() }] },
     });
@@ -264,26 +291,31 @@ async function run() {
     check("the removal is recorded, not just absent", afterDelete.deleted.some((record) => record.id === remoteBridgeId));
     check("the deleted bridge's token is dropped", !afterDelete.tokens?.[remoteBridgeId]);
 
-    // The device that was closed while that happened still lists the Air. It
-    // must learn about the deletion rather than push the bridge back up.
-    const stale = await openContext(browser, origin, {
-      registry: { version: 1, bridges: [homeBridge, knownBridge] },
-      tokens: { [remoteBridgeId]: remoteBridgeToken },
-      tokenTimes: { [remoteBridgeId]: 10 },
-    });
-    await stale.page.waitForTimeout(4000);
-    const staleClient = await readClientRegistry(stale.page);
-    await stale.context.close();
+    // Two more poll cycles with the first device still open.
+    await openDevice.page.waitForTimeout(18_000);
+    const staleClient = await readClientRegistry(openDevice.page);
+    await openDevice.context.close();
 
     const staleIds = (staleClient.registry?.bridges || []).map((bridge) => bridge.id);
-    check("a stale device drops the bridge it missed the deletion of", !staleIds.includes(remoteBridgeId), staleIds.join(", "));
+    check("an open device drops the bridge deleted under it", !staleIds.includes(remoteBridgeId), staleIds.join(", "));
     const afterStale = readRegistry(store);
     check(
-      "a stale device does not resurrect it in the backup",
+      "an open device does not resurrect it in the backup",
       !afterStale.bridges.some((bridge) => bridge.id === remoteBridgeId),
       afterStale.bridges.map((bridge) => bridge.id).join(", "),
     );
     check("its token stays dropped", !afterStale.tokens?.[remoteBridgeId]);
+    check(
+      "the removal record survives the open device",
+      afterStale.deleted.some((record) => record.id === remoteBridgeId),
+      afterStale.deleted.map((record) => record.id).join(", ") || "none",
+    );
+    // Polling is not editing, so an app sitting on screen rewrites nothing.
+    check(
+      "an idle device does not rewrite the backup",
+      afterStale.revision === afterDelete.revision,
+      `revision ${afterDelete.revision} -> ${afterStale.revision}`,
+    );
 
     // A phone whose cached helper bundle predates the sync. It cannot merge,
     // so it must not sync: pushing its own list would put the deleted bridge

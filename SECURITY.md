@@ -18,7 +18,7 @@ If you find a security issue, open a private advisory or contact the repository 
 
 - Do not commit local tokens, generated Codex homes, session databases, logs, uploads, private screenshots, or the `.phone-registry-key` that protects backed-up bridge tokens.
 - Do not bind `codex app-server` directly to a LAN or public interface without a separate authenticated private network.
-- Treat any full `?token=...` startup URL as a private local access key. Do not publish it in issues, chats, screenshots, or streams.
+- Treat any full `?token=...` startup URL as a private local access key for the whole fleet, not just that machine: a bridge serves the registry backup, so an authenticated request can read the backed-up tokens of every other bridge the phone had registered. Do not publish it in issues, chats, screenshots, or streams.
 - Stop the bridge with `Ctrl+C`; closing the terminal or restarting the PC stops the process.
 - Do not expose the bridge through an unauthenticated public tunnel or raw port forward.
 - Do not add a server-side fleet proxy that can fetch arbitrary URLs; only token-protected registered/private bridge URLs are acceptable.

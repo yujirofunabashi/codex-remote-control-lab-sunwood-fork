@@ -214,7 +214,8 @@ test("a deletion is stored as a dated record, not as an absence", () => {
       now: 1000,
     });
 
-    assert.deepEqual(written.deleted, [{ id: "air-45214", deletedAt: 500 }]);
+    // Dated by this bridge, not by the phone that asked.
+    assert.deepEqual(written.deleted, [{ id: "air-45214", deletedAt: 1000 }]);
     assert.deepEqual(
       written.bridges.map((bridge) => bridge.id),
       ["mini-45214"],
@@ -225,23 +226,98 @@ test("a deletion is stored as a dated record, not as an absence", () => {
   });
 });
 
-test("a bridge added back after its deletion outlives the tombstone", () => {
+test("a removal keeps the date it was first recorded with", () => {
+  withTempDir((dir) => {
+    const store = storeFor(dir);
+    writeRegistry({ ...store, bridges: [sampleBridges[0]], deleted: [{ id: "air-45214", deletedAt: 7 }], tokens: {}, expectedRevision: 0, now: 1000 });
+    const written = writeRegistry({
+      ...store,
+      bridges: [sampleBridges[0]],
+      deleted: [{ id: "air-45214", deletedAt: 7 }],
+      tokens: {},
+      expectedRevision: 1,
+      now: 9000,
+    });
+    assert.deepEqual(written.deleted, [{ id: "air-45214", deletedAt: 1000 }]);
+  });
+});
+
+test("a bridge registered again after its deletion outlives the tombstone", () => {
+  withTempDir((dir) => {
+    const store = storeFor(dir);
+    writeRegistry({ ...store, bridges: [sampleBridges[0]], deleted: [{ id: "air-45214", deletedAt: 1 }], tokens: {}, expectedRevision: 0, now: 1000 });
+    const written = writeRegistry({
+      ...store,
+      bridges: [sampleBridges[0], { ...sampleBridges[1], createdAt: 2000 }],
+      deleted: [{ id: "air-45214", deletedAt: 1 }],
+      tokens: { "air-45214": "token-air" },
+      expectedRevision: 1,
+      now: 2000,
+    });
+    assert.deepEqual(
+      written.bridges.map((bridge) => bridge.id),
+      ["mini-45214", "air-45214"],
+    );
+    assert.deepEqual(written.deleted, []);
+    assert.equal(written.tokens["air-45214"].token, "token-air");
+  });
+});
+
+test("re-reading a bridge does not undo its deletion", () => {
+  withTempDir((dir) => {
+    const store = storeFor(dir);
+    writeRegistry({ ...store, bridges: [sampleBridges[0]], deleted: [{ id: "air-45214", deletedAt: 1 }], tokens: {}, expectedRevision: 0, now: 1000 });
+
+    // The fleet poll rewrites updatedAt every few seconds. Only createdAt marks
+    // a registration, so a device merely left open cannot bring the bridge back.
+    const written = writeRegistry({
+      ...store,
+      bridges: [sampleBridges[0], { ...sampleBridges[1], createdAt: 1, updatedAt: 9000 }],
+      deleted: [{ id: "air-45214", deletedAt: 1 }],
+      tokens: { "air-45214": "token-air" },
+      expectedRevision: 1,
+      now: 9000,
+    });
+    assert.deepEqual(
+      written.bridges.map((bridge) => bridge.id),
+      ["mini-45214"],
+    );
+    assert.deepEqual(written.deleted, [{ id: "air-45214", deletedAt: 1000 }]);
+    assert.deepEqual(written.tokens, {});
+  });
+});
+
+test("a phone with a slow clock still gets its deletion recorded", () => {
+  withTempDir((dir) => {
+    const store = storeFor(dir);
+    const now = tombstoneTtlMs * 5;
+    // The phone's date is set a year back, so its own deletedAt is already
+    // older than the retention window.
+    const written = writeRegistry({
+      ...store,
+      bridges: [sampleBridges[0]],
+      deleted: [{ id: "air-45214", deletedAt: now - tombstoneTtlMs * 4 }],
+      tokens: {},
+      expectedRevision: 0,
+      now,
+    });
+    assert.deepEqual(written.deleted, [{ id: "air-45214", deletedAt: now }]);
+  });
+});
+
+test("a phone with a fast clock cannot write an entry nothing can supersede", () => {
   withTempDir((dir) => {
     const store = storeFor(dir);
     const written = writeRegistry({
       ...store,
-      bridges: [{ ...sampleBridges[1], updatedAt: 900 }],
-      deleted: [{ id: "air-45214", deletedAt: 500 }],
-      tokens: { "air-45214": "token-air" },
+      bridges: [{ ...sampleBridges[0], createdAt: 9_000_000, updatedAt: 9_000_000, lastUsedAt: 9_000_000 }],
+      tokens: {},
       expectedRevision: 0,
       now: 1000,
     });
-    assert.deepEqual(
-      written.bridges.map((bridge) => bridge.id),
-      ["air-45214"],
-    );
-    assert.deepEqual(written.deleted, []);
-    assert.equal(written.tokens["air-45214"].token, "token-air");
+    assert.equal(written.bridges[0].createdAt, 1000);
+    assert.equal(written.bridges[0].updatedAt, 1000);
+    assert.equal(written.bridges[0].lastUsedAt, 1000);
   });
 });
 
@@ -277,24 +353,31 @@ test("tokens keep the time they were set so the newest one can win", () => {
   });
 });
 
-test("expired tombstones are pruned on write but never resurrect a bridge", () => {
+test("tombstones expire once they are older than the retention window", () => {
   withTempDir((dir) => {
     const store = storeFor(dir);
-    const now = tombstoneTtlMs * 4;
+    writeRegistry({
+      ...store,
+      bridges: [sampleBridges[0]],
+      deleted: [{ id: "air-45214", deletedAt: 1 }],
+      tokens: {},
+      expectedRevision: 0,
+      now: 1000,
+    });
     const written = writeRegistry({
       ...store,
       bridges: [sampleBridges[0]],
       deleted: [
-        { id: "air-45214", deletedAt: now - tombstoneTtlMs - 1 },
-        { id: "old-45214", deletedAt: now - 10 },
+        { id: "air-45214", deletedAt: 1 },
+        { id: "recent-45214", deletedAt: 1 },
       ],
       tokens: {},
-      expectedRevision: 0,
-      now,
+      expectedRevision: 1,
+      now: 1000 + tombstoneTtlMs + 1,
     });
     assert.deepEqual(
       written.deleted.map((record) => record.id),
-      ["old-45214"],
+      ["recent-45214"],
     );
     assert.deepEqual(
       written.bridges.map((bridge) => bridge.id),

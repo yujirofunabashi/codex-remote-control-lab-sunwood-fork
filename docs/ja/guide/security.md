@@ -25,7 +25,7 @@
 
 `PHONE_TOKEN` が未指定の場合、bridge は mode `0600` の `.phone-token` を作ります。token を rotate するときは `.phone-token` を削除します。
 
-bridge は、phone が持つ接続先一覧の控えを `.phone-bridges.<port>.local.json` にも保存します。ホーム画面のアプリを入れ直したときに復元するためのものです。この file の中の bridge token は `.phone-registry-key` を鍵として AES-256-GCM で暗号化します。鍵 file は同じ場所に mode `0600` で生成されます。base URL、label、どの接続先をいつ削除したかの記録など、それ以外の項目はそのまま読めます。phone 側で「記憶しない」を選んだ token は backup に送りません。削除した接続先の token も一緒に落とします。暗号化は、backup の巻き込みや file の貼り付けなど、JSON だけが手元を離れた場合に token を守るためのもので、すでに account を握っている相手への対策ではありません。backup を破棄するときは 2 つの file を一緒に削除します。鍵だけを削除すると registry は fail-closed になり、削除するまで同期が止まります。
+bridge は、phone が持つ接続先一覧の控えを `.phone-bridges.<port>.local.json` にも保存します。ホーム画面のアプリを入れ直したときに復元するためのものです。これにより token 1 つの重みが変わります。ある bridge へ認証付きで request できる相手は、その phone が登録していた**他の bridge の token も読み取れます**。復元にはそれが必要だからです。したがって、1 台の Mac の `?token=...` URL が漏れた場合、影響はその Mac だけでなく fleet 全体に及びます。各 bridge の token はその前提で扱い、fleet 全体を預けられない通知先へ token 付き URL を送らないでください。この file の中の bridge token は `.phone-registry-key` を鍵として AES-256-GCM で暗号化します。鍵 file は同じ場所に mode `0600` で生成されます。base URL、label、どの接続先をいつ削除したかの記録など、それ以外の項目はそのまま読めます。phone 側で「記憶しない」を選んだ token は backup に送りません。削除した接続先の token も一緒に落とします。暗号化は、backup の巻き込みや file の貼り付けなど、JSON だけが手元を離れた場合に token を守るためのもので、すでに account を握っている相手への対策ではありません。backup を破棄するときは 2 つの file を一緒に削除します。鍵だけを削除すると registry は fail-closed になり、削除するまで同期が止まります。
 
 ## 初心者向けの運用メモ
 

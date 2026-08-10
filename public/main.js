@@ -687,6 +687,35 @@ function bridgeRegistryTokensForBackup() {
   return tokens;
 }
 
+// Exactly what the backup carries. Connectivity, run state and the moment of
+// the last poll are deliberately absent: they change every few seconds without
+// the owner doing anything, and treating them as changes is what made a poll
+// look like an edit.
+// Normalized the way the store normalizes, so a fingerprint taken from the
+// bridge's copy and one taken from this device's copy of the same entry match.
+function bridgeSyncFingerprint(entry = {}) {
+  return JSON.stringify([
+    String(entry.id || ""),
+    String(entry.baseUrl || ""),
+    String(entry.name || ""),
+    String(entry.label || ""),
+    String(entry.group || ""),
+    String(entry.kind || "lan"),
+    String(entry.note || ""),
+    String(entry.color || ""),
+    String(entry.workdir || ""),
+    Number(entry.port) || null,
+    entry.rememberToken !== false,
+  ]);
+}
+
+// updatedAt means "last deliberately changed", so it only moves when something
+// the backup carries actually differs.
+function touchBridgeEntry(previous = {}, next = {}) {
+  if (bridgeSyncFingerprint(previous) === bridgeSyncFingerprint(next)) return { ...next, updatedAt: previous.updatedAt };
+  return { ...next, updatedAt: Date.now() };
+}
+
 function bridgeRegistryBackupPayload() {
   return {
     revision: bridgeRegistryRevision,
@@ -719,6 +748,10 @@ async function restoreBridgeRegistryFromHome() {
       throw new Error(result?.error || `${status}`);
     }
     bridgeRegistryRevision = Number(result.revision || 0);
+    // What the bridge already holds. The reconcile push below then only goes
+    // out if merging actually changed something, so an app that opens, agrees
+    // with the backup, and sits there writes nothing.
+    bridgeRegistryPushedFingerprint = bridgeRegistryPayloadFingerprint(result);
     const restored = applyRemoteBridgeRegistry(result);
     bridgeRegistryRestored = true;
     bridgeRegistryBlocked = "";
@@ -742,8 +775,42 @@ async function restoreBridgeRegistryFromHome() {
   return bridgeRegistryRestorePromise;
 }
 
+// An installed app can stay open for days, and the restore only runs at
+// startup. Without a slow re-read, a bridge deleted on another phone keeps
+// being offered here for as long as this one stays on screen - it will not be
+// pushed back, but it is still a machine the owner already said to forget.
+async function refreshBridgeRegistryFromHome() {
+  if (!bridgeRegistryRestored || bridgeRegistryBlocked || !bridgeRegistrySyncSupported()) return false;
+  try {
+    const { ok, result } = await bridgeRegistryRequest("GET");
+    if (!ok) return false;
+    const before = (bridgeRegistry.bridges || []).map((entry) => entry.id).join(",");
+    bridgeRegistryRevision = Number(result.revision || 0);
+    bridgeRegistryPushedFingerprint = bridgeRegistryPayloadFingerprint(result);
+    applyRemoteBridgeRegistry(result);
+    if ((bridgeRegistry.bridges || []).map((entry) => entry.id).join(",") !== before) {
+      if (!bridgeById(activeBridgeId)) await setActiveBridge(homeBridgeId, { silent: true });
+      renderFleet();
+    }
+    scheduleBridgeRegistryBackup();
+    return true;
+  } catch (error) {
+    console.warn("bridge registry refresh failed:", error?.message || error);
+    return false;
+  }
+}
+
+function bridgeRegistryPayloadFingerprint(payload = {}) {
+  return JSON.stringify([
+    (payload.bridges || []).map((entry) => bridgeSyncFingerprint(entry)),
+    (payload.deleted || []).map((record) => [record.id, record.deletedAt]),
+    Object.entries(payload.tokens || {})
+      .map(([id, record]) => [id, record?.updatedAt])
+      .sort(),
+  ]);
+}
+
 function scheduleBridgeRegistryBackup() {
-  if (bridgeRegistryBlocked) return;
   if (!bridgeRegistryRestored) {
     if (Date.now() - bridgeRegistryRestoreAttemptedAt >= bridgeRegistryRestoreRetryMs) restoreBridgeRegistryFromHome();
     return;
@@ -757,16 +824,28 @@ function scheduleBridgeRegistryBackup() {
 
 async function pushBridgeRegistryBackup(attempt = 0) {
   if (!bridgeRegistryRestored || bridgeRegistryBlocked || !bridgeRegistrySyncSupported()) return false;
+  const payload = bridgeRegistryBackupPayload();
+  // Rewriting the backup with what it already holds costs a disk write and a
+  // revision on every poll, and puts every remembered token back on the wire
+  // for nothing.
+  const fingerprint = bridgeRegistryPayloadFingerprint(payload);
+  if (attempt === 0 && fingerprint === bridgeRegistryPushedFingerprint) return true;
   try {
-    const { ok, status, result } = await bridgeRegistryRequest("POST", bridgeRegistryBackupPayload());
+    const { ok, status, result } = await bridgeRegistryRequest("POST", payload);
     if (ok) {
       bridgeRegistryRevision = Number(result.revision || bridgeRegistryRevision);
+      bridgeRegistryPushedFingerprint = fingerprint;
       return true;
     }
     if (result?.code === "registry-unreadable") {
       // Overwriting a backup we cannot read would destroy the only copy of
-      // whatever is still in it, so stop and let the owner decide.
+      // whatever is still in it, so stop and let the owner decide. The restore
+      // is reset with it, so once the owner clears the file the retry in
+      // scheduleBridgeRegistryBackup picks the sync back up without a reload -
+      // which an installed app rarely gets.
       bridgeRegistryBlocked = result.error || "registry is unreadable";
+      bridgeRegistryRestored = false;
+      bridgeRegistryPushedFingerprint = "";
       showToast("接続先のバックアップを読めません。復旧するまで保存を止めます", "warn");
       return false;
     }
@@ -999,6 +1078,7 @@ let bridgeViewState = readJsonStorage(bridgeViewStateStorageKey, {});
 // registry - and therefore reaches the backup scheduler - during startup.
 const bridgeRegistryBackupDebounceMs = 1500;
 const bridgeRegistryRestoreRetryMs = 30_000;
+const bridgeRegistryRefreshMs = Number(params.get("registryRefreshMs")) || 5 * 60_000;
 // Raised in step with phone-ui-utils.js when its merge behaviour changes.
 const requiredBridgeRegistrySyncVersion = 1;
 let bridgeRegistryRestored = false;
@@ -1007,6 +1087,7 @@ let bridgeRegistryRestoreAttemptedAt = 0;
 let bridgeRegistryRevision = 0;
 let bridgeRegistryBackupTimer = null;
 let bridgeRegistryBlocked = "";
+let bridgeRegistryPushedFingerprint = "";
 // Opening on the attention filter made a quiet moment look like a lost account:
 // the list was filtered, not empty, and nothing on screen said so. Start from
 // the unfiltered view and let the narrower ones be asked for.
@@ -4781,7 +4862,7 @@ async function refreshBridgeState(bridgeId, { force = false } = {}) {
     }
     state.runState = bridgeRunSummary(bridgeId).run?.state || "ready";
     state.lastEventAt = Date.now();
-    const updated = {
+    const refreshed = {
       ...entry,
       label: entry.label === "Home bridge" || !entry.label ? info.label || entry.label : entry.label,
       group: entry.group || info.group || "",
@@ -4789,16 +4870,17 @@ async function refreshBridgeState(bridgeId, { force = false } = {}) {
       port: info.uiPort || entry.port || null,
       color: entry.color || info.color || "",
       status: "connected",
-      updatedAt: Date.now(),
     };
-    bridgeRegistry = { ...bridgeRegistry, bridges: (bridgeRegistry.bridges || []).map((bridge) => (bridge.id === bridgeId ? updated : bridge)) };
+    bridgeRegistry = { ...bridgeRegistry, bridges: (bridgeRegistry.bridges || []).map((bridge) => (bridge.id === bridgeId ? touchBridgeEntry(entry, refreshed) : bridge)) };
     persistBridgeRegistry();
   } catch (error) {
     state.connected = false;
     state.runState = "error";
     state.lastError = error.message || String(error);
     state.lastEventAt = Date.now();
-    bridgeRegistry = { ...bridgeRegistry, bridges: (bridgeRegistry.bridges || []).map((bridge) => (bridge.id === bridgeId ? { ...bridge, status: "error", updatedAt: Date.now() } : bridge)) };
+    // Unreachable is a state, not an edit - and it is often exactly why the
+    // owner deleted the bridge somewhere else.
+    bridgeRegistry = { ...bridgeRegistry, bridges: (bridgeRegistry.bridges || []).map((bridge) => (bridge.id === bridgeId ? { ...bridge, status: "error" } : bridge)) };
     persistBridgeRegistry();
   } finally {
     state.refreshing = false;
@@ -8254,3 +8336,9 @@ setInterval(() => {
 fleetPollTimer = setInterval(() => {
   if (document.visibilityState !== "hidden") refreshFleet().catch(() => {});
 }, 7_000);
+// Slow on purpose: the registry only changes when the owner adds or removes a
+// machine, and this is the one thing that tells an app left open for days that
+// another phone deleted one.
+setInterval(() => {
+  if (document.visibilityState !== "hidden") refreshBridgeRegistryFromHome().catch(() => {});
+}, bridgeRegistryRefreshMs);

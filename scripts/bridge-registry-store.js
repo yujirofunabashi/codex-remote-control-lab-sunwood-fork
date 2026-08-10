@@ -177,7 +177,15 @@ function finiteNumber(value) {
   return Number.isFinite(num) ? num : 0;
 }
 
-function sanitizeBridge(entry) {
+// Client clocks are not trusted to be ahead of this one. A phone whose date is
+// set a year forward would otherwise write an entry no correctly-set device
+// could ever supersede.
+function clampedTime(value, now) {
+  const time = finiteNumber(value);
+  return now > 0 ? Math.min(time, now) : time;
+}
+
+function sanitizeBridge(entry, now = 0) {
   if (!entry || typeof entry !== "object") return null;
   const id = trimmedText(entry.id, 128);
   const baseUrl = trimmedText(entry.baseUrl, maxTextLength);
@@ -196,9 +204,9 @@ function sanitizeBridge(entry) {
     workdir: trimmedText(entry.workdir, maxTextLength),
     port: Number.isInteger(port) && port > 0 && port <= 65535 ? port : null,
     rememberToken: entry.rememberToken !== false,
-    createdAt: finiteNumber(entry.createdAt),
-    lastUsedAt: finiteNumber(entry.lastUsedAt),
-    updatedAt: finiteNumber(entry.updatedAt),
+    createdAt: clampedTime(entry.createdAt, now),
+    lastUsedAt: clampedTime(entry.lastUsedAt, now),
+    updatedAt: clampedTime(entry.updatedAt, now),
   };
 }
 
@@ -206,12 +214,12 @@ function sanitizeBridge(entry) {
 // any that no longer belong to a listed bridge, is what makes "the plaintext
 // half of the file has no secrets in it" a property of the format rather than
 // of every call site remembering to strip them.
-function sanitizeBridges(bridges) {
+function sanitizeBridges(bridges, now = 0) {
   if (!Array.isArray(bridges)) return [];
   const seen = new Set();
   const out = [];
   for (const entry of bridges) {
-    const bridge = sanitizeBridge(entry);
+    const bridge = sanitizeBridge(entry, now);
     if (!bridge || seen.has(bridge.id)) continue;
     seen.add(bridge.id);
     out.push(bridge);
@@ -220,15 +228,20 @@ function sanitizeBridges(bridges) {
   return out;
 }
 
-function sanitizeTombstones(deleted, { now = 0, prune = false } = {}) {
+// On write, a removal is dated by this bridge's clock the first time it is seen
+// and keeps that date afterwards. The phone's own clock cannot be used: one set
+// far enough back would have its removal pruned as expired by the very write
+// that recorded it, and the deletion would never stick anywhere.
+function sanitizeTombstones(deleted, { now = 0, prune = false, known = new Map() } = {}) {
   if (!Array.isArray(deleted)) return [];
   const byId = new Map();
   for (const record of deleted) {
     if (!record || typeof record !== "object") continue;
     const id = trimmedText(record.id, 128);
     if (!id) continue;
-    const deletedAt = finiteNumber(record.deletedAt);
-    if (deletedAt <= 0) continue;
+    const claimed = finiteNumber(record.deletedAt);
+    if (claimed <= 0) continue;
+    const deletedAt = prune && now > 0 ? finiteNumber(known.get(id)) || now : claimed;
     if (prune && now > 0 && now - deletedAt > tombstoneTtlMs) continue;
     const existing = byId.get(id);
     if (!existing || deletedAt > existing.deletedAt) byId.set(id, { id, deletedAt });
@@ -238,16 +251,16 @@ function sanitizeTombstones(deleted, { now = 0, prune = false } = {}) {
     .slice(0, maxTombstones);
 }
 
-// A bridge cannot be both listed and deleted. Whichever record is newer decides,
-// so a re-added bridge survives its own old tombstone and a deletion survives an
-// older copy of the entry.
+// A bridge cannot be both listed and deleted. Only registering it again clears
+// a removal, and registering is what moves createdAt - updatedAt would not do,
+// because the app rewrites that whenever it re-reads a bridge's state.
 function reconcileTombstones(bridges, tombstones) {
   const deletedById = new Map(tombstones.map((record) => [record.id, record]));
   const keptBridges = [];
   const keptTombstones = [];
   for (const bridge of bridges) {
     const tombstone = deletedById.get(bridge.id);
-    if (tombstone && tombstone.deletedAt >= bridge.updatedAt) continue;
+    if (tombstone && tombstone.deletedAt >= bridge.createdAt) continue;
     if (tombstone) deletedById.delete(bridge.id);
     keptBridges.push(bridge);
   }
@@ -333,9 +346,14 @@ function writeRegistry({ filePath, keyPath, bridges, tokens, deleted, expectedRe
   if (expected !== current.revision) {
     throw new RegistryConflictError("registry revision conflict", { current });
   }
+  const stamped = finiteNumber(now);
   const reconciled = reconcileTombstones(
-    sanitizeBridges(bridges),
-    sanitizeTombstones(deleted, { now: finiteNumber(now), prune: true }),
+    sanitizeBridges(bridges, stamped),
+    sanitizeTombstones(deleted, {
+      now: stamped,
+      prune: true,
+      known: new Map(current.deleted.map((record) => [record.id, record.deletedAt])),
+    }),
   );
   const nextTokens = sanitizeTokens(tokens, reconciled.bridges);
   const revision = current.revision + 1;
