@@ -66,6 +66,17 @@ function notificationEventsEnabled(env = process.env) {
   return /^(1|true|yes|on)$/i.test(String(envValue(env, "PHONE_NOTIFY_EVENTS") || ""));
 }
 
+// The startup message lands in a chat channel, and a tokenized URL there is the
+// key to the whole fleet rather than to one Mac: a bridge serves the registry
+// backup, so one authenticated request reads the backed-up tokens of every
+// bridge the phone had registered. An installed Home Screen app already holds
+// its own token and only needs to know the bridge is up, so the default is
+// token-free. The tokenized form stays available for first-time setup, as an
+// explicit opt-in rather than as the thing that happens on every restart.
+function startupTokenUrlsEnabled(env = process.env) {
+  return /^(1|true|yes|on)$/i.test(String(envValue(env, "PHONE_NOTIFY_STARTUP_TOKEN_URLS") || ""));
+}
+
 function stripTokenFromUrl(value) {
   const text = String(value || "").trim();
   if (!text) return "";
@@ -409,6 +420,7 @@ module.exports = {
   notificationTargets,
   notificationTimeoutMs,
   redactNotificationText,
+  startupTokenUrlsEnabled,
   notifyEvent,
   notifyTaskEvent,
   notifyBridgeUrls,

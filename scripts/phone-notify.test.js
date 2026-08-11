@@ -9,6 +9,7 @@ const {
   notifyEvent,
   notifyTaskEvent,
   redactNotificationText,
+  startupTokenUrlsEnabled,
   stripTokenFromUrl,
   taskNotificationMessage,
 } = require("./phone-notify");
@@ -141,6 +142,22 @@ test("notifyBridgeUrls posts to configured Discord webhook", async () => {
   assert.equal(requests[0].options.headers["content-type"], "application/json");
   assert.match(JSON.parse(requests[0].options.body).content, /スマホブリッジを起動しました/);
   assert.deepEqual(JSON.parse(requests[0].options.body).allowed_mentions, { parse: [] });
+});
+
+// A startup message posts on every restart, and the channel it posts to keeps
+// its history. A tokenized URL there is the whole fleet's key, because a bridge
+// serves the registry backup, so the token has to be asked for rather than
+// assumed.
+test("the startup message carries a token only when the operator opts in", () => {
+  assert.equal(startupTokenUrlsEnabled({}), false);
+  assert.equal(startupTokenUrlsEnabled({ PHONE_NOTIFY_STARTUP_TOKEN_URLS: "" }), false);
+  assert.equal(startupTokenUrlsEnabled({ PHONE_NOTIFY_STARTUP_TOKEN_URLS: "0" }), false);
+  assert.equal(startupTokenUrlsEnabled({ PHONE_NOTIFY_STARTUP_TOKEN_URLS: "1" }), true);
+  assert.equal(startupTokenUrlsEnabled({ PHONE_NOTIFY_STARTUP_TOKEN_URLS: "true" }), true);
+  // Two bridges share one `.env`, so this reads per slot like every other
+  // notification setting.
+  assert.equal(startupTokenUrlsEnabled({ PHONE_UI_PORT: "45214", PHONE_NOTIFY_STARTUP_TOKEN_URLS_45214: "on" }), true);
+  assert.equal(startupTokenUrlsEnabled({ PHONE_UI_PORT: "45224", PHONE_NOTIFY_STARTUP_TOKEN_URLS_45214: "on" }), false);
 });
 
 test("notifyTaskEvent posts a Discord completion notification", async () => {

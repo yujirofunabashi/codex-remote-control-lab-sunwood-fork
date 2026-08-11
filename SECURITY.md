@@ -23,7 +23,7 @@ If you find a security issue, open a private advisory or contact the repository 
 - Do not expose the bridge through an unauthenticated public tunnel or raw port forward.
 - Do not add a server-side fleet proxy that can fetch arbitrary URLs; only token-protected registered/private bridge URLs are acceptable.
 - Run the bridge from a normal user account, not a root/admin shell.
-- Send startup notifications only to private/protected notification accounts, topics, or channels.
+- Send startup notifications only to private/protected notification accounts, topics, or channels. They are token-free unless `PHONE_NOTIFY_STARTUP_TOKEN_URLS=1` asks for the tokenized URL; turn it on only for first-time setup, because that URL is the whole fleet's key and the channel keeps it.
 - Keep `PHONE_NOTIFY_EVENTS=1` event notifications token-free and deduped; do not include raw bridge tokens in event titles or bodies.
 - Rotate `PHONE_TOKEN` or delete `.phone-token` after demos on shared networks.
 - Prefer SSH forwarding, a VPN, or a mesh network for access outside the local LAN.

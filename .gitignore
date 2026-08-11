@@ -6,6 +6,8 @@ docs/.vitepress/dist/
 docs/.vitepress/cache/
 *.log
 .env
+.env.*
+!.env.example
 .claude/
 CLAUDE.md
 .worktrees/

@@ -9,7 +9,7 @@
 - page、API、WebSocket bridge request は同じ token を要求します。
 - `.phone-token`、`.uploads/`、`.codex-home*/`、log、session database は Git に入れません。
 - `.phone-fleet.local.json`、`.phone-bridges.local.json`、`.phone-bridges.<port>.local.json`、`.phone-registry-key`、browser bridge registry state は local-only として扱います。
-- 起動通知の credential と token 付き URL の通知先は、private/protected な account、topic、channel に限定してください。
+- 起動通知の credential と token 付き URL の通知先は、private/protected な account、topic、channel に限定してください。起動通知は既定で token を含まず、`PHONE_NOTIFY_STARTUP_TOKEN_URLS=1` を設定したときだけ token 付き URL になります。その URL は fleet 全体の鍵で、channel に残るため、初回セットアップ時だけ有効にしてください。
 
 ## 避けること
 

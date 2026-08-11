@@ -9,7 +9,7 @@ This project is intentionally local-first.
 - Page, API, and WebSocket bridge requests require the same token.
 - `.phone-token`, `.uploads/`, `.codex-home*/`, logs, and session databases stay out of Git.
 - `.phone-fleet.local.json`, `.phone-bridges.local.json`, `.phone-bridges.<port>.local.json`, `.phone-registry-key`, and browser bridge registry state are local-only.
-- Startup notification credentials and tokenized URL messages should stay in private/protected notification accounts, topics, or channels.
+- Startup notification credentials and tokenized URL messages should stay in private/protected notification accounts, topics, or channels. Startup messages are token-free unless `PHONE_NOTIFY_STARTUP_TOKEN_URLS=1` asks for the tokenized URL, which is the whole fleet's key and stays in the channel's history; turn it on for first-time setup only.
 
 ## Do Not Do This
 

@@ -17,7 +17,7 @@ const {
 } = require("./bridge-registry-store");
 const { debugLog, debugLogPath, debugTimer, isDebugEnabled, redactSensitiveText } = require("./debug-log");
 const { isHistorySyncEnabled, runHistorySync } = require("./history-sync");
-const { bridgeUrls, eventTypeLabel, notificationTargets, notifyBridgeUrls, notifyEvent, notifyTaskEvent, stripTokenFromUrl } = require("./phone-notify");
+const { bridgeUrls, eventTypeLabel, notificationTargets, notifyBridgeUrls, notifyEvent, notifyTaskEvent, startupTokenUrlsEnabled, stripTokenFromUrl } = require("./phone-notify");
 const { defaultCodexAppServerPort, settingEnvKeysForSlot, slotEnvKey, slotSettingValue } = require("./phone-slot-settings");
 const { slashCommandCatalog } = require("./slash-commands");
 const { findLiveBridge, readThreadSnapshot } = require("./thread-read");
@@ -4448,6 +4448,10 @@ function tokenFreeLanUrls() {
   return notificationBridgeUrls.map(stripTokenFromUrl).filter(Boolean);
 }
 
+function startupNotificationUrls() {
+  return startupTokenUrlsEnabled() ? notificationBridgeUrls : tokenFreeLanUrls();
+}
+
 function enabledNotificationProviders(env = process.env) {
   return notificationTargets(env).map((target) => target.type);
 }
@@ -5434,7 +5438,7 @@ async function main() {
     if (isDebugEnabled()) console.log(`Debug log: ${debugLogPath()} (PHONE_DEBUG is on)`);
     console.log("Press Ctrl+C to stop.");
 
-    notifyBridgeUrls(urls).then((results) => {
+    notifyBridgeUrls(startupNotificationUrls()).then((results) => {
       logNotifyResults("startup", results);
     });
     notifyBridgeEvent("bridge_started", {
