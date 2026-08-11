@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 
 const {
   capTerminalHistory,
+  clickClosesBridgeFleet,
   machineLabelFromHost,
   machineLabelForBridge,
   machineScopeKey,
@@ -194,6 +195,48 @@ test("viewport, standalone, compact mode, and quickbar helpers are stable", () =
   assert.deepEqual(terminalCompactState({ mainViewMode: "terminal", width: 390, maxMode: true }).max, true);
   assert.equal(shouldShowQuickBar({ mainViewMode: "terminal", inputFocused: false, inputMode: "keys" }), true);
   assert.equal(shouldShowQuickBar({ mainViewMode: "chat", inputFocused: true, inputMode: "keys" }), false);
+});
+
+// The approval banner's 承認一覧 button lives outside the connection sheet, so
+// before it was marked as an opener the click that opened the sheet fell
+// through to the click-outside rule and closed it again - the button read as
+// dead on the phone.
+test("the click-outside rule keeps the connection sheet open for the controls that open it", () => {
+  const element = (attributes = [], parent = null) => {
+    const node = { attributes, parent, children: [] };
+    node.contains = (other) => {
+      for (let current = other; current; current = current.parent) {
+        if (current === node) return true;
+      }
+      return false;
+    };
+    node.closest = (selector) => {
+      const wanted = selector.replace(/^\[|\]$/g, "");
+      for (let current = node; current; current = current.parent) {
+        if (current.attributes.includes(wanted)) return current;
+      }
+      return null;
+    };
+    if (parent) parent.children.push(node);
+    return node;
+  };
+
+  const sheet = element();
+  const insideSheet = element([], sheet);
+  const banner = element();
+  const bannerButton = element(["data-opens-bridge-fleet"], banner);
+  const bannerButtonLabel = element([], bannerButton);
+  const elsewhere = element();
+
+  assert.equal(clickClosesBridgeFleet(bannerButton, sheet), false);
+  // A tap lands on whatever the button is made of, so the marker has to hold
+  // for the button's own children too.
+  assert.equal(clickClosesBridgeFleet(bannerButtonLabel, sheet), false);
+  assert.equal(clickClosesBridgeFleet(insideSheet, sheet), false);
+  assert.equal(clickClosesBridgeFleet(elsewhere, sheet), true);
+  assert.equal(clickClosesBridgeFleet(banner, sheet), true);
+  assert.equal(clickClosesBridgeFleet(null, sheet), false);
+  assert.equal(clickClosesBridgeFleet(elsewhere, null), false);
 });
 
 test("PWA helpers keep manifest and service worker opt-in safe", () => {

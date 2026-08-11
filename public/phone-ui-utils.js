@@ -106,6 +106,21 @@
     return Number(width || 0) > 0 && Number(width) <= 820;
   }
 
+  // Every control that opens the connection sheet sits outside it, so the same
+  // click that opens the sheet also reaches the click-outside rule that closes
+  // it. Openers carry this marker instead of being listed one by one, so a new
+  // opener cannot be added without the rule knowing about it - the failure it
+  // causes is a button that looks dead, with the sheet opening and closing
+  // inside one tap.
+  const bridgeFleetOpenerSelector = "[data-opens-bridge-fleet]";
+
+  function clickClosesBridgeFleet(target, sheet) {
+    if (!sheet || !target) return false;
+    if (typeof sheet.contains === "function" && sheet.contains(target)) return false;
+    if (typeof target.closest === "function" && target.closest(bridgeFleetOpenerSelector)) return false;
+    return true;
+  }
+
   function isStandaloneDisplayMode(env = {}) {
     const target = env || {};
     const nav = target.navigator || {};
@@ -904,6 +919,8 @@
     compactWorkspacePath,
     middleEllipsis,
     isMobileViewport,
+    bridgeFleetOpenerSelector,
+    clickClosesBridgeFleet,
     isStandaloneDisplayMode,
     visualViewportVars,
     effectiveAppViewportHeight,

@@ -38,7 +38,7 @@
           </div>
         </div>
         <section class="fleet-sidebar" aria-label="接続先">
-          <button type="button" class="fleet-current" id="fleetDashboardButton" aria-haspopup="dialog" aria-expanded="false">
+          <button type="button" class="fleet-current" id="fleetDashboardButton" data-opens-bridge-fleet aria-haspopup="dialog" aria-expanded="false">
             <span class="fleet-current-dot" aria-hidden="true"></span>
             <span class="fleet-current-main">
               <strong id="fleetCurrentLabel">現在の接続先</strong>
@@ -48,7 +48,7 @@
           </button>
           <div id="bridgeFleetList" class="bridge-fleet-list" aria-label="登録済み接続先"></div>
           <div class="connection-command-row">
-            <button type="button" class="nav-command muted add-bridge-command" id="addBridgeButton">
+            <button type="button" class="nav-command muted add-bridge-command" id="addBridgeButton" data-opens-bridge-fleet>
               <span class="command-icon plus-icon" aria-hidden="true"></span>
               <span>接続先を追加</span>
             </button>
@@ -99,7 +99,7 @@
             <h1 id="threadTitle">新しいチャット</h1>
             <p id="meta">接続準備中</p>
           </div>
-          <button type="button" class="bridge-pill" id="bridgePill" aria-label="接続先を切り替え" aria-haspopup="dialog">
+          <button type="button" class="bridge-pill" id="bridgePill" data-opens-bridge-fleet aria-label="接続先を切り替え" aria-haspopup="dialog">
             <span class="bridge-pill-dot" aria-hidden="true"></span>
             <span class="bridge-pill-main">
               <strong id="bridgePillLabel">接続先</strong>

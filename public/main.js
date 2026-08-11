@@ -4808,6 +4808,7 @@ function renderGlobalApprovalBanner() {
   const open = document.createElement("button");
   open.type = "button";
   open.textContent = "承認一覧";
+  open.setAttribute("data-opens-bridge-fleet", "");
   open.addEventListener("click", openBridgeFleet);
   globalApprovalBanner.append(text, open);
 }
@@ -5039,6 +5040,11 @@ function openBridgeFleet(options = {}) {
 function closeBridgeFleet() {
   bridgeFleetSheet?.classList.add("hidden");
   fleetDashboardButton?.setAttribute("aria-expanded", "false");
+}
+
+function clickClosesBridgeFleet(target) {
+  if (uiUtils.clickClosesBridgeFleet) return uiUtils.clickClosesBridgeFleet(target, bridgeFleetSheet);
+  return Boolean(target) && !bridgeFleetSheet?.contains(target) && !target.closest?.("[data-opens-bridge-fleet]");
 }
 
 async function addBridgeEntriesFromInput() {
@@ -8227,14 +8233,7 @@ document.addEventListener("click", (event) => {
     if (!threadSwitcher.contains(event.target) && !threadPositionPill?.contains(event.target)) closeThreadSwitcher();
   }
   if (!bridgeFleetSheet?.classList.contains("hidden")) {
-    if (
-      !bridgeFleetSheet.contains(event.target) &&
-      !bridgePill?.contains(event.target) &&
-      !fleetDashboardButton?.contains(event.target) &&
-      !addBridgeButton?.contains(event.target)
-    ) {
-      closeBridgeFleet();
-    }
+    if (clickClosesBridgeFleet(event.target)) closeBridgeFleet();
   }
   if (!terminalToolsSheet?.classList.contains("hidden")) {
     const toolbarTarget =
