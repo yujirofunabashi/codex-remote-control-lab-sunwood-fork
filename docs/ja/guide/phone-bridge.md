@@ -95,7 +95,7 @@ Claude の subscription limit は Anthropic API の rate-limit header とは別�
 
 background の thread 一覧 polling は、同じ error の連続表示を抑えます。app-server の短い再起動や token mismatch が起きても、同じ `/api/threads` failure が chat log に増え続けることは避けます。
 
-permission mode がどれであっても、run 側には必ず確認手段を渡します。Claude Code は bridge ごとの Unix socket に紐づく permission-prompt tool 付きで起動するため、止まった tool 呼び出しはスマホ側の承認カードになります。フルアクセス（`bypassPermissions`）も同じです。このモードでは通常の tool 呼び出しは prompt tool を通さず素通りしますが、`PreToolUse` hook が `ask` を返せば止まります。確認先が無い run は permission denial を記録したまま待ち続けます。開いた承認は答えるまで bridge が保持するので、再読み込みや再接続をしても同じ質問が戻り、止まったまま進まない run にはなりません。
+permission mode がどれであっても、run 側には必ず確認手段を渡します。Claude Code は bridge ごとの Unix socket に紐づく permission-prompt tool 付きで起動するため、止まった tool 呼び出しはスマホ側の承認カードになります。フルアクセス（`bypassPermissions`）も同じです。このモードでは通常の tool 呼び出しは prompt tool を通さず素通りしますが、`PreToolUse` hook が `ask` を返せば止まります。確認先が無い run は permission denial を記録したまま待ち続けます。開いた承認は答えるまで bridge が保持するので、再読み込みや再接続をしても同じ質問が戻り、止まったまま進まない run にはなりません。保持は質問した側が終わるまでです。答えを受け取らないまま turn が終了した場合は bridge も質問を取り下げるので、どの決定も届かないカードが残り続けることはありません。
 
 ## sidebar は全 workdir を横断する
 

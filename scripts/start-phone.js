@@ -4212,10 +4212,16 @@ class ClaudeBridge {
       this.emit("status", { text: "承認がタイムアウトしたため拒否しました。" });
     }, approvalTimeoutMs);
 
+    // The asker hung up. Claude Code kills the prompt tool's child when the turn
+    // that asked ends without an answer, so this is the ordinary end of an
+    // unanswered question - and dropping only the settle entry was what left the
+    // held copy behind, advertised by every status poll with nothing on the
+    // other end to receive a decision.
     socket.on("close", () => {
       if (!this.pendingApprovals.has(id)) return;
       clearTimeout(timer);
       this.pendingApprovals.delete(id);
+      this.forgetPendingApproval(id, "askerGone");
     });
 
     this.pendingApprovals.set(id, settle);
@@ -4267,11 +4273,37 @@ class ClaudeBridge {
     }
   }
 
+  // A question nobody can answer any more has to stop being asked. The held copy
+  // is what `ready` and every status poll hand to the phone, so leaving it in
+  // place is what turns one dead approval into a card that comes back after
+  // every single tap - answering it can never reach the settle entry that is
+  // already gone.
+  forgetPendingApproval(id, reason) {
+    if (!id || this.pendingApproval?.id !== id) return false;
+    this.pendingApproval = null;
+    debugLog("claude.approval.forgotten", { id, reason, threadId: this.threadId, turnId: this.activeTurnId });
+    const working = Boolean(this.activeTurnId || this.activeProcess);
+    this.setBridgeRunState(
+      working ? "running" : "ready",
+      working ? "Agent 処理中" : "未実行・送信できます",
+      this.activeTurnId,
+    );
+    return true;
+  }
+
   approval(requestMsg, decision) {
     const id = requestMsg?.id;
     const settle = id ? this.pendingApprovals?.get(id) : null;
     if (!settle) {
-      this.emit("status", { text: "対象の承認リクエストは既に解決済みです。" });
+      // The phone can still be holding a card for a request that ended on its
+      // own. Clear it here rather than only reporting it, or the tap that was
+      // meant to dismiss it leaves it on screen for the next poll to redraw.
+      const cleared = this.forgetPendingApproval(id, "decidedAfterEnd");
+      this.emit("status", {
+        text: cleared
+          ? "この承認待ちは既に終了していたため、表示を取り下げました。"
+          : "対象の承認リクエストは既に解決済みです。",
+      });
       return;
     }
     const accepted = decision === "accept";

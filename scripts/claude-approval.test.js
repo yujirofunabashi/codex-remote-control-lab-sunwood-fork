@@ -144,6 +144,84 @@ test("a phone that reconnects mid-approval is handed the question back", async (
   }
 });
 
+// The card that would not go away. An unanswered question ends when the turn
+// that asked it does, and Claude Code kills the prompt tool's child on the way
+// out. Only the settle entry was dropped then, so the held copy stayed and every
+// status poll handed the same dead question back - 承認 could never reach it,
+// and the banner survived any number of taps.
+test("a question whose asker has gone stops being handed back to the phone", async () => {
+  const bridge = new ClaudeBridge(null, "bridge-orphan");
+  const client = fakeClient();
+  bridge.clients.add(client);
+  bridge.activeTurnId = "claude-turn:abandoned";
+  try {
+    const socketPath = await bridge.ensureApprovalServer();
+    const socket = net.createConnection(socketPath);
+    await new Promise((resolve, reject) => {
+      socket.on("connect", resolve);
+      socket.on("error", reject);
+    });
+    socket.write(`${JSON.stringify({ toolName: "AskUserQuestion", input: { questions: [] } })}\n`);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    const [approval] = client.messagesOfType("approval");
+    assert.equal(bridge.runPayload().pendingApproval?.id, approval.request.id);
+
+    // The asker walks away without a decision.
+    socket.destroy();
+    await new Promise((resolve) => setTimeout(resolve, 60));
+
+    assert.equal(bridge.pendingApproval, null, "the dead question is not held any more");
+    assert.notEqual(bridge.runPayload().state, "approval");
+    assert.ok(!bridge.runPayload().pendingApproval, "no status poll can hand it back");
+    assert.ok(!bridge.readyPayload().run.pendingApproval, "a reconnecting phone is not given it either");
+  } finally {
+    bridge.closeApprovalServer();
+  }
+});
+
+test("the turn a dead question interrupted is still reported as running", async () => {
+  const bridge = new ClaudeBridge(null, "bridge-orphan-running");
+  const client = fakeClient();
+  bridge.clients.add(client);
+  bridge.activeTurnId = "claude-turn:still-working";
+  try {
+    const socketPath = await bridge.ensureApprovalServer();
+    const socket = net.createConnection(socketPath);
+    await new Promise((resolve, reject) => {
+      socket.on("connect", resolve);
+      socket.on("error", reject);
+    });
+    socket.write(`${JSON.stringify({ toolName: "Bash", input: { command: "npm test" } })}\n`);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    socket.destroy();
+    await new Promise((resolve) => setTimeout(resolve, 60));
+
+    // Forgetting the question must not read as "the turn ended".
+    assert.equal(bridge.runPayload().state, "running");
+  } finally {
+    bridge.closeApprovalServer();
+  }
+});
+
+test("answering a question that already ended clears the card instead of bouncing", async () => {
+  // Two phones, or one phone on a stale card: the request is over, but a card is
+  // still on screen. The tap has to be able to dismiss it.
+  const bridge = new ClaudeBridge(null, "bridge-stale-card");
+  const client = fakeClient();
+  bridge.clients.add(client);
+  const stale = { id: "claude-approval:9", method: "claude/requestApproval", params: { toolName: "Bash", input: {} } };
+  bridge.pendingApproval = stale;
+  bridge.setBridgeRunState("approval", "承認待ち", null);
+  bridge.pendingApproval = stale;
+
+  bridge.approval(stale, "accept");
+
+  assert.equal(bridge.pendingApproval, null, "the tap dismisses the card it was aimed at");
+  assert.notEqual(bridge.runPayload().state, "approval");
+  const [status] = client.messagesOfType("status").slice(-1);
+  assert.match(status.text, /既に終了/);
+});
+
 test("approval mcp config points Claude at this process's socket without binding a port", () => {
   const config = JSON.parse(approvalMcpConfig("/tmp/example.sock"));
   const server = config.mcpServers.phone_approval;
