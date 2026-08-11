@@ -84,10 +84,16 @@
           <input id="threadSearch" class="thread-search hidden" type="search" placeholder="チャットを検索" />
           <div id="threadList" class="thread-list"></div>
         </div>
-        <button type="button" class="settings" id="settingsButton">
-          <span class="command-icon settings-icon" aria-hidden="true"></span>
-          <span>設定</span>
-        </button>
+        <div class="sidebar-footer">
+          <button type="button" class="settings" id="settingsButton">
+            <span class="command-icon settings-icon" aria-hidden="true"></span>
+            <span>設定</span>
+          </button>
+          <button type="button" class="settings sidebar-restart" id="sidebarRestartButton" title="スマホ接続を再起動" aria-label="スマホ接続を再起動">
+            <span class="command-icon restart-icon" aria-hidden="true"></span>
+            <span>再起動</span>
+          </button>
+        </div>
       </aside>
 
       <section class="workspace">

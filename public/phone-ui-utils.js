@@ -106,6 +106,56 @@
     return Number(width || 0) > 0 && Number(width) <= 820;
   }
 
+  // Names the UI invented for a bridge that has not told us its own yet. They
+  // are display text, not names: a bridge seeded with one has to take the label
+  // it reports over `/api/bridge/info` the moment it answers, and must never
+  // show the seed as though someone had chosen it. `現在の接続先` is here because
+  // it was once written into the registry verbatim, so registries in the wild
+  // still carry it and have to heal on the next refresh.
+  const placeholderBridgeLabels = new Set(["Home", "Home bridge", "現在の接続先", "接続先"]);
+
+  function isPlaceholderBridgeLabel(label) {
+    const text = String(label || "").trim();
+    return !text || placeholderBridgeLabels.has(text);
+  }
+
+  // The drawer's edge strip. A drag that starts here belongs to the drawer, and
+  // the chat-switch swipe sharing the same screen has to let it go: the two
+  // gestures are told apart by where the finger lands, not by which way it
+  // travels, because both of them are a rightward drag over the conversation.
+  const sidebarEdgeSwipeZone = 26;
+
+  // Anything drawn above the drawer owns the screen while it is open. Opening a
+  // drawer underneath a sheet would look like the swipe did nothing, so these
+  // surfaces hold the gesture back until they are dismissed.
+  const sidebarEdgeSwipeBlockerSelector = [
+    ".prompt-modal:not(.hidden)",
+    ".command-sheet:not(.hidden)",
+    ".bridge-fleet-sheet:not(.hidden)",
+    ".terminal-tools-sheet:not(.hidden)",
+    ".thread-switcher:not(.hidden)",
+    ".thread-color-popover:not(.hidden)",
+    ".model-menu:not(.hidden)",
+  ].join(",");
+
+  function startsSidebarEdgeSwipe(options = {}) {
+    if (options.sidebarOpen) return false;
+    if (!isMobileViewport(options.width)) return false;
+    const x = Number(options.x);
+    if (!Number.isFinite(x)) return false;
+    return x >= 0 && x <= sidebarEdgeSwipeZone;
+  }
+
+  function completesSidebarEdgeSwipe(options = {}) {
+    const dx = Number(options.dx || 0);
+    const dy = Number(options.dy || 0);
+    if (Number(options.elapsed || 0) > 900) return false;
+    if (dx < 64) return false;
+    // Looser than the chat-switch swipe: this one already proved its intent by
+    // starting on the edge, so a drag that drifts downward still counts.
+    return dx >= Math.abs(dy) * 1.2;
+  }
+
   // Every control that opens the connection sheet sits outside it, so the same
   // click that opens the sheet also reaches the click-outside rule that closes
   // it. Openers carry this marker instead of being listed one by one, so a new
@@ -919,6 +969,11 @@
     compactWorkspacePath,
     middleEllipsis,
     isMobileViewport,
+    isPlaceholderBridgeLabel,
+    sidebarEdgeSwipeZone,
+    sidebarEdgeSwipeBlockerSelector,
+    startsSidebarEdgeSwipe,
+    completesSidebarEdgeSwipe,
     bridgeFleetOpenerSelector,
     clickClosesBridgeFleet,
     isStandaloneDisplayMode,

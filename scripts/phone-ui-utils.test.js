@@ -4,6 +4,10 @@ const assert = require("node:assert/strict");
 const {
   capTerminalHistory,
   clickClosesBridgeFleet,
+  completesSidebarEdgeSwipe,
+  isPlaceholderBridgeLabel,
+  startsSidebarEdgeSwipe,
+  sidebarEdgeSwipeZone,
   machineLabelFromHost,
   machineLabelForBridge,
   machineScopeKey,
@@ -237,6 +241,61 @@ test("the click-outside rule keeps the connection sheet open for the controls th
   assert.equal(clickClosesBridgeFleet(banner, sheet), true);
   assert.equal(clickClosesBridgeFleet(null, sheet), false);
   assert.equal(clickClosesBridgeFleet(elsewhere, null), false);
+});
+
+// The sidebar seeded the bridge serving the page with the phrase it shows above
+// whatever is current. That phrase was written into the registry as the bridge's
+// name, so the switcher listed it under the heading's own words, right below the
+// card already showing it - one connection, on screen twice, identically named.
+test("names the UI invented for a bridge never pass as names it was given", () => {
+  assert.equal(isPlaceholderBridgeLabel(""), true);
+  assert.equal(isPlaceholderBridgeLabel("   "), true);
+  assert.equal(isPlaceholderBridgeLabel("Home bridge"), true);
+  assert.equal(isPlaceholderBridgeLabel("Home"), true);
+  // Already sitting in registries in the wild, so it has to keep being
+  // recognised long enough for those to heal.
+  assert.equal(isPlaceholderBridgeLabel("現在の接続先"), true);
+  assert.equal(isPlaceholderBridgeLabel("接続先"), true);
+  // Anything a bridge or a person actually chose is left alone.
+  assert.equal(isPlaceholderBridgeLabel("codex-remote-control-lab"), false);
+  assert.equal(isPlaceholderBridgeLabel("Air Claude"), false);
+  assert.equal(isPlaceholderBridgeLabel("mini Claude"), false);
+  assert.equal(isPlaceholderBridgeLabel("現在の接続先 mini"), false);
+});
+
+// The drawer swipe and the chat-switch swipe are both a rightward drag over the
+// conversation. They are separated by where the finger starts, so the edge strip
+// has to be the one thing that decides - otherwise one swipe opens the drawer
+// and changes the chat sitting behind it.
+test("the left edge strip claims the drawer swipe", () => {
+  const phone = { width: 390, sidebarOpen: false };
+  assert.equal(startsSidebarEdgeSwipe({ ...phone, x: 0 }), true);
+  assert.equal(startsSidebarEdgeSwipe({ ...phone, x: sidebarEdgeSwipeZone }), true);
+  assert.equal(startsSidebarEdgeSwipe({ ...phone, x: sidebarEdgeSwipeZone + 1 }), false);
+  // Mid-screen drags stay with the chat switch.
+  assert.equal(startsSidebarEdgeSwipe({ ...phone, x: 180 }), false);
+  // Nothing left to open once the drawer is already out.
+  assert.equal(startsSidebarEdgeSwipe({ ...phone, x: 4, sidebarOpen: true }), false);
+  // On a desktop width the sidebar is always on screen, so there is nothing to
+  // swipe open.
+  assert.equal(startsSidebarEdgeSwipe({ ...phone, x: 4, width: 1280 }), false);
+  assert.equal(startsSidebarEdgeSwipe({ ...phone, x: Number.NaN }), false);
+  assert.equal(startsSidebarEdgeSwipe(), false);
+});
+
+test("the drawer opens on a rightward edge drag, not on a tap or a scroll", () => {
+  assert.equal(completesSidebarEdgeSwipe({ dx: 120, dy: 10, elapsed: 220 }), true);
+  // A drag that drifts downward still counts: it already proved its intent by
+  // starting on the edge.
+  assert.equal(completesSidebarEdgeSwipe({ dx: 120, dy: 80, elapsed: 220 }), true);
+  assert.equal(completesSidebarEdgeSwipe({ dx: 90, dy: 90, elapsed: 220 }), false);
+  // A tap at the edge, a short nudge, and a leftward drag all leave it closed.
+  assert.equal(completesSidebarEdgeSwipe({ dx: 0, dy: 0, elapsed: 90 }), false);
+  assert.equal(completesSidebarEdgeSwipe({ dx: 40, dy: 4, elapsed: 220 }), false);
+  assert.equal(completesSidebarEdgeSwipe({ dx: -120, dy: 4, elapsed: 220 }), false);
+  // A finger resting on the edge before it moves is not a swipe.
+  assert.equal(completesSidebarEdgeSwipe({ dx: 120, dy: 10, elapsed: 1400 }), false);
+  assert.equal(completesSidebarEdgeSwipe(), false);
 });
 
 test("PWA helpers keep manifest and service worker opt-in safe", () => {

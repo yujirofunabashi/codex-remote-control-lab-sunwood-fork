@@ -165,25 +165,25 @@
   justify-self: start;
 }
 
-.thread-status-badge.approval {
+.thread-status-badge-approval {
   border-color: color-mix(in srgb, var(--state-approval) 42%, var(--line));
   color: var(--state-approval);
 }
 
-.thread-status-badge.running,
-.thread-status-badge.syncing {
+.thread-status-badge-running,
+.thread-status-badge-syncing {
   border-color: color-mix(in srgb, var(--state-running) 42%, var(--line));
   color: var(--state-running);
 }
 
-.thread-status-badge.error {
+.thread-status-badge-error {
   border-color: color-mix(in srgb, var(--error) 42%, var(--line));
   color: var(--error);
 }
 
-.thread-status-badge.done,
-.thread-status-badge.diff,
-.thread-status-badge.question {
+.thread-status-badge-done,
+.thread-status-badge-diff,
+.thread-status-badge-question {
   border-color: color-mix(in srgb, var(--accent) 38%, var(--line));
   color: var(--accent);
 }
@@ -795,17 +795,17 @@ button {
   font-weight: 800;
 }
 
-.fleet-badge.running {
+.fleet-badge-running {
   border-color: color-mix(in srgb, var(--state-running) 38%, var(--line));
   color: var(--state-running);
 }
 
-.fleet-badge.approval {
+.fleet-badge-approval {
   border-color: color-mix(in srgb, var(--state-approval) 38%, var(--line));
   color: var(--state-approval);
 }
 
-.fleet-badge.error {
+.fleet-badge-error {
   border-color: color-mix(in srgb, var(--error) 42%, var(--line));
   color: var(--error);
 }
@@ -821,11 +821,6 @@ button {
   min-height: 44px;
   border-radius: 11px;
   padding: 7px 8px;
-}
-
-.bridge-fleet-row.active {
-  border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
-  box-shadow: inset 3px 0 0 var(--bridge-color, var(--accent));
 }
 
 .connection-command-row {
@@ -1024,6 +1019,18 @@ button {
   background: currentColor;
   -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='black' stroke-width='1.35' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10 1.8v2.1M10 16.1v2.1M1.8 10h2.1M16.1 10h2.1M4.2 4.2l1.5 1.5M14.3 14.3l1.5 1.5M15.8 4.2l-1.5 1.5M5.7 14.3l-1.5 1.5'/%3E%3Ccircle cx='10' cy='10' r='4.4'/%3E%3Ccircle cx='10' cy='10' r='1.55'/%3E%3C/svg%3E") center / contain no-repeat;
   mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='black' stroke-width='1.35' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10 1.8v2.1M10 16.1v2.1M1.8 10h2.1M16.1 10h2.1M4.2 4.2l1.5 1.5M14.3 14.3l1.5 1.5M15.8 4.2l-1.5 1.5M5.7 14.3l-1.5 1.5'/%3E%3Ccircle cx='10' cy='10' r='4.4'/%3E%3Ccircle cx='10' cy='10' r='1.55'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+.restart-icon {
+  width: 18px;
+  height: 18px;
+  background: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8'/%3E%3Cpath d='M21 3v5h-5'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8'/%3E%3Cpath d='M21 3v5h-5'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+.sidebar-restart[disabled] {
+  opacity: 0.55;
 }
 
 .thread-section {
@@ -1364,6 +1371,16 @@ button.project-heading.active {
 
 .settings {
   color: var(--nav-text);
+}
+
+/* 設定 and 再起動 share the drawer's bottom row, so the row is what gets pushed
+   to the bottom now - the settings button carried that on its own before it had
+   company. */
+.sidebar-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   margin-top: auto;
 }
 
@@ -5906,7 +5923,8 @@ body[data-main-view="terminal"] .pwa-install-hint {
     height: 24px;
   }
 
-  .settings-icon {
+  .settings-icon,
+  .restart-icon {
     width: 23px;
     height: 23px;
   }

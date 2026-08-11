@@ -10,6 +10,7 @@ const automationsButton = document.querySelector("#automationsButton");
 const settingsButton = document.querySelector("#settingsButton");
 const menuButton = document.querySelector("#menuButton");
 const mobileSettingsButton = document.querySelector("#mobileSettingsButton");
+const sidebarRestartButton = document.querySelector("#sidebarRestartButton");
 const closePanelButton = document.querySelector("#closePanelButton");
 const addButton = document.querySelector("#addButton");
 const expandPromptButton = document.querySelector("#expandPromptButton");
@@ -881,7 +882,12 @@ function ensureHomeBridge() {
   const home = normalizeBridgeEntry(
     {
       id: homeBridgeId,
-      label: "現在の接続先",
+      // A seed, not a name. This used to be the phrase the sidebar shows above
+      // whatever is current, written straight into the registry - so the bridge
+      // serving the page appeared in the switcher under the heading's own words,
+      // directly below the card already showing it. `Home bridge` is the seed
+      // the refresh knows to replace with the label the bridge reports.
+      label: "Home bridge",
       baseUrl: homeBridgeBaseUrl(),
       token,
       port: Number(location.port || 0) || null,
@@ -1160,6 +1166,7 @@ let unreadTerminalCount = 0;
 let threadSwitchBusy = false;
 const terminalHistories = new Map();
 let swipeStart = null;
+let sidebarEdgeSwipeStart = null;
 let swipeFeedbackTimer = null;
 let selectedModel = localStorage.getItem("codexPhoneModel") || "";
 let selectedModelLabel = localStorage.getItem("codexPhoneModelLabel") || "5.5";
@@ -3868,7 +3875,7 @@ function createThreadListItem(thread, options = {}) {
   }
   if (status.label) {
     const badge = document.createElement("span");
-    badge.className = `thread-status-badge ${status.tone || status.key}`;
+    badge.className = `thread-status-badge thread-status-badge-${status.tone || status.key}`;
     badge.textContent = status.label;
     selectButton.append(badge);
   }
@@ -4318,7 +4325,7 @@ function bridgeStateLabel(entry, state = getBridgeState(entry.id)) {
 
 function bridgeDisplayLabel(entry = {}, fallback = "接続先") {
   const label = String(entry?.label || "").trim();
-  if (!label || label === "Home" || label === "Home bridge") return fallback;
+  if (uiUtils.isPlaceholderBridgeLabel(label)) return fallback;
   return label;
 }
 
@@ -4471,7 +4478,7 @@ function bridgeWorkspaceLabel(entry = {}, state = getBridgeState(entry.id), fall
   const explicit = bridgeDisplayLabel(entry, "");
   const meta = bridgeDisplayWorkspaceMeta(entry, state);
   if (bridgeUsesCurrentWorkspace(entry)) return meta.repoName || basenameFromPath(meta.workspaceLocation) || explicit || fallback;
-  if (explicit && explicit !== "現在の接続先") return explicit;
+  if (explicit) return explicit;
   return meta.repoName || basenameFromPath(meta.workspaceLocation) || fallback;
 }
 
@@ -4558,9 +4565,15 @@ function selectedBridgeRunWorkspaceMeta(status = {}) {
   return meta.repoName || meta.workspaceLocation || meta.gitBranch ? meta : null;
 }
 
+// The tone belongs to the badge, so it is spelled inside the badge's own name.
+// Written as a bare state word it was a global class: `.approval` is the chat's
+// full-width approval card, and it handed this badge that card's width, padding,
+// bottom margin and shadow - two counts side by side came out different sizes,
+// sitting at different heights. It also made every badge match the swipe guard's
+// `.approval` selector.
 function fleetBadge(text, tone = "") {
   const badge = document.createElement("span");
-  badge.className = tone ? `fleet-badge ${tone}` : "fleet-badge";
+  badge.className = tone ? `fleet-badge fleet-badge-${tone}` : "fleet-badge";
   badge.textContent = text;
   return badge;
 }
@@ -4626,14 +4639,20 @@ function renderFleet() {
 
   if (bridgeFleetList) {
     bridgeFleetList.replaceChildren();
-    const showBridgeList = entries.length > 1;
+    // The card above this list is the current bridge. Listing it again put the
+    // same connection on screen twice, one row under the other, under the same
+    // name - which reads as the bridge having multiplied rather than as a
+    // switcher showing where you already are. This list is the ones you can
+    // move to.
+    const others = entries.filter((entry) => entry.id !== activeBridgeId);
+    const showBridgeList = others.length > 0;
     bridgeFleetList.hidden = !showBridgeList;
     bridgeFleetList.setAttribute("aria-hidden", showBridgeList ? "false" : "true");
-    for (const entry of showBridgeList ? entries : []) {
+    for (const entry of others) {
       const state = getBridgeState(entry.id);
       const row = document.createElement("button");
       row.type = "button";
-      row.className = entry.id === activeBridgeId ? "bridge-fleet-row active" : "bridge-fleet-row";
+      row.className = "bridge-fleet-row";
       row.style.setProperty("--bridge-color", bridgeColorFor(entry));
       row.title = `${bridgeDisplayLabel(entry)} ${bridgeMetaText(entry, state)}`;
       const dot = document.createElement("span");
@@ -4642,7 +4661,7 @@ function renderFleet() {
       const main = document.createElement("span");
       main.className = "bridge-row-main";
       const title = document.createElement("strong");
-      title.textContent = bridgeDisplayLabel(entry, entry.id);
+      title.textContent = bridgeWorkspaceLabel(entry, state, entry.id);
       const small = document.createElement("small");
       small.textContent = bridgeMetaText(entry, state);
       main.append(title, small);
@@ -4683,7 +4702,7 @@ function renderBridgeFleetSheet() {
       const main = document.createElement("span");
       main.className = "bridge-row-main";
       const title = document.createElement("strong");
-      title.textContent = bridgeDisplayLabel(entry, entry.id);
+      title.textContent = bridgeWorkspaceLabel(entry, state, entry.id);
       const small = document.createElement("small");
       small.textContent = `${entry.baseUrl} / 接続キー ${entry.rememberToken === false ? "この画面だけ" : "保存済み"} ${maskToken(effectiveBridgeToken(entry))}`;
       main.append(title, small);
@@ -4783,7 +4802,7 @@ function renderGlobalRunningMonitor() {
     const main = document.createElement("span");
     main.className = "bridge-row-main";
     const title = document.createElement("strong");
-    title.textContent = bridgeDisplayLabel(entry, entry.id);
+    title.textContent = bridgeWorkspaceLabel(entry, state, entry.id);
     const small = document.createElement("small");
     small.textContent = `${runStateShortLabel(summary.run?.state || bridgeStateLabel(entry, state))} / ${formatRelativeTime(state.lastEventAt) || "now"}`;
     main.append(title, small);
@@ -4865,7 +4884,10 @@ async function refreshBridgeState(bridgeId, { force = false } = {}) {
     state.lastEventAt = Date.now();
     const refreshed = {
       ...entry,
-      label: entry.label === "Home bridge" || !entry.label ? info.label || entry.label : entry.label,
+      // A bridge that names itself outranks any seed the UI left behind, which
+      // is how a registry still holding one heals instead of carrying it for
+      // good. A name someone actually set is never overwritten.
+      label: uiUtils.isPlaceholderBridgeLabel(entry.label) ? info.label || entry.label : entry.label,
       group: entry.group || info.group || "",
       workdir: info.cwd || info.workdir || entry.workdir || "",
       port: info.uiPort || entry.port || null,
@@ -4988,7 +5010,10 @@ async function setActiveBridge(bridgeId, { silent = false, reconnect = true, fol
   }
   renderTerminalTranscript();
   renderFleet();
-  if (!silent) showToast(`${bridgeDisplayLabel(activeBridge())} に切り替えました。`);
+  if (!silent) {
+    const moved = activeBridge();
+    showToast(`${bridgeWorkspaceLabel(moved || {}, getBridgeState(activeBridgeId), "接続先")} に切り替えました。`);
+  }
   if (!reconnect) {
     refreshBridgeState(bridgeId, { force: true }).catch(() => {});
     return;
@@ -5237,8 +5262,69 @@ function isSwipeIgnoredTarget(target) {
   );
 }
 
+// A drag that begins inside a strip that scrolls sideways is that strip's own:
+// code blocks, wide tables and the chip rows all reach the screen edge, and a
+// drawer that opened instead of scrolling them would be the gesture stealing
+// content the finger was aiming at.
+function insideHorizontalScroller(target) {
+  for (let node = target; node && node !== document.body; node = node.parentElement) {
+    if (node.scrollWidth <= node.clientWidth + 4) continue;
+    const overflowX = window.getComputedStyle(node).overflowX;
+    if (overflowX === "auto" || overflowX === "scroll") return true;
+  }
+  return false;
+}
+
+// Asked again by each listener that sees the touch rather than answered once
+// and shared, so the conversation swipe and the drawer swipe settle "whose touch
+// is this?" identically without depending on which of them the event reaches
+// first.
+function sidebarEdgeSwipeStartFrom(event) {
+  if (event.touches?.length !== 1) return null;
+  const touch = event.touches[0];
+  // Where the finger landed decides first. Every touch on the screen reaches
+  // this, and only the few that start on the edge go on to pay for reading the
+  // DOM - resolving styles on each tap and scroll is the kind of cost that shows
+  // up as a phone feeling slow.
+  const onEdge = uiUtils.startsSidebarEdgeSwipe({
+    x: touch.clientX,
+    width: window.innerWidth,
+    sidebarOpen: document.body.classList.contains("show-sidebar"),
+  });
+  if (!onEdge) return null;
+  if (document.querySelector(uiUtils.sidebarEdgeSwipeBlockerSelector)) return null;
+  if (insideHorizontalScroller(event.target)) return null;
+  return { x: touch.clientX, y: touch.clientY, time: Date.now() };
+}
+
+function handleSidebarEdgeSwipeStart(event) {
+  sidebarEdgeSwipeStart = sidebarEdgeSwipeStartFrom(event);
+}
+
+function handleSidebarEdgeSwipeEnd(event) {
+  const start = sidebarEdgeSwipeStart;
+  sidebarEdgeSwipeStart = null;
+  if (!start || !event.changedTouches?.length) return;
+  const touch = event.changedTouches[0];
+  const opens = uiUtils.completesSidebarEdgeSwipe({
+    dx: touch.clientX - start.x,
+    dy: touch.clientY - start.y,
+    elapsed: Date.now() - start.time,
+  });
+  if (!opens || document.body.classList.contains("show-sidebar")) return;
+  setSidebarVisible(true);
+  closeRightPanel();
+}
+
 function handleSwipeStart(event) {
   if (!event.touches?.length || isSwipeIgnoredTarget(event.target)) {
+    swipeStart = null;
+    return;
+  }
+  // The drawer's edge strip wins the touch: both gestures are a rightward drag
+  // over the conversation, so one of them has to yield or a single swipe would
+  // open the drawer and change the chat behind it.
+  if (sidebarEdgeSwipeStartFrom(event)) {
     swipeStart = null;
     return;
   }
@@ -5464,6 +5550,27 @@ async function apiPost(path, body = {}, options = {}) {
   const result = await response.json();
   if (!response.ok) throw new Error(result.error || `${response.status} ${response.statusText}`);
   return result;
+}
+
+// One restart behind two buttons: the one inside settings and the one in the
+// drawer footer. The confirm is what makes the second one safe to put within
+// reach - restarting drops the connection and stops whatever is running, and a
+// button that close to the thumb gets pressed by accident.
+async function restartActiveBridge(options = {}) {
+  if (!window.confirm("スマホ接続を再起動します。数秒切断され、実行中の処理は止まります。続けますか？")) return false;
+  options.onStart?.();
+  addStatus("スマホ接続を再起動しています。");
+  try {
+    await apiPost("/api/restart", {});
+  } catch (error) {
+    // A bridge started without a supervisor answers with the command that fixes
+    // it. That belongs in the log, where it can be read after the toast is gone.
+    addStatus(`再起動できませんでした: ${error.message}`);
+    options.onError?.(error);
+    return false;
+  }
+  window.setTimeout(() => location.reload(), 1800);
+  return true;
 }
 
 function setTerminalCommandBusy(busy) {
@@ -6887,16 +6994,11 @@ function renderLocalSettings(payload) {
 
   restartButton.addEventListener("click", async () => {
     restartButton.disabled = true;
-    setSettingsStatus(status, "再起動中...");
-    addStatus("スマホ接続を再起動しています。");
-    try {
-      await apiPost("/api/restart", {});
-    } catch (error) {
-      setSettingsStatus(status, error.message, "error");
-      restartButton.disabled = false;
-      return;
-    }
-    setTimeout(() => location.reload(), 1800);
+    const restarting = await restartActiveBridge({
+      onStart: () => setSettingsStatus(status, "再起動中..."),
+      onError: (error) => setSettingsStatus(status, error.message, "error"),
+    });
+    if (!restarting) restartButton.disabled = false;
   });
 
   group.appendChild(form);
@@ -7955,6 +8057,14 @@ pluginsButton.addEventListener("click", showPlugins);
 automationsButton.addEventListener("click", showAutomations);
 settingsButton.addEventListener("click", showSettings);
 mobileSettingsButton.addEventListener("click", showSettings);
+sidebarRestartButton?.addEventListener("click", async () => {
+  sidebarRestartButton.disabled = true;
+  const restarting = await restartActiveBridge({
+    onStart: () => showToast("再起動しています。まもなく再接続します。"),
+    onError: () => showToast("再起動できませんでした。詳細はチャットの記録に残しました。", "error"),
+  });
+  if (!restarting) sidebarRestartButton.disabled = false;
+});
 mobileThreadsButton.addEventListener("click", () => {
   const nextVisible = !document.body.classList.contains("show-sidebar");
   setSidebarVisible(nextVisible);
@@ -8255,6 +8365,14 @@ document.addEventListener("keydown", (event) => {
 });
 document.querySelector(".conversation").addEventListener("touchstart", handleSwipeStart, { passive: true });
 document.querySelector(".conversation").addEventListener("touchend", handleSwipeEnd, { passive: true });
+// On the document, not the conversation: the edge strip runs the full height of
+// the screen, past the header and the composer, and the swipe has to work
+// wherever along it the finger lands.
+document.addEventListener("touchstart", handleSidebarEdgeSwipeStart, { passive: true });
+document.addEventListener("touchend", handleSidebarEdgeSwipeEnd, { passive: true });
+document.addEventListener("touchcancel", () => {
+  sidebarEdgeSwipeStart = null;
+}, { passive: true });
 artifactsTab.addEventListener("click", () => {
   showRightPanel();
   showReviewCenter("artifacts");

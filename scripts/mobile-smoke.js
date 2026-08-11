@@ -93,6 +93,7 @@ let hiddenProjects = [];
 // test; the mock exists so the request is answered rather than logged as an
 // error by the console check.
 let registryBackup = { version: 2, revision: 0, updatedAt: 0, bridges: [], deleted: [], tokens: {} };
+const restartCalls = [];
 
 async function mockApi(page, origin) {
   await page.route("**/*", async (route) => {
@@ -154,6 +155,10 @@ async function mockApi(page, origin) {
           durationMs: 12,
         },
       });
+    }
+    if (url.pathname === "/api/restart") {
+      restartCalls.push(url.origin);
+      return route.fulfill({ json: { ok: true, message: "Restarting phone bridge" } });
     }
     if (url.pathname === "/api/file") {
       return route.fulfill({ json: { path: url.searchParams.get("path") || "README.md", kind: "markdown", text: "# Smoke" } });
@@ -398,11 +403,18 @@ async function run() {
     check("legacy pwd badge is gone", (await page.locator(".workspace-pwd-badge").count()) === 0);
     const workspaceStripDisplay = await page.locator("#workspaceIndicator").evaluate((el) => getComputedStyle(el).display);
     check("mobile workspace strip is visually hidden", workspaceStripDisplay === "none", `display=${workspaceStripDisplay}`);
+    // The card above the list already is the current bridge, so this list is the
+    // ones you can move to - every registered bridge except that one.
     const bridgeListState = await page.locator("#bridgeFleetList").evaluate((el) => ({
       hidden: el.hidden,
       rows: el.querySelectorAll(".bridge-fleet-row").length,
+      registered: JSON.parse(localStorage.getItem("codexPhoneBridgeRegistry:v1") || "{}").bridges?.length || 0,
     }));
-    check("registered bridge rows are available in the sidebar", !bridgeListState.hidden && bridgeListState.rows >= 2, JSON.stringify(bridgeListState));
+    check(
+      "the sidebar offers the other registered bridges to switch to",
+      !bridgeListState.hidden && bridgeListState.rows >= 1 && bridgeListState.rows === bridgeListState.registered - 1,
+      JSON.stringify(bridgeListState),
+    );
     const userFacingLabels = await page.evaluate(() => ({
       fleet: document.querySelector("#fleetCurrentLabel")?.textContent?.trim(),
       bridge: document.querySelector("#bridgePillLabel")?.textContent?.trim(),
@@ -812,6 +824,154 @@ async function run() {
     });
     await page.waitForTimeout(120);
 
+    // Drawer edge swipe. A real touch keeps the element it started on for the
+    // whole gesture, so both events go to that one target - the drawer swipe and
+    // the chat-switch swipe listen on different nodes and the conflict between
+    // them only shows up when the events travel the way the browser sends them.
+    const edgeSwipe = async (fromX, toX, y = 420) =>
+      page.evaluate(
+        ({ fromX, toX, y }) => {
+          const target = document.elementFromPoint(fromX, y) || document.body;
+          const dispatch = (type, x) => {
+            const touch = new Touch({ identifier: 1, target, clientX: x, clientY: y });
+            target.dispatchEvent(
+              new TouchEvent(type, {
+                bubbles: true,
+                cancelable: true,
+                touches: type === "touchend" ? [] : [touch],
+                changedTouches: [touch],
+              }),
+            );
+          };
+          dispatch("touchstart", fromX);
+          dispatch("touchend", toX);
+        },
+        { fromX, toX, y },
+      );
+
+    const socketsBeforeSwipe = await page.evaluate(() => (window.__mockWebSocketUrls || []).length);
+    await edgeSwipe(6, 30);
+    await page.waitForTimeout(120);
+    const afterShortSwipe = await page.evaluate((before) => ({
+      sidebarVisible: document.body.classList.contains("show-sidebar"),
+      newSockets: (window.__mockWebSocketUrls || []).length - before,
+    }), socketsBeforeSwipe);
+    check(
+      "a short drag from the edge leaves the drawer closed",
+      afterShortSwipe.sidebarVisible === false,
+      JSON.stringify(afterShortSwipe),
+    );
+    check(
+      "a drag from the edge never falls through to the chat-switch swipe",
+      afterShortSwipe.newSockets === 0,
+      JSON.stringify(afterShortSwipe),
+    );
+    await edgeSwipe(6, 180);
+    await page.waitForTimeout(250);
+    const afterEdgeSwipe = await page.evaluate((before) => ({
+      sidebarVisible: document.body.classList.contains("show-sidebar"),
+      expanded: document.querySelector("#mobileThreads")?.getAttribute("aria-expanded") || "",
+      drawerLeft: Math.round(document.querySelector("#threadSidebar")?.getBoundingClientRect().left ?? -999),
+      newSockets: (window.__mockWebSocketUrls || []).length - before,
+    }), socketsBeforeSwipe);
+    check(
+      "swiping in from the left edge opens the drawer",
+      afterEdgeSwipe.sidebarVisible === true && afterEdgeSwipe.drawerLeft === 0,
+      JSON.stringify(afterEdgeSwipe),
+    );
+    check(
+      "the edge swipe leaves the drawer button reporting its open state",
+      afterEdgeSwipe.expanded === "true",
+      JSON.stringify(afterEdgeSwipe),
+    );
+    check(
+      "opening the drawer by swipe does not also change the chat behind it",
+      afterEdgeSwipe.newSockets === 0,
+      JSON.stringify(afterEdgeSwipe),
+    );
+    // The switcher under the current-bridge card lists where you can go, not
+    // where you already are. Repeating the active bridge there put the same
+    // connection on screen twice under the same name.
+    const fleetRows = await page.evaluate(() => ({
+      current: document.querySelector("#fleetCurrentLabel")?.textContent?.trim() || "",
+      rows: [...document.querySelectorAll("#bridgeFleetList .bridge-fleet-row strong")].map((el) => el.textContent.trim()),
+      registered: JSON.parse(localStorage.getItem("codexPhoneBridgeRegistry:v1") || "{}").bridges?.length || 0,
+    }));
+    check(
+      "the bridge switcher does not repeat the bridge already shown above it",
+      fleetRows.rows.length === fleetRows.registered - 1 && !fleetRows.rows.includes(fleetRows.current),
+      JSON.stringify(fleetRows),
+    );
+    check(
+      "no bridge is listed under the sidebar's own heading text",
+      !fleetRows.rows.includes("現在の接続先") && fleetRows.current !== "現在の接続先",
+      JSON.stringify(fleetRows),
+    );
+
+    // A badge tone written as a bare state word is a global class: `.approval`
+    // is the chat's full-width approval card, and it reshaped every badge
+    // wearing that word - same digit, different box, different height.
+    const badgeBoxes = await page.evaluate(() => {
+      const host = document.createElement("span");
+      host.className = "fleet-current-badges";
+      host.style.cssText = "position:fixed;top:0;left:0";
+      for (const tone of ["running", "approval"]) {
+        const badge = document.createElement("span");
+        badge.className = `fleet-badge fleet-badge-${tone}`;
+        badge.textContent = "1";
+        host.appendChild(badge);
+      }
+      document.body.appendChild(host);
+      const [a, b] = [...host.children].map((el) => el.getBoundingClientRect());
+      host.remove();
+      return {
+        widths: [Math.round(a.width), Math.round(b.width)],
+        heights: [Math.round(a.height), Math.round(b.height)],
+        sameTop: Math.round(a.top) === Math.round(b.top),
+      };
+    });
+    check(
+      "count badges of different tones share one box",
+      badgeBoxes.widths[0] === badgeBoxes.widths[1] && badgeBoxes.heights[0] === badgeBoxes.heights[1] && badgeBoxes.sameTop,
+      JSON.stringify(badgeBoxes),
+    );
+    const bareToneClasses = await page.evaluate(() => {
+      const states = ["approval", "running", "error", "syncing", "question", "diff", "done", "recent"];
+      return [...document.querySelectorAll(".fleet-badge, .thread-status-badge")]
+        .map((el) => [...el.classList].filter((name) => states.includes(name)))
+        .filter((hits) => hits.length)
+        .flat();
+    });
+    check(
+      "badge tones are namespaced instead of borrowing a global class name",
+      bareToneClasses.length === 0,
+      JSON.stringify(bareToneClasses),
+    );
+
+    // Beside the drawer, not through it: the scrim covers the whole screen, so
+    // its centre sits under the panel it is there to dismiss.
+    await page.locator("#sidebarScrim").click({ position: { x: 370, y: 500 } });
+    await page.waitForTimeout(250);
+    check(
+      "the drawer opened by swipe closes again from the scrim",
+      (await page.evaluate(() => document.body.classList.contains("show-sidebar"))) === false,
+    );
+    await page.locator("#bridgePill").click();
+    await page.waitForTimeout(180);
+    await edgeSwipe(6, 180);
+    await page.waitForTimeout(250);
+    const swipeUnderSheet = await page.evaluate(() => ({
+      sheetHidden: document.querySelector("#bridgeFleetSheet")?.classList.contains("hidden"),
+      sidebarVisible: document.body.classList.contains("show-sidebar"),
+    }));
+    check(
+      "the edge swipe holds back while a sheet is covering the drawer",
+      swipeUnderSheet.sheetHidden === false && swipeUnderSheet.sidebarVisible === false,
+      JSON.stringify(swipeUnderSheet),
+    );
+    await page.locator("#closeBridgeFleet").click();
+    await page.waitForTimeout(180);
+
     if (wantShots) {
       fs.mkdirSync(shotsDir, { recursive: true });
       await page.screenshot({ path: path.join(shotsDir, "chat.png") });
@@ -945,6 +1105,54 @@ async function run() {
     await page.evaluate(() => document.body.classList.remove("keyboard-open"));
 
     check("no console / page errors", consoleErrors.length === 0, consoleErrors.join(" | "));
+
+    // Last on purpose: a restart that goes through reloads the page 1.8s later,
+    // which would pull the ground out from under anything checked after it.
+    await page.locator("#mobileThreads").click();
+    await page.waitForTimeout(180);
+    const restartInDrawer = await page.evaluate(() => {
+      const button = document.querySelector("#sidebarRestartButton");
+      const settings = document.querySelector("#settingsButton");
+      if (!button || !settings) return null;
+      const rect = button.getBoundingClientRect();
+      const settingsRect = settings.getBoundingClientRect();
+      return {
+        insideDrawer: Boolean(button.closest("#threadSidebar")),
+        width: Math.round(rect.width),
+        onScreen: rect.left >= 0 && rect.right <= window.innerWidth,
+        besideSettings: Math.abs(rect.top - settingsRect.top) <= 2 && rect.left >= settingsRect.right,
+        // Bottom of the drawer, where a thumb already is - the point of moving it
+        // out of the settings panel.
+        withinThumbReach: rect.bottom > window.innerHeight * 0.6,
+      };
+    });
+    check(
+      "the drawer carries a restart button beside 設定",
+      restartInDrawer?.insideDrawer && restartInDrawer.width > 0 && restartInDrawer.onScreen && restartInDrawer.besideSettings,
+      JSON.stringify(restartInDrawer),
+    );
+    check(
+      "the drawer restart button sits low enough to reach",
+      restartInDrawer?.withinThumbReach === true,
+      JSON.stringify(restartInDrawer),
+    );
+    page.once("dialog", (dialog) => dialog.dismiss());
+    await page.locator("#sidebarRestartButton").click();
+    await page.waitForTimeout(200);
+    check("a dismissed confirm leaves the bridge running", restartCalls.length === 0, JSON.stringify(restartCalls));
+    check(
+      "a dismissed confirm hands the button back",
+      (await page.evaluate(() => document.querySelector("#sidebarRestartButton")?.disabled)) === false,
+    );
+    let restartPrompt = "";
+    page.once("dialog", (dialog) => {
+      restartPrompt = dialog.message();
+      dialog.accept();
+    });
+    await page.locator("#sidebarRestartButton").click();
+    await page.waitForTimeout(300);
+    check("confirming restarts the bridge the phone is talking to", restartCalls.length === 1, JSON.stringify(restartCalls));
+    check("the confirm says what a restart costs before it happens", /切断/.test(restartPrompt), restartPrompt);
 
     await page.close();
   } finally {

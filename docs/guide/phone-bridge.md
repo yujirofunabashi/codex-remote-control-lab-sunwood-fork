@@ -11,7 +11,7 @@ npm ci
 npm run phone
 ```
 
-To use the UI's restart button, start through a supervised entry point. Restarting exits with code 42 and relies on a supervisor to bring the bridge back, so without one the bridge stays down:
+To use the UI's restart button — in the sidebar footer beside `設定`, and inside the settings panel — start through a supervised entry point. Restarting exits with code 42 and relies on a supervisor to bring the bridge back, so without one the bridge stays down. Both buttons confirm before they act:
 
 ```bash
 npm run phone:loop          # Codex
@@ -280,7 +280,7 @@ Override the location with `PHONE_CLAUDE_RATE_LIMIT_CACHE_PATH`. Only normalized
 - connection health panel for bridge, app-server, WebSocket, history sync, token age, notification providers, host, and LAN URL
 - PWA app shell caching that excludes `/api/*`, WebSocket, tokenized URLs, uploads, and raw file responses
 - cockpit header with thread position, run state, per-thread accent color, compact cwd, and a mini thread switcher
-- guarded swipe navigation that avoids text inputs, terminal logs, artifact previews, approval cards, and horizontal scrollers
+- guarded swipe navigation that avoids text inputs, terminal logs, artifact previews, approval cards, and horizontal scrollers; a swipe in from the left screen edge opens the sidebar instead of changing chats
 - Codex / Terminal view switching with unread badges and preserved drafts/scroll position
 - phone terminal mode reserved for manual command input/output, with the chat composer and chat status logs kept out of the terminal surface and a `user@host cwd %` prompt shown for the active workspace
 - terminal filter chips, client-side search, visible-output copy, auto-scroll pause, wrap/font controls, key-intent chips, and CSS focus mode

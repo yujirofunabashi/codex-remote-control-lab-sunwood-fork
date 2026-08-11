@@ -11,7 +11,7 @@ npm ci
 npm run phone
 ```
 
-UI の再起動ボタンを使う場合は、監視付きの entry point で起動します。再起動は exit code 42 で終了して supervisor に再投入させる仕組みなので、supervisor がいないと停止したまま復帰できません。
+UI の再起動ボタン（sidebar 下部の `設定` の隣、および設定 panel 内）を使う場合は、監視付きの entry point で起動します。再起動は exit code 42 で終了して supervisor に再投入させる仕組みなので、supervisor がいないと停止したまま復帰できません。どちらのボタンも実行前に確認ダイアログを出します。
 
 ```bash
 npm run phone:loop          # Codex
@@ -245,7 +245,7 @@ statusLine は対話セッションの機能なので、`claude -p`（bridge の
 - bridge、app-server、WebSocket、history sync、token age、notification provider、host、LAN URL を見る health panel
 - `/api/*`、WebSocket、token 付き URL、uploads、raw file response を除外する PWA app shell cache
 - thread 位置、稼働状態、thread 色、compact cwd、mini thread switcher をまとめた cockpit header
-- text input、terminal log、artifact preview、approval card、横スクロール領域では誤発火しない swipe navigation
+- text input、terminal log、artifact preview、approval card、横スクロール領域では誤発火しない swipe navigation。画面左端から右へのスワイプは chat 切り替えではなく sidebar を開きます
 - unread badge と draft / scroll 復元つきの Codex / Terminal 切り替え
 - 手動 command 入力と出力に専念する phone terminal。chat composer と chat status log は terminal 面に出さず、`user@host cwd %` 形式の現在地 prompt を表示
 - filter chip、client-side search、表示出力コピー、auto-scroll pause、wrap / font control、key-intent chip、CSS focus mode
