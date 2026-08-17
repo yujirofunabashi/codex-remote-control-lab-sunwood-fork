@@ -85,16 +85,30 @@ test("a cleared conversation is dropped from the phone, and said out loud", asyn
     bridge.prompt("/clear", [], fullAccess);
     await turnCompleted(client, 2);
 
-    assert.equal(bridge.history.length, 0, "the transcript outlived the memory it described");
+    assert.deepEqual(
+      bridge.history.filter((entry) => entry.type !== "status"),
+      [],
+      "the transcript outlived the memory it described",
+    );
     assert.equal(bridge.claudeSessionId, "session-cleared");
     const said = client.sent.filter((msg) => msg.type === "status").map((msg) => msg.text);
     assert.ok(
       said.some((text) => text.includes("リセット")),
       `nothing told the operator the memory was gone: ${JSON.stringify(said)}`,
     );
+    // Saying it once to whoever was watching is not saying it: coming back to
+    // the chat redraws from the history, and an empty chat with no line
+    // explaining it reads as the conversation having been lost.
+    assert.ok(
+      bridge.history.some((entry) => entry.type === "status" && entry.text.includes("リセット")),
+      `the notice was not left where the chat is rebuilt from: ${JSON.stringify(bridge.history)}`,
+    );
     // The list the phone rebuilds from must agree with what it was just told.
     const ready = client.sent.filter((msg) => msg.type === "ready").at(-1);
-    assert.deepEqual(ready?.history, []);
+    assert.deepEqual(
+      (ready?.history || []).filter((entry) => entry.type !== "status"),
+      [],
+    );
   } finally {
     // The bridge follows the session file it was left pointing at, and a poll
     // on a session that only ever existed in this test would outlive it.

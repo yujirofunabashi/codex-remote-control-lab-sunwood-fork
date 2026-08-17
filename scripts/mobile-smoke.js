@@ -377,6 +377,15 @@ async function run() {
     const title = (await page.locator("#threadTitle").textContent())?.trim();
     check("thread title is dynamic (not the fixed label)", title && title !== "稼働中スレッド", `title="${title}"`);
     check("no #threadSubtitle element remains", (await page.locator("#threadSubtitle").count()) === 0);
+    // Coming back to a chat redraws it from the history the bridge hands over,
+    // so a 作業ログ line that survived the trip has to survive the redraw too -
+    // this is the half of it that runs in the page.
+    // textContent, not innerText: the group is a collapsed <details>, and the
+    // line being looked for is inside it.
+    const rebuiltStatus = await page.evaluate(() =>
+      Array.from(document.querySelectorAll("#log .status-group")).map((el) => el.textContent).join(" "),
+    );
+    check("a 作業ログ line in the history is redrawn as one", rebuiltStatus.includes("前回完了"), rebuiltStatus.slice(0, 80));
     await page.waitForFunction(() => document.querySelector("#runState")?.dataset.state === "done").catch(async (error) => {
       const debug = await page.evaluate(() => ({
         runState: document.querySelector("#runState")?.dataset.state || "",

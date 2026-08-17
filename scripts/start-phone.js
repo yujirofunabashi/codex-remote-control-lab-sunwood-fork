@@ -2363,6 +2363,24 @@ function capHistory(history) {
   return history.slice(-historyLimit);
 }
 
+// 作業ログ is the cheap half of a history: a retry storm is ten lines in a row,
+// and cutting the tail would push out the messages those lines are notes about.
+// So the overflow comes off the oldest status lines first, and only what is
+// still over the limit after that comes off the front.
+function capHistoryWithStatus(history, limit = historyLimit) {
+  if (history.length <= limit) return history;
+  let excess = history.length - limit;
+  const kept = [];
+  for (const entry of history) {
+    if (excess > 0 && entry?.type === "status") {
+      excess -= 1;
+      continue;
+    }
+    kept.push(entry);
+  }
+  return kept.slice(-limit);
+}
+
 // A transcript holds far more than the conversation. System reminders, hook
 // prompts and the observer chatter a memory plugin injects are all written as
 // `user` records with isMeta set; a subagent's whole exchange lands on a
@@ -3761,10 +3779,24 @@ class ClaudeBridge {
   emit(type, payload = {}) {
     lastBridgeEventAt = Date.now();
     const terminalEntry = this.appendTerminal(terminalEntryForBridgeMessage(type, payload, this));
+    // 作業ログ went to the open page and nowhere else. It is the only account of
+    // what happened between two messages - why a turn stalled, that a retry is
+    // running, that permissions changed - and the phone rebuilds its log from
+    // this history every time it comes back to the chat. So leaving the screen
+    // and returning threw all of it away, and what was left read as though the
+    // work had begun at the moment of return.
+    if (type === "status") this.appendStatusHistory(payload.text);
     const body = JSON.stringify({ type, ...(terminalEntry ? { terminalEntry } : {}), ...payload });
     for (const client of this.clients) {
       if (client.readyState === WebSocket.OPEN) client.send(body);
     }
+  }
+
+  appendStatusHistory(text) {
+    const value = String(text || "").trim();
+    if (!value) return;
+    this.history.push({ type: "status", text: value });
+    this.history = capHistoryWithStatus(this.history);
   }
 
   emitTo(client, type, payload = {}) {
@@ -4191,7 +4223,9 @@ class ClaudeBridge {
 
   appendHistory(entry) {
     this.history.push(entry);
-    this.history = capHistory(this.history);
+    // Trimmed the same way the status lines are, so a long turn's notes cannot
+    // push the messages they annotate off the front of the chat.
+    this.history = capHistoryWithStatus(this.history);
     if (entry?.text) this.listUpdatedAt = Date.now();
   }
 
@@ -5589,6 +5623,7 @@ module.exports = {
   ClaudeBridge,
   approvalMcpConfig,
   askUserQuestions,
+  capHistoryWithStatus,
   questionAnswersFor,
   bindBrowser,
   bookmarkIconFiles,
