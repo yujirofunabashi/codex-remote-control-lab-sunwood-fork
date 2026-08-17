@@ -107,6 +107,8 @@ PHONE_NOTIFY_TIMEOUT_MS=5000 npm run phone
 
 通知は opt-in です。`PHONE_NTFY_TOPIC` がある場合は ntfy topic へ、`PHONE_PUSHOVER_TOKEN` と `PHONE_PUSHOVER_USER` がある場合は Pushover へ、`PHONE_DISCORD_WEBHOOK_URL` がある場合は Discord へ起動 URL を送ります。task 完了/中断通知は、設定済み provider へ送ります。その他の作業 event 通知も使う場合は `PHONE_NOTIFY_EVENTS=1` を設定します。`approval_required`、`question_required`、`test_failed`、`connection_lost`、`history_sync_failed`、`long_running` を送信でき、`PHONE_NOTIFY_EVENT_DEDUPE_MS` で非強制 event の短時間重複通知を抑制します。起動通知は互換性のため token 付き URL を含み得るので private/protected topic、account、channel 限定で使ってください。event 通知の URL には token を含めません。
 
+Claude mode の turn は、出力が止まったまま終了しない process を検知します。`PHONE_CLAUDE_STALL_WARN_MS`（既定 90000 ms）で作業ログに一度警告し、`PHONE_CLAUDE_STALL_KILL_MS`（既定 300000 ms）で process を終了して turn を「応答なし」として閉じます。tool 実行を待っている turn は長い build でも終了させません。
+
 現在の bridge は次をサポートします。
 
 - Codex Desktop 風の sidebar / conversation / artifact panel / composer layout

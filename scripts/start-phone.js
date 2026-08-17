@@ -271,6 +271,15 @@ function positiveNumber(value, fallback) {
   return Number.isFinite(number) && number > 0 ? number : fallback;
 }
 
+// Same as above except `0` is a value, not a miss: it is how an operator turns
+// one stage of the stall watchdog off without turning the other off with it.
+function stallThresholdMs(value, fallback) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return fallback;
+  const number = Number(raw);
+  return Number.isFinite(number) && number >= 0 ? number : fallback;
+}
+
 function rateLimitCachePathForProvider(provider) {
   const configured = providerEnvValue(provider, "RATE_LIMIT_CACHE_PATH", { legacyCodex: true });
   if (configured) return path.resolve(configured);
@@ -527,6 +536,17 @@ let lastHistorySync = { enabled: historySyncEnabled, lastSuccessAt: null, lastFa
 const historyLimit = 80;
 const idleBridgeTtlMs = Number(process.env.PHONE_IDLE_BRIDGE_TTL_MS || 60 * 60 * 1000);
 const longRunningNotifyMs = positiveNumber(process.env.PHONE_NOTIFY_LONG_RUNNING_MS, 10 * 60 * 1000);
+// A turn is only ever ended by the CLI process exiting. A CLI that stops
+// emitting without exiting therefore leaves 「処理中」 on the phone forever, and
+// the phone cannot tell that from work still in progress - the one question it
+// exists to answer. These thresholds are what turns that silence into a
+// statement. `0` switches a stage off.
+const claudeStallWarnMs = stallThresholdMs(process.env.PHONE_CLAUDE_STALL_WARN_MS, 90 * 1000);
+const claudeStallKillMs = stallThresholdMs(process.env.PHONE_CLAUDE_STALL_KILL_MS, 5 * 60 * 1000);
+const claudeStallCheckMs = positiveNumber(process.env.PHONE_CLAUDE_STALL_CHECK_MS, 15 * 1000);
+// Observed on a hung turn: SIGTERM was ignored outright, three times over. A
+// stage that cannot be refused has to follow it.
+const claudeStallKillGraceMs = positiveNumber(process.env.PHONE_CLAUDE_STALL_KILL_GRACE_MS, 2000);
 const imageExtensions = new Map([
   [".png", "image/png"],
   [".jpg", "image/jpeg"],
@@ -1360,6 +1380,37 @@ function notifyBridgeEvent(type, payload = {}) {
   notifyEvent(event)
     .then((results) => logNotifyResults(`event ${type}`, results))
     .catch((error) => console.warn(`[notify] event ${type} error: ${error.message}`));
+}
+
+// Silence alone does not say a turn died. A turn running `npm test` is silent
+// for as long as the suite takes and is working the whole time, while a turn
+// that has already been handed its tool result owes the phone tokens and is
+// producing none. So the tools still in flight - not the clock alone - decide
+// whether silence may be called a stall, and a turn waiting on a tool is never
+// killed for waiting.
+function claudeStallVerdict({
+  now,
+  lastOutputAt,
+  pendingToolCount = 0,
+  warned = false,
+  warnMs = 0,
+  killMs = 0,
+}) {
+  const silentMs = Math.max(0, Number(now) - Number(lastOutputAt || 0));
+  const toolInFlight = Number(pendingToolCount) > 0;
+  const verdict = { action: "none", silentMs, toolInFlight };
+  if (!Number.isFinite(silentMs)) return verdict;
+  if (!toolInFlight && killMs > 0 && silentMs >= killMs) return { ...verdict, action: "kill" };
+  if (!warned && warnMs > 0 && silentMs >= warnMs) return { ...verdict, action: "warn" };
+  return verdict;
+}
+
+function formatSilence(ms) {
+  const seconds = Math.round(Math.max(0, ms) / 1000);
+  if (seconds < 60) return `${seconds}秒`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return rest ? `${minutes}分${rest}秒` : `${minutes}分`;
 }
 
 function scheduleLongRunningNotification(bridge, turnId) {
@@ -3583,6 +3634,7 @@ class ClaudeBridge {
     this.interruptRequested = false;
     this.idleDisposeTimer = null;
     this.longRunningTimer = null;
+    this.stalledTurnId = null;
     this.sessionWatchPath = "";
     this.sessionWatchListener = null;
   }
@@ -3991,6 +4043,11 @@ class ClaudeBridge {
     let deltaBytes = 0;
     let lineCount = 0;
     let unhandledCount = 0;
+    // Spawn counts as output: startup silence is the CLI booting, not a stall.
+    let lastOutputAt = Date.now();
+    let stallWarned = false;
+    let stallTimer = null;
+    const pendingToolUses = new Set();
     const finishTurnDebug = debugTimer("claude.turn", {
       turnId,
       threadId: this.threadId,
@@ -4001,6 +4058,13 @@ class ClaudeBridge {
     });
 
     const clearActiveProcess = () => {
+      // Unconditional: only this child's own error/exit handlers call this, so a
+      // turn that lost the slot must still stop its watchdog from firing at a
+      // process that is already gone.
+      if (stallTimer) {
+        clearInterval(stallTimer);
+        stallTimer = null;
+      }
       if (this.activeProcess !== child && this.activeTurnId !== turnId) return false;
       this.activeProcess = null;
       this.activeTurnId = null;
@@ -4071,6 +4135,8 @@ class ClaudeBridge {
       if (msg.type === "assistant") {
         let summaries = 0;
         for (const block of msg.message?.content || []) {
+          // Held so the watchdog can tell "running a tool" from "owes tokens".
+          if (block?.type === "tool_use" && block.id) pendingToolUses.add(block.id);
           const summary = summarizeClaudeToolUse(block, this.workdir || workdir);
           if (summary) {
             this.emit("status", { text: summary });
@@ -4082,6 +4148,13 @@ class ClaudeBridge {
       if (msg.type === "user") {
         let summaries = 0;
         for (const block of msg.message?.content || []) {
+          // A result without an id cannot be matched to its call, and guessing
+          // wrong the other way - holding a tool open that already returned - is
+          // what would keep a dead turn alive, so it clears the whole set.
+          if (block?.type === "tool_result") {
+            if (block.tool_use_id) pendingToolUses.delete(block.tool_use_id);
+            else pendingToolUses.clear();
+          }
           const summary = summarizeClaudeToolResult(block);
           if (summary) {
             this.emit("status", { text: summary });
@@ -4091,6 +4164,8 @@ class ClaudeBridge {
         return { ...routed, handled: "user", blocks: (msg.message?.content || []).length, summaries };
       }
       if (msg.type === "result") {
+        // The turn is answered; nothing can still be in flight under it.
+        pendingToolUses.clear();
         if (msg.session_id) {
           this.claudeSessionId = msg.session_id;
           this.promoteBridgeKey();
@@ -4129,6 +4204,9 @@ class ClaudeBridge {
 
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
+      // Any byte at all, including a thinking delta and a retry notice, is proof
+      // the process is still alive and working.
+      lastOutputAt = Date.now();
       stdoutBuffer += chunk;
       const lines = stdoutBuffer.split(/\r?\n/);
       stdoutBuffer = lines.pop() || "";
@@ -4136,6 +4214,7 @@ class ClaudeBridge {
     });
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk) => {
+      lastOutputAt = Date.now();
       stderrBuffer += chunk;
       const lines = stderrBuffer.split(/\r?\n/);
       stderrBuffer = lines.pop() || "";
@@ -4143,6 +4222,57 @@ class ClaudeBridge {
         if (line.trim()) this.emit("status", { text: line.slice(0, 500) });
       }
     });
+
+    if (claudeStallWarnMs > 0 || claudeStallKillMs > 0) {
+      stallTimer = setInterval(() => {
+        if (this.activeProcess !== child) return;
+        const verdict = claudeStallVerdict({
+          now: Date.now(),
+          lastOutputAt,
+          pendingToolCount: pendingToolUses.size,
+          warned: stallWarned,
+          warnMs: claudeStallWarnMs,
+          killMs: claudeStallKillMs,
+        });
+        if (verdict.action === "none") return;
+        const silence = formatSilence(verdict.silentMs);
+        debugLog("claude.stall", {
+          turnId,
+          threadId: this.threadId,
+          action: verdict.action,
+          silentMs: verdict.silentMs,
+          toolInFlight: verdict.toolInFlight,
+          pendingToolCount: pendingToolUses.size,
+          assistantChars: assistantText.length,
+        });
+        if (verdict.action === "warn") {
+          stallWarned = true;
+          // Said once, and said plainly, because the alternative the phone shows
+          // today is an animation that means nothing.
+          this.emit("status", {
+            text: verdict.toolInFlight
+              ? `${silence}のあいだ実行中のツールを待っています。処理は続いています。`
+              : `${silence}のあいだClaudeからの出力がありません。応答が止まっている可能性があります。`,
+          });
+          return;
+        }
+        // The verdict stays "kill" for as long as the process takes to die, and
+        // the process is under no obligation to die quickly - so the watchdog
+        // has to stand down here rather than repeat itself every tick. The
+        // escalation below, and then the exit handler, finish the job.
+        clearInterval(stallTimer);
+        stallTimer = null;
+        this.stalledTurnId = turnId;
+        this.setBridgeRunState("error", "応答なし", turnId);
+        this.emit("status", { text: `${silence}出力がないため、応答が停止したと判断して終了します。` });
+        child.kill("SIGTERM");
+        const forceTimer = setTimeout(() => {
+          if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+        }, claudeStallKillGraceMs);
+        forceTimer.unref?.();
+      }, claudeStallCheckMs);
+      stallTimer.unref?.();
+    }
     child.on("error", (error) => {
       if (!clearActiveProcess()) return;
       this.interruptRequested = false;
@@ -4159,10 +4289,16 @@ class ClaudeBridge {
       this.scheduleIdleDispose();
     });
     child.on("exit", (code, signal) => {
-      const wasInterrupted = this.interruptRequested || signal === "SIGINT" || signal === "SIGTERM";
+      // The watchdog kills with the same signals a person does, so without this
+      // the phone would be told the user interrupted a turn they never touched.
+      // A clean exit still wins: a turn that answered as it was being killed
+      // answered.
+      const wasStalled = this.stalledTurnId === turnId && !(code === 0 && !signal);
+      const wasInterrupted = !wasStalled && (this.interruptRequested || signal === "SIGINT" || signal === "SIGTERM");
       if (!clearActiveProcess()) return;
       if (stdoutBuffer.trim()) handleLine(stdoutBuffer);
       this.interruptRequested = false;
+      this.stalledTurnId = null;
       // A `/clear` that never forked - it failed, or was interrupted - must not
       // leave the next turn armed to drop the transcript.
       this.clearRequested = false;
@@ -4172,6 +4308,7 @@ class ClaudeBridge {
         code,
         signal,
         wasInterrupted,
+        wasStalled,
         lineCount,
         deltaCount,
         deltaBytes,
@@ -4182,7 +4319,21 @@ class ClaudeBridge {
         clientCount: this.clients.size,
         stderrTail: stderrBuffer.trim().slice(-500),
       });
-      if (code === 0 && !wasInterrupted) {
+      if (wasStalled) {
+        // Whatever did arrive before the silence is kept: a half-written answer
+        // is still the only account of what the turn was doing.
+        if (assistantText.trim()) this.appendHistory({ type: "assistant", text: assistantText, outputGroup: turnId });
+        const message = "Claudeからの出力が止まったため、この処理を終了しました。もう一度送信してください。";
+        this.setBridgeRunState("error", "応答なし", turnId);
+        this.emit("error", { text: message });
+        notifyRunEvent("failed", {
+          provider: this.provider,
+          model: this.model,
+          threadId: this.threadId,
+          turnId,
+          message,
+        });
+      } else if (code === 0 && !wasInterrupted) {
         if (assistantText.trim()) this.appendHistory({ type: "assistant", text: assistantText, outputGroup: turnId });
         const question = latestAssistantQuestion(this);
         this.setBridgeRunState(question ? "question" : "done", question ? "返信待ち" : "完了しました", turnId);
@@ -5640,6 +5791,7 @@ module.exports = {
   claudeSessionFilePath,
   claudeSessionName,
   claudeSessionWorkdir,
+  claudeStallVerdict,
   claudeThreadListPayload,
   executeTerminalCommand,
   getBridge,

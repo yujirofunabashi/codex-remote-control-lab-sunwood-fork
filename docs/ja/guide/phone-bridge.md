@@ -73,6 +73,8 @@ PHONE_DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/... npm run phone
 PHONE_NOTIFY_TIMEOUT_MS=5000 npm run phone
 PHONE_NOTIFY_EVENTS=1 npm run phone
 PHONE_NOTIFY_EVENT_DEDUPE_MS=60000 npm run phone
+PHONE_CLAUDE_STALL_WARN_MS=90000 npm run phone
+PHONE_CLAUDE_STALL_KILL_MS=300000 npm run phone
 ```
 
 複数ポート運用では、各 `PHONE_UI_PORT` を固定 workspace slot として扱い、`PHONE_WORKDIR` で slot の worktree を指定します。`CODEX_APP_SERVER_PORT` を指定しない場合、各 slot の Codex app-server は `PHONE_UI_PORT - 1` を使います。たとえば `45224 -> 45223` になり、`45214 -> 45213` の既定 app-server を複数 slot が誤って共有しません。Codex / Claude は browser UI から切り替えられ、`PHONE_AGENT_PROVIDER` は再起動後に最初に開く既定 provider だけを決めます。
@@ -96,6 +98,8 @@ Claude の subscription limit は Anthropic API の rate-limit header とは別�
 background の thread 一覧 polling は、同じ error の連続表示を抑えます。app-server の短い再起動や token mismatch が起きても、同じ `/api/threads` failure が chat log に増え続けることは避けます。
 
 permission mode がどれであっても、run 側には必ず確認手段を渡します。Claude Code は bridge ごとの Unix socket に紐づく permission-prompt tool 付きで起動するため、止まった tool 呼び出しはスマホ側の承認カードになります。フルアクセス（`bypassPermissions`）も同じです。このモードでは通常の tool 呼び出しは prompt tool を通さず素通りしますが、`PreToolUse` hook が `ask` を返せば止まります。確認先が無い run は permission denial を記録したまま待ち続けます。開いた承認は答えるまで bridge が保持するので、再読み込みや再接続をしても同じ質問が戻り、止まったまま進まない run にはなりません。保持は質問した側が終わるまでです。答えを受け取らないまま turn が終了した場合は bridge も質問を取り下げるので、どの決定も届かないカードが残り続けることはありません。
+
+turn が終わるのは Claude Code process の終了時だけなので、出力を止めたまま終了しない process はスマホに「処理中」を出し続けます。これは進行中の作業と見分けが付かず、画面が答えるべき唯一の問いに答えられなくなります。bridge は turn ごとに最後の出力時刻を持ち、`PHONE_CLAUDE_STALL_WARN_MS`（既定 90000 ms）沈黙したら作業ログに一度だけ無応答の可能性を書き、`PHONE_CLAUDE_STALL_KILL_MS`（既定 300000 ms）沈黙したら応答が停止したとみなして process を終了し、turn を「応答なし」として閉じ、`failed` の run 通知を送ります。SIGTERM を無視する process があるため、`PHONE_CLAUDE_STALL_KILL_GRACE_MS`（既定 2000 ms）後に SIGKILL へ上げます。判断材料は時間だけではありません。実行中の tool 呼び出しが残っている turn は、長い build や test で沈黙するのが正常なので、待ち時間をログに書くだけで終了させません。終了対象になるのは tool 結果を受け取った後、つまり出力を返すべき状態で黙った turn だけです。どちらの閾値も `0` で無効化でき、片方だけ止めることもできます。既に届いた途中までの応答は履歴に残します。
 
 ## sidebar は全 workdir を横断する
 

@@ -113,6 +113,8 @@ History sync is enabled by default. After a web turn completes, the bridge warms
 
 Notifications are opt-in. `PHONE_NTFY_TOPIC` sends startup URLs to an ntfy topic, `PHONE_PUSHOVER_TOKEN` plus `PHONE_PUSHOVER_USER` sends them through Pushover, and `PHONE_DISCORD_WEBHOOK_URL` posts them to Discord. Task completion/interruption notifications are sent through configured providers. Set `PHONE_NOTIFY_EVENTS=1` to also send structured work events such as `approval_required`, `question_required`, `test_failed`, `connection_lost`, `history_sync_failed`, and `long_running`; `PHONE_NOTIFY_EVENT_DEDUPE_MS` controls short-window dedupe for non-forced events. Startup notifications can include the tokenized ready URL for compatibility, so use a private/protected topic, account, or channel. Event notifications use token-free bridge URLs.
 
+Claude-mode turns watch for a process that stops emitting without exiting. After `PHONE_CLAUDE_STALL_WARN_MS` (default 90000 ms) the work log says so once; after `PHONE_CLAUDE_STALL_KILL_MS` (default 300000 ms) the process is ended and the turn closes as 「応答なし」. A turn waiting on a tool call is never killed for a long build.
+
 The current phone bridge supports:
 
 - Codex Desktop-like browser layout with a left thread sidebar, central conversation, right artifact panel, and bottom composer

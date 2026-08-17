@@ -85,6 +85,8 @@ PHONE_DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/... npm run phone
 PHONE_NOTIFY_TIMEOUT_MS=5000 npm run phone
 PHONE_NOTIFY_EVENTS=1 npm run phone
 PHONE_NOTIFY_EVENT_DEDUPE_MS=60000 npm run phone
+PHONE_CLAUDE_STALL_WARN_MS=90000 npm run phone
+PHONE_CLAUDE_STALL_KILL_MS=300000 npm run phone
 ```
 
 For parallel operation, treat each `PHONE_UI_PORT` as a fixed workspace slot. Pin the slot with `PHONE_WORKDIR`, and switch Codex or Claude from the browser UI as needed. When `CODEX_APP_SERVER_PORT` is not set, each slot uses `PHONE_UI_PORT - 1` for its local Codex app-server, such as `45224 -> 45223`, so parallel slots do not reuse the `45214 -> 45213` upstream by accident. Settings saved from the browser UI use port-scoped `.env` keys such as `PHONE_WORKDIR_45224`, so one slot's worktree choice does not become every port's default. `PHONE_AGENT_PROVIDER` only sets the default provider for that slot after restart.
@@ -133,6 +135,8 @@ Background thread-list polling suppresses repeated identical errors. A transient
 Claude mode is intentionally narrower than Codex mode. It has Claude Code session listing for the active workdir, but does not provide Codex app-server history sync or plugin lookup. Use `CLAUDE_PERMISSION_MODE` or the UI permission mode to decide how much autonomy each spawned Claude run has.
 
 Whichever mode is picked, the run is given a way to ask. Claude Code is spawned with a permission-prompt tool backed by a per-bridge Unix socket, so any tool call it stops on becomes an approval card on the phone. Full access (`bypassPermissions`) included: that mode lets ordinary tool calls through without consulting the prompt tool, but a `PreToolUse` hook answering `ask` still stops one, and a run with nowhere to ask records a permission denial and waits. The bridge holds an open approval until it is answered, so reloading or reconnecting hands the same question back instead of leaving a run that looks stuck. Holding ends when the asker does: if the turn that asked finishes without an answer, the bridge drops the question rather than handing back a card no decision can reach.
+
+A turn only ends when the Claude Code process exits, so a process that stops emitting without exiting leaves 「処理中」 on the phone indefinitely — indistinguishable from work still in progress, which is the one question the screen exists to answer. The bridge tracks the last output of each turn: after `PHONE_CLAUDE_STALL_WARN_MS` of silence (default 90000 ms) it says once in the work log that the turn may have stopped responding, and after `PHONE_CLAUDE_STALL_KILL_MS` (default 300000 ms) it ends the process, closes the turn as 「応答なし」, and sends a `failed` run notification. Because a hung process can ignore SIGTERM, the kill escalates to SIGKILL after `PHONE_CLAUDE_STALL_KILL_GRACE_MS` (default 2000 ms). Time alone does not decide it: a turn with a tool call still in flight is silent for as long as a build or test suite takes and is working the whole time, so it is only noted, never killed. Only a turn that went silent after its tool result — owing output and producing none — is ended. Either threshold can be switched off with `0` independently of the other, and whatever partial answer already arrived is kept in the history.
 
 ## The Sidebar Spans Every Workdir
 
