@@ -413,6 +413,27 @@
     return normalized ? `bridge-${hashString(normalized).toString(36)}` : "";
   }
 
+  // A loopback address names whichever device reads it, so a bridge registered
+  // at one is reachable only from the Mac that registered it. The backup is
+  // shared - the phone restores the list from it - and on the phone the same
+  // address points at the phone, which runs no bridge. That is where the second
+  // `mini Claude` came from: one row for the Mac that works, one for the same
+  // Mac that can never connect and shows as 切断 for good.
+  function isDeviceLocalBridgeUrl(baseUrl) {
+    const normalized = normalizeBridgeBaseUrl(baseUrl);
+    if (!normalized) return false;
+    let host = "";
+    try {
+      host = new URL(normalized).hostname.toLowerCase();
+    } catch {
+      return false;
+    }
+    if (host === "localhost" || host.endsWith(".localhost")) return true;
+    // URL keeps IPv6 hosts bracketed, and ::1 is spelled several ways.
+    if (/^\[(?:0*:)*0*1\]$/.test(host)) return true;
+    return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
+  }
+
   function parseBridgeUrl(input, options = {}) {
     const text = String(input || "").trim();
     if (!text) return null;
@@ -873,6 +894,21 @@
     return scope ? `${scope}/${name}` : name;
   }
 
+  // A list that never arrived looks exactly like a Mac with one chat on it: the
+  // open chat leaves a stand-in row in the sidebar, and with nothing fetched to
+  // argue with it that single row reads as the whole truth. The rows cannot tell
+  // the two apart, so the state that produced them has to say which one it is.
+  // Silence was the bug: a refresh that returned early left the same screen as a
+  // refresh that found one chat.
+  function threadListNotice(state = {}) {
+    if (state.loaded) return null;
+    if (state.blocked === "no-token") {
+      return { text: "接続キーが確認できないため、チャット一覧を読み込めていません。", retry: true };
+    }
+    if (state.error) return { text: `チャット一覧を読み込めませんでした: ${state.error}`, retry: true };
+    return { text: "チャット一覧を読み込んでいます…", retry: false };
+  }
+
   // The two Macs already have colours their owner recognises before reading
   // anything: the mini's icon is amber, the Air's is blue. The label carries the
   // same two, so the machine registers at a glance. A machine that is neither
@@ -998,6 +1034,7 @@
     urlWithoutTokenParam,
     normalizeBridgeBaseUrl,
     bridgeIdFromBaseUrl,
+    isDeviceLocalBridgeUrl,
     parseBridgeUrl,
     normalizeBridgeEntry,
     bridgeThreadKey,
@@ -1024,6 +1061,7 @@
     machineScopeKey,
     machineScopeCount,
     machineAccentToken,
+    threadListNotice,
     threadProjectGroupKey,
     shortHostLabel,
     splitMarkdownTableRow,

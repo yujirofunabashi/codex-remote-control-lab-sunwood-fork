@@ -13,6 +13,7 @@ const {
   machineScopeKey,
   machineScopeCount,
   machineAccentToken,
+  threadListNotice,
   threadProjectGroupKey,
   shortHostLabel,
   isMarkdownTableStart,
@@ -20,6 +21,7 @@ const {
   splitMarkdownTableRow,
   bridgeIdFromBaseUrl,
   bridgeThreadKey,
+  isDeviceLocalBridgeUrl,
   compactWorkspacePath,
   contrastColorFor,
   deriveThreadStatus,
@@ -755,6 +757,44 @@ test("two Macs running the same project name get one heading each", () => {
   // Without a machine the key stays what it was before machines were named.
   assert.equal(threadProjectGroupKey("00_受け渡し", ""), "00_受け渡し");
   assert.equal(threadProjectGroupKey("", "Air"), "air/No project");
+});
+
+test("a bridge at a loopback address is this device's own, not the fleet's", () => {
+  // The second `mini Claude`: registered by the Mac's own browser, restored by
+  // the phone, and on the phone that address is the phone.
+  assert.equal(isDeviceLocalBridgeUrl("http://127.0.0.1:45234"), true);
+  assert.equal(isDeviceLocalBridgeUrl("http://127.1.2.3:45234"), true);
+  assert.equal(isDeviceLocalBridgeUrl("http://localhost:45234"), true);
+  assert.equal(isDeviceLocalBridgeUrl("http://phone.localhost:45234"), true);
+  assert.equal(isDeviceLocalBridgeUrl("http://[::1]:45234"), true);
+
+  // Everything another device can dial stays in the shared list.
+  assert.equal(isDeviceLocalBridgeUrl("https://minijiromac-mini.tailc2f2d5.ts.net:8444"), false);
+  assert.equal(isDeviceLocalBridgeUrl("http://192.168.1.9:45234"), false);
+  // 127 in a name is not 127 in an address.
+  assert.equal(isDeviceLocalBridgeUrl("https://127-0-0-1.example.com"), false);
+  assert.equal(isDeviceLocalBridgeUrl(""), false);
+});
+
+test("a list that never arrived is told apart from a Mac with one chat", () => {
+  // The screen both states produce is the same single stand-in row, so the
+  // difference has to come from the state rather than from the rows.
+  assert.equal(threadListNotice({ loaded: true }), null);
+  assert.equal(threadListNotice({ loaded: true, error: "Failed to fetch" }), null);
+
+  const loading = threadListNotice({ loaded: false });
+  assert.match(loading.text, /読み込んでいます/);
+  // Nothing to retry while the first attempt is still out.
+  assert.equal(loading.retry, false);
+
+  // The refresh that used to return with no fetch, no error and no mark.
+  const blocked = threadListNotice({ loaded: false, blocked: "no-token" });
+  assert.match(blocked.text, /接続キー/);
+  assert.equal(blocked.retry, true);
+
+  const failed = threadListNotice({ loaded: false, error: "Failed to fetch" });
+  assert.match(failed.text, /Failed to fetch/);
+  assert.equal(failed.retry, true);
 });
 
 test("the machine key ignores case and spacing so one Mac is not counted twice", () => {

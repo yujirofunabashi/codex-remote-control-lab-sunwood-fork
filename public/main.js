@@ -726,9 +726,28 @@ function bridgeRegistryBackupPayload() {
   };
 }
 
+// A loopback address names whichever device reads it, so one written into the
+// shared backup by the Mac's own browser - `http://127.0.0.1:45234` - arrives
+// at the phone pointing at the phone, which runs no bridge. That is the second
+// `mini Claude`: a row for a Mac already listed, stuck at 切断 for good because
+// there is nothing at the other end to answer.
+//
+// Dropped on the way in rather than on the way out: the backup is the only copy
+// of the list a reinstalled app has, so refusing to write these would quietly
+// remove a connection someone added from the Mac itself. Here nothing is lost -
+// the device that owns the address still holds it locally, and it is kept when
+// it is this device's own, where it does point at the bridge serving the page.
+function sharedRemoteRegistry(remote = {}) {
+  const bridges = remote.bridges || [];
+  const shared = bridges.filter(
+    (entry) => !uiUtils.isDeviceLocalBridgeUrl(entry?.baseUrl) || uiUtils.bridgeIdFromBaseUrl(entry?.baseUrl) === homeBridgeId,
+  );
+  return shared.length === bridges.length ? remote : { ...remote, bridges: shared };
+}
+
 function applyRemoteBridgeRegistry(remote = {}) {
   const before = new Set((bridgeRegistry.bridges || []).map((entry) => entry.id));
-  bridgeRegistry = uiUtils.mergeBridgeRegistries(bridgeRegistry, remote);
+  bridgeRegistry = uiUtils.mergeBridgeRegistries(bridgeRegistry, sharedRemoteRegistry(remote));
   // Merged against the surviving list, so a token cannot outlive the bridge it
   // belongs to or land on a connection the owner asked not to remember.
   adoptBridgeTokenRecords(uiUtils.mergeBridgeTokens(bridgeTokenRecords(), remote.tokens, bridgeRegistry.bridges));
@@ -4041,9 +4060,42 @@ async function setProjectHidden(workdir, hidden, project = "", bridgeId = active
   }
 }
 
+// Sits above the rows because it is about all of them: whatever is underneath
+// is not this bridge's answer yet, and the rows have no way to say so.
+function renderThreadListNotice() {
+  const state = getBridgeState(activeBridgeId);
+  const notice = uiUtils.threadListNotice
+    ? uiUtils.threadListNotice({
+        loaded: Boolean(state.threadsLoadedAt),
+        blocked: state.threadsBlocked || "",
+        error: state.threadsError || "",
+      })
+    : null;
+  if (!notice) return;
+  const box = document.createElement("div");
+  box.className = "thread-list-notice";
+  const text = document.createElement("span");
+  text.className = "thread-list-notice-text";
+  text.textContent = notice.text;
+  box.append(text);
+  if (notice.retry) {
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "thread-list-retry";
+    retry.textContent = "再読み込み";
+    retry.addEventListener("click", () => {
+      loadThreads({ background: true }).catch(() => {});
+      loadFleetThreads({ force: true }).catch(() => {});
+    });
+    box.append(retry);
+  }
+  threadList.appendChild(box);
+}
+
 function renderThreadList() {
   threadList.replaceChildren();
   renderThreadInboxTabs();
+  renderThreadListNotice();
   const provider = currentThreadProvider();
   const groups = visibleThreadGroups();
   const showMachine = Array.from(groups.values()).some((group) => group.showMachine);
@@ -4189,7 +4241,10 @@ function renderThreadList() {
     threadList.appendChild(group);
   }
 
-  if (!groups.size) {
+  // "There are none" is a claim about a list that came back. Said over a list
+  // that never did, it is the same wrong answer the single stand-in row gave,
+  // just spelled out - so it waits for the fetch the notice above is reporting.
+  if (!groups.size && getBridgeState(activeBridgeId).threadsLoadedAt) {
     const empty = document.createElement("div");
     empty.className = "project-empty";
     empty.textContent =
@@ -5662,7 +5717,15 @@ function switchThreadProvider(provider, { reload = true } = {}) {
 }
 
 async function loadThreads({ background = false, provider = "" } = {}) {
-  if (!effectiveBridgeToken(activeBridge())) return;
+  // Returning here used to be the whole of it: no fetch, no error, no mark on
+  // the screen. The sidebar kept drawing the open chat's stand-in row and read
+  // as a Mac with one chat on it, every ten seconds, for as long as the token
+  // stayed unresolved. The refresh still stops - it has nothing to ask with -
+  // but it now says so where the list is.
+  if (!effectiveBridgeToken(activeBridge())) {
+    markThreadListBlocked("no-token");
+    return;
+  }
   const previousThreadCache = threadCache;
   const requestedProvider = normalizeProviderName(provider || threadProvider);
   const path = requestedProvider ? `/api/threads?provider=${encodeURIComponent(requestedProvider)}` : "/api/threads";
@@ -5696,6 +5759,11 @@ async function loadThreads({ background = false, provider = "" } = {}) {
     hiddenProjects = Array.isArray(result.hiddenProjects) ? result.hiddenProjects : [];
     const state = getBridgeState(activeBridgeId);
     state.threadCache = threadCache;
+    // The list is only this bridge's answer once it has actually arrived, which
+    // is what the sidebar checks before trusting the rows it is about to draw.
+    state.threadsLoadedAt = Date.now();
+    state.threadsError = "";
+    state.threadsBlocked = "";
     state.activeProvider = activeProvider;
     state.threadProvider = threadProvider;
     state.threadProviderExplicit = threadProviderExplicit;
@@ -5713,6 +5781,10 @@ async function loadThreads({ background = false, provider = "" } = {}) {
     lastThreadListError = "";
   } catch (error) {
     const message = error.message || String(error);
+    // A background poll writes one status line the first time and then goes
+    // quiet, which is right for the transcript and wrong for the sidebar: the
+    // list is the thing that looks wrong, so the reason belongs there too.
+    markThreadListFailed(message);
     if (message !== lastThreadListError) {
       lastThreadListError = message;
       const text = `thread一覧を読めませんでした: ${message}`;
@@ -5721,6 +5793,21 @@ async function loadThreads({ background = false, provider = "" } = {}) {
     }
     if (!background) throw error;
   }
+}
+
+function markThreadListBlocked(reason) {
+  const state = getBridgeState(activeBridgeId);
+  if (state.threadsBlocked === reason) return;
+  state.threadsBlocked = reason;
+  renderThreadList();
+}
+
+function markThreadListFailed(message) {
+  const state = getBridgeState(activeBridgeId);
+  if (state.threadsError === message && !state.threadsBlocked) return;
+  state.threadsError = message;
+  state.threadsBlocked = "";
+  renderThreadList();
 }
 
 // A session belongs to the Mac that ran it: the Air's transcripts are under the
@@ -5739,7 +5826,15 @@ async function loadFleetThreads({ force = false } = {}) {
       if (!effectiveBridgeToken(entry) && !token) return;
       state.threadsLoading = true;
       try {
-        const provider = normalizeProviderName(state.activeProvider || state.info?.provider) || "";
+        // Every bridge the app has not met yet is seeded as codex, so the first
+        // pass over a newly registered Mac asked a Claude-only one for codex
+        // threads: a 500, an empty list, and that Mac's chats missing from the
+        // sidebar until a later poll happened to ask again. The seed is a guess
+        // and is treated as one - until the bridge has answered for itself there
+        // is nothing worth sending, and a request without a provider is answered
+        // by whichever one the bridge is actually running.
+        const named = state.info || state.status;
+        const provider = named ? normalizeProviderName(state.activeProvider || state.info?.provider) || "" : "";
         const result = await fetchJsonForBridge(entry, provider ? `/api/threads?provider=${encodeURIComponent(provider)}` : "/api/threads");
         const resultProvider = normalizeProviderName(result.provider || result.activeProvider || provider) || "codex";
         state.activeProvider = normalizeProviderName(result.activeProvider) || resultProvider;

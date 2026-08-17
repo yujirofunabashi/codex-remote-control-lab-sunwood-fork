@@ -1154,6 +1154,116 @@ async function run() {
     check("confirming restarts the bridge the phone is talking to", restartCalls.length === 1, JSON.stringify(restartCalls));
     check("the confirm says what a restart costs before it happens", /切断/.test(restartPrompt), restartPrompt);
 
+    // A list that never arrived leaves the open chat's stand-in row and nothing
+    // else, which is the same screen as a Mac with one chat on it. On its own
+    // page because the failure has to be there from the first load - that is the
+    // state the phone was found in, not one it fell into later.
+    let threadsFail = true;
+    const offline = await browser.newPage({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2 });
+    await mockWebSocket(offline);
+    await mockApi(offline, origin);
+    // Registered after the catch-all, so it is the one that answers first.
+    await offline.route("**/api/threads*", async (route) => {
+      if (threadsFail) return route.abort("connectionrefused");
+      return route.fulfill({ json: { data: threads, hiddenProjects: [] } });
+    });
+    await offline.goto(`${origin}/?token=${token}`, { waitUntil: "domcontentloaded" });
+    await offline.waitForTimeout(2500);
+    await offline.locator("#menuButton").click();
+    await offline.waitForTimeout(400);
+    const offlineNotice = await offline.evaluate(() => ({
+      text: document.querySelector(".thread-list-notice-text")?.textContent || "",
+      retry: Boolean(document.querySelector(".thread-list-retry")),
+      // The empty-state line claims the list came back empty, so it has to wait
+      // for a list that came back at all.
+      empty: document.querySelector("#threadList .project-empty")?.textContent || "",
+    }));
+    check("a chat list that never loaded says so instead of passing for one chat", Boolean(offlineNotice.text), JSON.stringify(offlineNotice));
+    check("and offers the reload rather than leaving the poll to notice", offlineNotice.retry, JSON.stringify(offlineNotice));
+    check("and does not claim the Mac has no chats", offlineNotice.empty === "", JSON.stringify(offlineNotice));
+
+    threadsFail = false;
+    // Clicked in the page rather than through the locator: the sidebar redraws
+    // on every poll, so waiting for the button to hold still is waiting for the
+    // one thing a live list never does.
+    await offline.evaluate(() => document.querySelector(".thread-list-retry")?.click());
+    await offline.waitForTimeout(1500);
+    const healed = await offline.evaluate(() => ({
+      notice: document.querySelector(".thread-list-notice-text")?.textContent || "",
+      groups: document.querySelectorAll("#threadList section.project-group").length,
+    }));
+    check("the reload clears the warning and fills the list", healed.notice === "" && healed.groups > 0, JSON.stringify(healed));
+    await offline.close();
+
+    // A Mac that was asleep answers the first few calls with nothing, so the
+    // sidebar reaches it before anything has said which provider it runs. The
+    // seeded guess is codex; asking a Claude-only Mac for codex threads is a 500
+    // that leaves its chats out of the list until a later poll asks again.
+    const sleepingOrigin = "http://127.0.0.1:45999";
+    const sleepingId = "sleeping-bridge";
+    const sleepingThreads = [{ id: "sleeping-1", name: "もう一台の作業", cwd: `${root}-air`, updatedAt: Date.now(), provider: "claude" }];
+    const codexAsks = [];
+    const waking = await browser.newPage({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2 });
+    const wakingBootAt = Date.now();
+    await mockWebSocket(waking);
+    await mockApi(waking, origin);
+    await waking.route(`${sleepingOrigin}/api/**`, async (route) => {
+      const url = new URL(route.request().url());
+      if (url.pathname === "/api/threads") {
+        if (url.searchParams.get("provider") === "codex") {
+          codexAsks.push(url.search);
+          return route.fulfill({ status: 500, json: { error: "connect ECONNREFUSED 127.0.0.1:45233" } });
+        }
+        return route.fulfill({ json: { provider: "claude", activeProvider: "claude", hiddenProjects: [], data: sleepingThreads } });
+      }
+      // Still waking: nothing has named this Mac's provider yet.
+      if (Date.now() - wakingBootAt < 9000) return route.fulfill({ status: 500, json: { error: "waking up" } });
+      if (url.pathname === "/api/bridge/info") {
+        return route.fulfill({ json: { label: "sleeping-mac", hostName: "sleeping-mac.local", provider: "claude", cwd: `${root}-air`, workdir: `${root}-air`, branch: "develop", uiPort: 45234 } });
+      }
+      return route.fulfill({ json: { ok: true, data: [] } });
+    });
+    // A backup written by a Mac's own browser carries that Mac's loopback
+    // address, and the list is shared: every other device restores from it.
+    const ghostLoopback = "http://127.0.0.1:45888";
+    const dialableEverywhere = "https://remote-mac.example.ts.net:8443";
+    await waking.route("**/api/bridge/registry", (route) =>
+      route.fulfill({
+        json: {
+          ok: true,
+          version: 2,
+          revision: 1,
+          updatedAt: Date.now(),
+          bridges: [
+            { id: "ghost-loopback", label: "mini Claude", baseUrl: ghostLoopback, port: 45888, rememberToken: true },
+            { id: "remote-mac", label: "remote-mac", baseUrl: dialableEverywhere, port: 45244, rememberToken: true },
+          ],
+          deleted: [],
+          tokens: {},
+        },
+      }),
+    );
+    await waking.addInitScript((payload) => {
+      localStorage.setItem(
+        "codexPhoneBridgeRegistry:v1",
+        JSON.stringify({ version: 1, bridges: [{ id: payload.id, label: "sleeping-mac", baseUrl: payload.origin, port: 45234, rememberToken: true }] }),
+      );
+      localStorage.setItem("codexPhoneBridgeTokens:v1", JSON.stringify({ [payload.id]: payload.token }));
+    }, { id: sleepingId, origin: sleepingOrigin, token });
+    await waking.goto(`${origin}/?token=${token}`, { waitUntil: "domcontentloaded" });
+    await waking.waitForTimeout(12000);
+    const wakingThreads = await waking.evaluate((id) => (bridgeStates.get(id)?.threadCache || []).length, sleepingId);
+    check("a Mac that was still waking is not guessed to be running codex", codexAsks.length === 0, JSON.stringify(codexAsks));
+    check("and its chats reach the sidebar on the first pass", wakingThreads === 1, String(wakingThreads));
+
+    const restoredUrls = await waking.evaluate(() => (bridgeRegistry.bridges || []).map((entry) => entry.baseUrl));
+    check("a connection every device can dial comes back from the backup", restoredUrls.includes(dialableEverywhere), JSON.stringify(restoredUrls));
+    check("a loopback address in the backup is not another Mac's row here", !restoredUrls.includes(ghostLoopback), JSON.stringify(restoredUrls));
+    // The rule is about the address meaning something else on this device, not
+    // about loopback being unusable: the page's own origin is one.
+    check("while this device's own address stays its home bridge", restoredUrls.some((baseUrl) => baseUrl.startsWith(origin)), JSON.stringify(restoredUrls));
+    await waking.close();
+
     await page.close();
   } finally {
     if (browser) await browser.close();
