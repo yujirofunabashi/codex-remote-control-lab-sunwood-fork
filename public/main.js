@@ -130,6 +130,9 @@ const approvalText = document.querySelector("#approvalText");
 const approvalKind = document.querySelector("#approvalKind");
 const approvalSummary = document.querySelector("#approvalSummary");
 const approvalReason = document.querySelector("#approvalReason");
+const approvalQuestions = document.querySelector("#approvalQuestions");
+const approvalDetails = document.querySelector("#approvalDetails");
+const approvalTitle = document.querySelector("#approvalTitle");
 const approveButton = document.querySelector("#approve");
 const declineButton = document.querySelector("#decline");
 const quickActions = document.querySelector("#quickActions");
@@ -1071,6 +1074,11 @@ const bridgeViewStateStorageKey = "codexPhoneBridgeViewState:v1";
 const threadInboxFilterStorageKey = "codexPhoneThreadInboxFilter:v1";
 const threadSortModeStorageKey = "codexPhoneThreadSortMode:v1";
 const expandedProjectsStorageKey = "codexPhoneExpandedProjects:v1";
+const threadWorkdirStorageKey = "codexPhoneThreadWorkdirs:v1";
+// How many chats keep a remembered folder. Only the chats that have not been
+// sent to yet need one, and they stop needing it the moment they have a
+// transcript, so this is far more than the phone will ever draw on.
+const threadWorkdirLimit = 300;
 // Not a project name, so it cannot collide with one.
 const recentViewKey = "\u0000recent";
 const taskTemplateStorageKey = "codexPhoneLastTaskTemplate:v1";
@@ -1099,6 +1107,13 @@ let bridgeRegistry = readJsonStorage(bridgeRegistryStorageKey, { version: 1, bri
 let bridgeLocalTokens = readJsonStorage(bridgeLocalTokensStorageKey, {});
 let bridgeTokenUpdatedAt = readJsonStorage(bridgeTokenTimesStorageKey, {});
 let bridgeViewState = readJsonStorage(bridgeViewStateStorageKey, {});
+// Which folder each chat was opened in. A Claude session that has not been sent
+// to yet writes no transcript, so the Mac has nothing to read its folder back
+// out of: the folder lives only in the phone that picked it, and a reload or a
+// bridge restart used to lose it. What the phone then dialled with was this
+// bridge's own folder, and the session was opened there for real - the chat did
+// not just look like it had moved, it had.
+let threadWorkdirs = readJsonStorage(threadWorkdirStorageKey, {});
 // Declared ahead of the first ensureHomeBridge() call, which persists the
 // registry - and therefore reaches the backup scheduler - during startup.
 const bridgeRegistryBackupDebounceMs = 1500;
@@ -1139,6 +1154,9 @@ try {
 
 let ws = null;
 let pendingApproval = null;
+// What has been picked for the open question card, keyed by question text -
+// the same key the tool reads its answers under.
+let questionAnswerDraft = new Map();
 let assistantEntry = null;
 let liveOutputGroup = "";
 let statusGroup = null;
@@ -1555,7 +1573,9 @@ function renderCommandList() {
     empty.className = "command-empty";
     empty.textContent = slashCommands.length
       ? "一致するコマンドはありません"
-      : "コマンドは最初のやり取りのあとに読み込まれます";
+      : currentThreadProvider() === "claude"
+        ? "コマンドは最初のやり取りのあとに読み込まれます"
+        : "このチャットにコマンドはありません";
     commandList.appendChild(empty);
     return;
   }
@@ -1661,7 +1681,9 @@ function updateHeaderStatus() {
 function updateComposerState() {
   const state = currentRunState;
   composer.dataset.runState = state;
-  if (state === "approval") promptInput.placeholder = "承認リクエストに対応してください";
+  if (state === "approval") {
+    promptInput.placeholder = questionsForApproval(pendingApproval || {}).length ? "上の質問に回答してください" : "承認リクエストに対応してください";
+  }
   else if (state === "running" || state === "streaming" || state === "syncing") {
     promptInput.placeholder = "実行中です。追加指示は必要なら送信できます";
   } else if (state === "connecting" || state === "disconnected") {
@@ -1672,6 +1694,10 @@ function updateComposerState() {
     else sendLabel.textContent = mainViewMode === "terminal" ? (state === "approval" ? "承認へ" : state === "disconnected" ? "切断" : state === "running" || state === "streaming" ? "送信" : "Enter ↵") : "送信";
   }
   syncBottomNav();
+  // Every run-state change lands here, which is where a hidden composer has to
+  // come back: an approval, a question, or a turn that started while the reader
+  // was somewhere up the page.
+  refreshReadingMode();
 }
 
 function shortId(value) {
@@ -1774,6 +1800,7 @@ function applyServerRunState(run = {}) {
   if (terminalRunStates.has(state)) interruptRequestPending = false;
   if (state !== "approval" && pendingApproval) {
     pendingApproval = null;
+    questionAnswerDraft = new Map();
     approval.classList.add("hidden");
     renderApprovalStrip(null);
   }
@@ -2221,12 +2248,37 @@ function currentThreadWorkspaceKey() {
   return workspaceKeyForThread(selected, currentWorkspace.workspaceLocation || currentWorkspace.repoName || "");
 }
 
+function rememberedThreadWorkdir(threadId = selectedThread) {
+  return threadId ? workspaceKeyForThread({ cwd: threadWorkdirs[threadId] || "" }) : "";
+}
+
+function rememberThreadWorkdir(threadId, workdir) {
+  const key = String(threadId || "");
+  const target = workspaceKeyForThread({ cwd: workdir || "" });
+  if (!key || !target || threadWorkdirs[key] === target) return;
+  threadWorkdirs = { ...threadWorkdirs, [key]: target };
+  const keys = Object.keys(threadWorkdirs);
+  // Oldest first: string keys keep the order they were added in.
+  if (keys.length > threadWorkdirLimit) {
+    threadWorkdirs = Object.fromEntries(keys.slice(keys.length - threadWorkdirLimit).map((id) => [id, threadWorkdirs[id]]));
+  }
+  writeJsonStorage(threadWorkdirStorageKey, threadWorkdirs);
+}
+
 function selectedThreadWorkdir(fallback = currentWorkspace.workspaceLocation || "") {
-  return workspaceKeyForThread(selectedThreadRecord(), fallback);
+  // The list the bridge sends is built from transcripts, so a chat that has not
+  // been sent to yet is not in it and has no record here to carry its folder.
+  // What the phone remembered when the folder was picked stands in until it is.
+  const remembered = rememberedThreadWorkdir();
+  const record = selectedThreadRecord();
+  // The stand-in record made for such a chat carries a guessed folder. It must
+  // not pass for one the chat named, because this is what the phone dials with.
+  if (record?.cwdGuessed && !remembered) return workspaceKeyForThread({}, fallback);
+  return workspaceKeyForThread(record, remembered || fallback);
 }
 
 function selectedThreadWorkdirKnown() {
-  return Boolean(selectedThread && selectedThreadRecord() && selectedThreadWorkdir(""));
+  return Boolean(selectedThread && (selectedThreadRecord() || rememberedThreadWorkdir()) && selectedThreadWorkdir(""));
 }
 
 function shouldDeferSelectedThreadWorkdir() {
@@ -2256,9 +2308,14 @@ function connectionWorkdir(explicitWorkdir = "") {
   const explicit = workspaceKeyForThread({ cwd: explicitWorkdir });
   if (explicit) return explicit;
   const selected = shouldDeferSelectedThreadWorkdir() ? "" : selectedThreadWorkdir("");
-  return workspaceKeyForThread({
-    cwd: (workspaceFollowsSelectedThread ? selected : "") || currentWorkspaceWorkdir() || activeBridgeWorkdir() || selected,
-  });
+  const followed = workspaceFollowsSelectedThread ? selected : "";
+  if (followed) return followed;
+  // Dialling an existing chat with a folder that is only a guess is how a chat
+  // gets moved: with no transcript to read one from, the folder in the request
+  // is the folder the session opens in, so a guess becomes the answer. Saying
+  // nothing leaves the question with the bridge, which is the side that knows.
+  if (selectedThread && workspaceFollowsSelectedThread) return "";
+  return workspaceKeyForThread({ cwd: currentWorkspaceWorkdir() || activeBridgeWorkdir() || selected });
 }
 
 function isSameCurrentWorkspaceThread(thread, baseKey = currentThreadWorkspaceKey()) {
@@ -2782,6 +2839,54 @@ function scrollChatToBottom() {
   updateChatLatestButton();
 }
 
+// Reading a long answer, the composer and the bar below it are not being used,
+// and on a 390x844 phone they hold 212px of the 549px the conversation gets.
+// They leave while the reader is going down through an answer and come back the
+// moment they are wanted: a scroll back up, the end of the chat, or a run that
+// needs something. 最新へ stays behind as the way back for a thumb that would
+// rather tap than scroll.
+const chatRestStates = new Set(["done", "ready", "interrupted", "error", "disconnected"]);
+// Wider apart than the 212px the two rows are worth. Hiding them makes the log
+// that much taller, which moves the reader that much closer to the end - close
+// thresholds would meet in the middle and the chrome would flicker in and out.
+const readingHideDistance = 300;
+const readingShowDistance = 24;
+let lastLogScrollTop = 0;
+
+function chromeMayHide() {
+  if (mainViewMode !== "chat") return false;
+  if (pendingApproval) return false;
+  if (!chatRestStates.has(currentRunState)) return false;
+  // A draft is the one thing on that bar nobody would want taken away.
+  if (promptInputFocused || String(promptInput?.value || "").trim()) return false;
+  return true;
+}
+
+function setReadingMode(on) {
+  const next = Boolean(on) && chromeMayHide();
+  if (document.body.classList.contains("reading-mode") === next) return;
+  document.body.classList.toggle("reading-mode", next);
+  updateChatLatestButton();
+}
+
+function refreshReadingMode() {
+  if (!chromeMayHide()) setReadingMode(false);
+}
+
+// Either direction: going back up through an answer is reading too, and it was
+// the direction that kept handing the space back. What ends it is arriving at
+// the end of the chat, or a tap - on the composer to write, or on the page to
+// ask for the controls back.
+function updateReadingMode() {
+  if (!log) return;
+  const top = log.scrollTop;
+  const moved = Math.abs(top - lastLogScrollTop);
+  lastLogScrollTop = top;
+  const fromBottom = log.scrollHeight - top - log.clientHeight;
+  if (fromBottom < readingShowDistance) setReadingMode(false);
+  else if (moved > 6 && fromBottom > readingHideDistance) setReadingMode(true);
+}
+
 // renderHistory wipes the log and replays every message through addEntry. Those
 // replays are not new arrivals and must not each decide where the view sits, so
 // the bulk redraw owns the scroll position for its whole run.
@@ -3158,6 +3263,9 @@ function restoreScrollPositions() {
     }
     updateTerminalLatestButton();
     updateChatLatestButton();
+    // A restored position is not a reader travelling down the page, so it must
+    // not read as one and take the composer away on arrival.
+    if (log) lastLogScrollTop = log.scrollTop;
   });
 }
 
@@ -3468,7 +3576,141 @@ function terminalEntryFromMessage(msg) {
   return null;
 }
 
+const askQuestionToolName = "AskUserQuestion";
+
+// A question reaches the phone down the approval channel like any other tool
+// call, but 許可/拒否 is not an answer to it: allowed as-is under `claude -p` it
+// comes straight back with "The user did not answer the questions." and the
+// turn carries on from its own guess. So a question is drawn as a question.
+function questionsForApproval(request = {}) {
+  const params = request.params || {};
+  if (params.toolName !== askQuestionToolName) return [];
+  const questions = params.input?.questions;
+  if (!Array.isArray(questions)) return [];
+  return questions.filter((question) => question && typeof question.question === "string" && question.question);
+}
+
+function answerValueForQuestion(question) {
+  const draft = questionAnswerDraft.get(question.question);
+  if (!draft) return "";
+  const chosen = Array.from(draft.selected);
+  const written = draft.other.trim();
+  if (written) chosen.push(written);
+  return chosen.join(", ");
+}
+
+function collectQuestionAnswers(questions) {
+  const answers = {};
+  for (const question of questions) {
+    const value = answerValueForQuestion(question);
+    if (value) answers[question.question] = value;
+  }
+  return answers;
+}
+
+// Half an answer is worse than none - Claude would take the one reply as the
+// whole of it - so the send stays shut until every question has something.
+function updateApprovalAnswerState(questions) {
+  if (!approveButton || !questions.length) return;
+  const answered = questions.filter((question) => answerValueForQuestion(question)).length;
+  approveButton.disabled = answered < questions.length;
+  approveButton.textContent = questions.length > 1 ? `回答を送信(${answered}/${questions.length})` : "回答を送信";
+}
+
+function renderApprovalQuestions(request) {
+  const questions = questionsForApproval(request);
+  questionAnswerDraft = new Map();
+  if (!approvalQuestions) return questions;
+  approvalQuestions.replaceChildren();
+  approvalQuestions.classList.toggle("hidden", !questions.length);
+  if (!questions.length) return questions;
+
+  questions.forEach((question, index) => {
+    questionAnswerDraft.set(question.question, { selected: new Set(), other: "" });
+    const card = document.createElement("div");
+    card.className = "approval-question";
+
+    const header = document.createElement("div");
+    header.className = "approval-question-header";
+    const heading = String(question.header || "確認");
+    header.textContent = questions.length > 1 ? `${index + 1}/${questions.length}・${heading}` : heading;
+    if (question.multiSelect) header.textContent += "（複数選択可）";
+    card.appendChild(header);
+
+    const text = document.createElement("p");
+    text.className = "approval-question-text";
+    text.textContent = question.question;
+    card.appendChild(text);
+
+    const options = document.createElement("div");
+    options.className = "approval-options";
+    const buttons = [];
+    for (const option of Array.isArray(question.options) ? question.options : []) {
+      const label = String(option?.label || "").trim();
+      if (!label) continue;
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "approval-option";
+      button.dataset.label = label;
+      button.setAttribute("aria-pressed", "false");
+      const mark = document.createElement("span");
+      mark.className = "approval-option-mark";
+      mark.dataset.multi = String(Boolean(question.multiSelect));
+      mark.setAttribute("aria-hidden", "true");
+      const body = document.createElement("span");
+      body.className = "approval-option-body";
+      const name = document.createElement("span");
+      name.className = "approval-option-label";
+      name.textContent = label;
+      body.appendChild(name);
+      if (option.description) {
+        const description = document.createElement("span");
+        description.className = "approval-option-description";
+        description.textContent = String(option.description);
+        body.appendChild(description);
+      }
+      button.append(mark, body);
+      button.addEventListener("click", () => {
+        const draft = questionAnswerDraft.get(question.question);
+        if (!draft) return;
+        if (draft.selected.has(label)) draft.selected.delete(label);
+        else {
+          // One answer unless the tool asked for several, so a second tap moves
+          // the choice rather than piling a second one on top of it.
+          if (!question.multiSelect) draft.selected.clear();
+          draft.selected.add(label);
+        }
+        for (const sibling of buttons) sibling.setAttribute("aria-pressed", String(draft.selected.has(sibling.dataset.label)));
+        updateApprovalAnswerState(questions);
+      });
+      buttons.push(button);
+      options.appendChild(button);
+    }
+    card.appendChild(options);
+
+    // Claude's own question UI always offers a free-text "Other", and a phone
+    // held to the listed options alone cannot say the thing that is true.
+    const other = document.createElement("input");
+    other.type = "text";
+    other.className = "approval-question-other";
+    other.placeholder = options.childElementCount ? "その他（自由に入力）" : "回答を入力";
+    other.setAttribute("aria-label", `${heading}の自由回答`);
+    other.addEventListener("input", () => {
+      const draft = questionAnswerDraft.get(question.question);
+      if (!draft) return;
+      draft.other = other.value;
+      updateApprovalAnswerState(questions);
+    });
+    card.appendChild(other);
+    approvalQuestions.appendChild(card);
+  });
+
+  updateApprovalAnswerState(questions);
+  return questions;
+}
+
 function approvalLabelForRequest(request = {}) {
+  if (request.params?.toolName === askQuestionToolName) return "質問";
   const method = String(request.method || "");
   if (/commandExecution/i.test(method)) return "コマンド";
   if (/fileChange/i.test(method)) return "ファイル変更";
@@ -3478,13 +3720,32 @@ function approvalLabelForRequest(request = {}) {
 
 function renderApprovalRequest(request) {
   const label = approvalLabelForRequest(request);
+  const questions = renderApprovalQuestions(request);
+  const asking = questions.length > 0;
+  approval.dataset.kind = asking ? "question" : "approval";
+  if (approvalTitle) approvalTitle.textContent = asking ? "質問が届いています" : "承認リクエスト";
   if (approvalKind) approvalKind.textContent = label;
-  if (approvalSummary) approvalSummary.textContent = `${label}の承認が必要です`;
+  if (approvalSummary) approvalSummary.textContent = asking ? "Claudeが送ってきた内容" : `${label}の承認が必要です`;
   approvalText.textContent = JSON.stringify(request?.params || request || {}, null, 2);
-  if (approvalReason) approvalReason.value = "";
+  // The raw payload is the whole card for a tool call and pure noise under a
+  // question that has already been laid out in full above it.
+  if (approvalDetails) approvalDetails.open = !asking;
+  if (approvalReason) {
+    approvalReason.value = "";
+    approvalReason.classList.toggle("hidden", asking);
+  }
+  if (declineButton) declineButton.textContent = asking ? "回答しない" : "拒否";
+  if (approveButton && !asking) {
+    approveButton.disabled = false;
+    approveButton.textContent = "承認";
+  }
   approval.classList.remove("hidden");
   renderApprovalStrip(request);
-  appendTerminalEntry({ ts: Date.now(), kind: "approval", message: `${label}の承認待ち` });
+  appendTerminalEntry({
+    ts: Date.now(),
+    kind: "approval",
+    message: asking ? `質問${questions.length}件が届きました` : `${label}の承認待ち`,
+  });
 }
 
 function renderApprovalStrip(request = pendingApproval) {
@@ -3492,8 +3753,24 @@ function renderApprovalStrip(request = pendingApproval) {
   approvalStrip.replaceChildren();
   approvalStrip.classList.toggle("hidden", !request);
   if (!request) return;
+  const asking = questionsForApproval(request).length > 0;
   const text = document.createElement("span");
-  text.textContent = `承認待ち: ${approvalSummaryText(request)}`;
+  text.textContent = `${asking ? "質問" : "承認待ち"}: ${approvalSummaryText(request)}`;
+  if (asking) {
+    // 許可 cannot answer a question, so the strip's job here is to put the card
+    // in front of the operator rather than to decide anything on its own.
+    const open = document.createElement("button");
+    open.type = "button";
+    open.textContent = "回答する";
+    open.addEventListener("click", () => revealPendingApproval());
+    const later = document.createElement("button");
+    later.type = "button";
+    later.className = "secondary";
+    later.textContent = "回答しない";
+    later.addEventListener("click", () => declineButton?.click());
+    approvalStrip.append(text, open, later);
+    return;
+  }
   const details = document.createElement("button");
   details.type = "button";
   details.className = "secondary";
@@ -3800,18 +4077,23 @@ function currentThreadListRecord(overrides = {}) {
       overrides.provider || existing.provider || currentThreadProvider(),
     );
   }
-  return normalizeThreadRecord(
-    {
-      id: selectedThread,
-      provider: currentThreadProvider(),
-      displayTitle: "現在のチャット",
-      cwd: currentWorkspace.workspaceLocation || currentWorkspace.repoName || "",
-      updatedAt: 0,
-      runState: currentRunState,
-      ...overrides,
-    },
-    overrides.provider || currentThreadProvider(),
-  );
+  // A chat the bridge cannot list yet gets its stand-in record built here, and
+  // the folder on it is the one the rest of the app reads back. The folder this
+  // chat was opened in is a fact; the workspace on screen is only whatever was
+  // last shown, which on a fresh load is the bridge's own folder - so it is
+  // marked as the guess it is rather than passing for the chat's own.
+  const remembered = rememberedThreadWorkdir(selectedThread);
+  const record = {
+    id: selectedThread,
+    provider: currentThreadProvider(),
+    displayTitle: "現在のチャット",
+    cwd: remembered || currentWorkspace.workspaceLocation || currentWorkspace.repoName || "",
+    updatedAt: 0,
+    runState: currentRunState,
+    ...overrides,
+  };
+  if (!remembered && !overrides.cwd) record.cwdGuessed = true;
+  return normalizeThreadRecord(record, overrides.provider || currentThreadProvider());
 }
 
 function preserveSelectedThreadInList(overrides = {}) {
@@ -4616,8 +4898,38 @@ function selectedBridgeRunWorkspaceMeta(status = {}) {
   const runs = Array.isArray(currentStatus.bridges) ? currentStatus.bridges : [];
   const selectedRun = runs.find((item) => item.threadId === selectedThread);
   if (!selectedRun) return null;
-  const meta = workspaceMetaFromRun({ ...(selectedRun.run || {}), cwd: selectedRun.cwd, workdir: selectedRun.workdir });
+  // The entry itself is the bridge reading this session's folder; the `run`
+  // nested inside it is the bridge process describing itself, and on a bridge
+  // that has not been updated those two disagree - the repo the bridge was
+  // started in wins and renames a chat that is running somewhere else. The
+  // session's own reading is the one to keep.
+  const meta = workspaceMetaFromRun({ ...(selectedRun.run || {}), ...selectedRun });
   return meta.repoName || meta.workspaceLocation || meta.gitBranch ? meta : null;
+}
+
+// What a poll is allowed to say about the workspace. A poll reports on the
+// bridge, not on the folder the owner picked: the bridge only lists the sessions
+// it is holding open, so a chat that is merely waiting - or one whose folder was
+// chosen a moment ago - has no run to be found among them. Handing it the
+// bridge's own cwd in that gap renamed the header to the repo the bridge was
+// started in, while the chat carried on in the folder that was chosen.
+function polledWorkspaceMeta(info = {}, status = {}) {
+  const bridgeMeta = workspaceMetaFromBridgeInfo(info);
+  if (!workspaceFollowsSelectedThread) return bridgeMeta;
+  const runMeta = selectedBridgeRunWorkspaceMeta(status);
+  if (hasWorkspaceMeta(runMeta)) return runMeta;
+  // The chat's own cwd outranks the pinned one: following the chat is what this
+  // mode means, and a folder pinned for a chat that has since moved is stale.
+  const chosen = selectedThreadWorkdir("") || currentWorkspaceWorkdir();
+  if (!chosen || chosen === bridgeMeta.workspaceLocation) return bridgeMeta;
+  return {
+    repoName: currentWorkspace.repoName || basenameFromPath(chosen),
+    workspaceLocation: chosen,
+    // The bridge's branch belongs to the bridge's folder. A handoff folder that
+    // is not a repo has no branch, and claiming `develop` there is a lie the
+    // header would keep telling.
+    gitBranch: currentWorkspace.gitBranch || "",
+  };
 }
 
 // The tone belongs to the badge, so it is spelled inside the badge's own name.
@@ -4664,6 +4976,10 @@ function collectPendingApprovals() {
 }
 
 function approvalSummaryText(request = {}) {
+  // Named by what was asked, not by the transport: "claude/requestApproval" told
+  // nobody which of the fleet's bridges is the one holding up a question.
+  const [question] = questionsForApproval(request);
+  if (question) return String(question.header || question.question).slice(0, 120);
   const method = String(request.method || "approval");
   const params = request.params || {};
   const command = params.command || params.cmd || params.description || "";
@@ -4763,13 +5079,19 @@ function renderBridgeFleetSheet() {
       main.append(title, small);
       header.append(dot, main, fleetBadge(runStateShortLabel(bridgeStateLabel(entry, state)), bridgeStateLabel(entry, state) === "approval" ? "approval" : ""));
       const metaLine = document.createElement("small");
-      metaLine.textContent = `${bridgeMetaText(entry, state)} / ${entry.kind || "lan"}${entry.note ? ` / ${entry.note}` : ""}`;
+      // Which connection is serving the page was written down nowhere, and it is
+      // the one that decides whose copy of the UI you are looking at - a change
+      // made on any other machine cannot show up here until you open that one.
+      const servesThisPage = entry.id === homeBridgeId ? " / この画面の配信元" : "";
+      metaLine.textContent = `${bridgeMetaText(entry, state)} / ${entry.kind || "lan"}${entry.note ? ` / ${entry.note}` : ""}${servesThisPage}`;
       const actions = document.createElement("div");
       actions.className = "bridge-card-actions";
       const switchButton = document.createElement("button");
       switchButton.type = "button";
       switchButton.textContent = entry.id === activeBridgeId ? "表示中" : "切替";
       switchButton.disabled = entry.id === activeBridgeId;
+      // Off because it is already the answer, not because it is unavailable.
+      switchButton.setAttribute("aria-current", String(entry.id === activeBridgeId));
       switchButton.addEventListener("click", () => setActiveBridge(entry.id));
       const reconnectButton = document.createElement("button");
       reconnectButton.type = "button";
@@ -4794,6 +5116,11 @@ function renderBridgeFleetSheet() {
       removeButton.className = "secondary";
       removeButton.textContent = "削除";
       removeButton.disabled = entry.id === homeBridgeId;
+      // Which row is serving the page is not otherwise visible anywhere, and a
+      // greyed button with no reason on it just moves the question along.
+      removeButton.title = removeButton.disabled
+        ? "この接続先からこの画面を開いているため削除できません"
+        : `${bridgeDisplayLabel(entry, entry.id)} をこの端末から削除`;
       removeButton.addEventListener("click", () => removeBridge(entry.id));
       actions.append(switchButton, reconnectButton, openButton, copyButton, removeButton);
       card.append(header, metaLine, actions);
@@ -4933,7 +5260,7 @@ async function refreshBridgeState(bridgeId, { force = false } = {}) {
     const status = await fetchJsonForBridge(entry, `/api/status?provider=${encodeURIComponent(provider)}`);
     state.status = status;
     if (bridgeId === activeBridgeId) {
-      setWorkspaceMeta((workspaceFollowsSelectedThread && selectedBridgeRunWorkspaceMeta(status)) || workspaceMetaFromBridgeInfo(info));
+      setWorkspaceMeta(polledWorkspaceMeta(info, status));
     }
     state.runState = bridgeRunSummary(bridgeId).run?.state || "ready";
     state.lastEventAt = Date.now();
@@ -6009,6 +6336,7 @@ async function selectThread(threadId, options = {}) {
   if (workdir) {
     setWorkspaceMeta({ repoName: options.project || projectForThread({ cwd: workdir }), workspaceLocation: workdir, gitBranch: "" });
   }
+  rememberThreadWorkdir(threadId, workdir || options.thread?.cwd);
   selectedThread = threadId;
   selectedThreadByProvider.set(currentThreadProvider(), selectedThread);
   markThreadViewed(
@@ -6367,9 +6695,12 @@ function renderReviewTerminal() {
 function renderReviewActions() {
   artifactList.replaceChildren();
   artifactList.classList.remove("artifact-browser-list");
+  // A question cannot be answered from here - there is nothing to pick from -
+  // so the row opens the card instead of pretending a blank approval is one.
+  const asking = questionsForApproval(pendingApproval || {}).length > 0;
   const actions = [
-    { label: "承認", disabled: !pendingApproval, run: () => approveButton?.click() },
-    { label: "却下", disabled: !pendingApproval, run: () => declineButton?.click(), secondary: true },
+    { label: asking ? "質問を開く" : "承認", disabled: !pendingApproval, run: () => (asking ? revealPendingApproval() : approveButton?.click()) },
+    { label: asking ? "回答せず進める" : "却下", disabled: !pendingApproval, run: () => declineButton?.click(), secondary: true },
     { label: "再試行", run: () => insertPromptText("直前の失敗を踏まえて、原因を確認してから小さく再試行してください。") },
     { label: "停止", disabled: !interruptibleRunStates.has(currentRunState), run: () => interruptButton?.click(), secondary: true },
     { label: "続けて", run: () => insertPromptText("続けてください。") },
@@ -7847,16 +8178,29 @@ function connect({ preserveHistory = false, freshThread = false, workdir = "" } 
     }
     if (msg.type === "ready") {
       setReady(true);
-      setSlashCommands(msg.slashCommands);
       setActiveProvider(msg.provider || "codex");
+      // After the provider, because an empty list explains itself differently
+      // depending on which agent is behind the chat. A bridge with no commands
+      // to offer says so by sending none, and an older one by sending nothing
+      // at all: either way the list belongs to the chat this phone just left.
+      setSlashCommands(Array.isArray(msg.slashCommands) ? msg.slashCommands : []);
       setSelectedModel(msg.model, { persist: false, provider: msg.provider || currentThreadProvider() });
-      const readyWorkspace = workspaceMetaFromRun({
-        repoName: msg.repoName || msg.run?.repoName,
-        workspaceLocation: msg.workspaceLocation || msg.run?.workspaceLocation,
-        gitBranch: msg.gitBranch || msg.run?.gitBranch,
-        workdir: msg.workdir || msg.run?.workdir,
-        cwd: msg.cwd || msg.run?.cwd,
-      });
+      // Only reach into `run` for a message that does not name the session's
+      // folder at all. Filling single fields from it mixes two folders into one
+      // reading: an empty branch for a folder that is not a repo would be filled
+      // with the branch of the repo the bridge process happens to sit in.
+      const readySpeaksForSession = Boolean(msg.workdir || msg.cwd);
+      const readyWorkspace = workspaceMetaFromRun(
+        readySpeaksForSession
+          ? { repoName: msg.repoName, workspaceLocation: msg.workspaceLocation, gitBranch: msg.gitBranch, workdir: msg.workdir, cwd: msg.cwd }
+          : {
+              repoName: msg.repoName || msg.run?.repoName,
+              workspaceLocation: msg.workspaceLocation || msg.run?.workspaceLocation,
+              gitBranch: msg.gitBranch || msg.run?.gitBranch,
+              workdir: msg.run?.workdir,
+              cwd: msg.run?.cwd,
+            },
+      );
       setWorkspaceMeta(readyWorkspace);
       const state = getBridgeState(bridgeId);
       const readyViewedAt = Date.now();
@@ -7875,6 +8219,9 @@ function connect({ preserveHistory = false, freshThread = false, workdir = "" } 
             },
         msg.provider || activeProvider,
       );
+      // The id a fresh chat is given arrives here, so this is the first moment
+      // the folder it was opened in can be filed under one.
+      rememberThreadWorkdir(msg.threadId, readyWorkspace.workspaceLocation || msg.workdir);
       state.selectedThread = msg.threadId || selectedThread;
       state.currentWorkspace = { ...currentWorkspace };
       state.activeProvider = msg.provider || activeProvider;
@@ -7896,7 +8243,13 @@ function connect({ preserveHistory = false, freshThread = false, workdir = "" } 
     }
     handleTerminalMessage(msg);
     if (msg.type === "runState") {
-      setWorkspaceMeta(workspaceMetaFromRun({ ...msg, workdir: msg.workdir || selectedThreadWorkdir("") || currentWorkspaceWorkdir() }));
+      // A run state that names no folder of its own says nothing about where
+      // this chat is: its repo name and branch are the bridge process's, so
+      // taking them renames the chat to the bridge's repo on every state
+      // change. Only the folder already established stands.
+      const runNamesFolder = Boolean(msg.workdir || msg.cwd);
+      const runLocation = runNamesFolder ? "" : selectedThreadWorkdir("") || currentWorkspaceWorkdir();
+      setWorkspaceMeta(runNamesFolder ? workspaceMetaFromRun(msg) : runLocation ? { workspaceLocation: runLocation } : {});
       applyServerRunState(msg);
       updateThreadNavigation();
       return;
@@ -8106,25 +8459,38 @@ interruptButton.addEventListener("click", () => {
 
 approveButton.addEventListener("click", () => {
   if (!pendingApproval) return;
-  ws.send(JSON.stringify({ type: "approval", decision: "accept", request: pendingApproval }));
-  appendTerminalEntry({ ts: Date.now(), kind: "approval", message: "承認しました" });
-  showToast("承認を送信しました。");
+  const questions = questionsForApproval(pendingApproval);
+  const answers = questions.length ? collectQuestionAnswers(questions) : null;
+  if (questions.length && Object.keys(answers).length < questions.length) {
+    showToast("未回答の質問があります。", "warn");
+    return;
+  }
+  ws.send(JSON.stringify({ type: "approval", decision: "accept", request: pendingApproval, answers: answers || undefined }));
+  appendTerminalEntry({ ts: Date.now(), kind: "approval", message: questions.length ? `回答を送信しました (${questions.length}件)` : "承認しました" });
+  showToast(questions.length ? "回答を送信しました。" : "承認を送信しました。");
   approval.classList.add("hidden");
   pendingApproval = null;
+  questionAnswerDraft = new Map();
   renderApprovalStrip(null);
-  setRunState("running", "承認済み・処理中");
+  setRunState("running", questions.length ? "回答済み・処理中" : "承認済み・処理中");
 });
 
 declineButton.addEventListener("click", () => {
   if (!pendingApproval) return;
+  const asking = questionsForApproval(pendingApproval).length > 0;
   const reason = approvalReason?.value?.trim();
   ws.send(JSON.stringify({ type: "approval", decision: "decline", request: pendingApproval }));
-  appendTerminalEntry({ ts: Date.now(), kind: "approval", message: reason ? `拒否しました: ${reason}` : "拒否しました" });
-  showToast("拒否を送信しました。");
+  appendTerminalEntry({
+    ts: Date.now(),
+    kind: "approval",
+    message: asking ? "回答せず進めます" : reason ? `拒否しました: ${reason}` : "拒否しました",
+  });
+  showToast(asking ? "回答なしで進めます。" : "拒否を送信しました。");
   approval.classList.add("hidden");
   pendingApproval = null;
+  questionAnswerDraft = new Map();
   renderApprovalStrip(null);
-  setRunState("running", "拒否済み・処理中");
+  setRunState("running", asking ? "回答なしで処理中" : "拒否済み・処理中");
 });
 
 prevThreadButton.addEventListener("click", () => selectAdjacentThread(-1));
@@ -8171,6 +8537,7 @@ sidebarScrim.addEventListener("click", () => {
 connectButton.addEventListener("click", () => connect());
 promptInput.addEventListener("focus", () => {
   promptInputFocused = true;
+  setReadingMode(false);
   updateQuickBarVisibility();
   keepComposerVisible();
 });
@@ -8283,7 +8650,12 @@ chatLatestButton?.addEventListener("click", () => {
 log?.addEventListener("scroll", () => {
   saveScrollPositions();
   updateChatLatestButton();
+  updateReadingMode();
 });
+// Now that neither direction brings the controls back, a tap on what is being
+// read is the way to ask for them - the same gesture that dismisses a photo
+// viewer's chrome, and no worse than a stray tap on a message.
+log?.addEventListener("click", () => setReadingMode(false));
 terminalFontDownButton?.addEventListener("click", () => setTerminalFontSize(terminalFontSize - 1));
 terminalFontResetButton?.addEventListener("click", () => setTerminalFontSize(12));
 terminalFontUpButton?.addEventListener("click", () => setTerminalFontSize(terminalFontSize + 1));

@@ -415,3 +415,113 @@ test("disposing a bridge removes its socket file and releases pending approvals"
   assert.equal(reply.decision, "decline");
   assert.ok(!fs.existsSync(socketPath));
 });
+
+// The gap the phone fell into. `AskUserQuestion` arrives on this same channel,
+// and 許可 alone is not an answer to it: allowed with nothing filled in, headless
+// Claude gets back "The user did not answer the questions." and proceeds on its
+// own guess, which is what the operator saw - a question in the transcript with
+// no way to answer it and a turn that carried on regardless.
+test("an answered question reaches Claude as the tool's own answers", async () => {
+  const bridge = new ClaudeBridge(null, "bridge-question-allow");
+  const client = fakeClient();
+  bridge.clients.add(client);
+  try {
+    const socketPath = await bridge.ensureApprovalServer();
+    const input = {
+      questions: [
+        { question: "実装方針は？", header: "方針", options: [{ label: "自前実装" }, { label: "外部サービス" }] },
+        { question: "着手はいつ？", header: "時期", options: [{ label: "今週" }, { label: "来週" }] },
+      ],
+    };
+    const call = callApprovalMcp({ PHONE_APPROVAL_SOCKET: socketPath }, {
+      tool_name: "AskUserQuestion",
+      input,
+      tool_use_id: "toolu_question",
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const [approval] = client.messagesOfType("approval");
+    assert.ok(approval, "the question has to reach the phone at all");
+    bridge.approval(approval.request, "accept", { "実装方針は？": "自前実装", "着手はいつ？": "今週" });
+
+    const { replies } = await call;
+    const decision = decisionFrom(replies.find((msg) => msg.id === 2));
+    assert.equal(decision.behavior, "allow");
+    assert.deepEqual(decision.updatedInput.answers, { "実装方針は？": "自前実装", "着手はいつ？": "今週" });
+    assert.deepEqual(decision.updatedInput.questions, input.questions, "the questions go back untouched");
+  } finally {
+    bridge.closeApprovalServer();
+  }
+});
+
+test("only answers to questions that were actually asked are passed on", async () => {
+  const bridge = new ClaudeBridge(null, "bridge-question-filter");
+  const client = fakeClient();
+  bridge.clients.add(client);
+  try {
+    const socketPath = await bridge.ensureApprovalServer();
+    const pending = connectAndAsk(socketPath, {
+      toolName: "AskUserQuestion",
+      input: { questions: [{ question: "進めますか？", header: "確認", options: [{ label: "はい" }] }] },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    const [approval] = client.messagesOfType("approval");
+
+    // A client is not trusted to say what was asked, only what was chosen.
+    bridge.approval(approval.request, "accept", {
+      "進めますか？": "  はい  ",
+      "聞かれていない質問": "任意の文字列",
+      "空の回答": "   ",
+    });
+
+    const reply = await pending;
+    assert.deepEqual(reply.answers, { "進めますか？": "はい" });
+  } finally {
+    bridge.closeApprovalServer();
+  }
+});
+
+test("an ordinary tool call carries no answers back", async () => {
+  const bridge = new ClaudeBridge(null, "bridge-question-none");
+  const client = fakeClient();
+  bridge.clients.add(client);
+  try {
+    const socketPath = await bridge.ensureApprovalServer();
+    const pending = connectAndAsk(socketPath, { toolName: "Bash", input: { command: "npm test" } });
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    const [approval] = client.messagesOfType("approval");
+
+    bridge.approval(approval.request, "accept", { "npm test": "はい" });
+
+    const reply = await pending;
+    assert.equal(reply.decision, "accept");
+    assert.equal(reply.answers, undefined);
+  } finally {
+    bridge.closeApprovalServer();
+  }
+});
+
+// Declining a question is a real answer to give - "decide it yourself" - and it
+// has to read as that rather than as a blocked tool call.
+test("declining a question tells Claude to proceed with its premises stated", async () => {
+  const bridge = new ClaudeBridge(null, "bridge-question-decline");
+  const client = fakeClient();
+  bridge.clients.add(client);
+  try {
+    const socketPath = await bridge.ensureApprovalServer();
+    const pending = connectAndAsk(socketPath, {
+      toolName: "AskUserQuestion",
+      input: { questions: [{ question: "どちらにしますか？", header: "方針", options: [{ label: "A" }] }] },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    const [approval] = client.messagesOfType("approval");
+
+    bridge.approval(approval.request, "decline");
+
+    const reply = await pending;
+    assert.equal(reply.decision, "decline");
+    assert.match(reply.message, /前提を明示/);
+  } finally {
+    bridge.closeApprovalServer();
+  }
+});

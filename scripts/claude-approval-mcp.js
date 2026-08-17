@@ -17,8 +17,15 @@ function send(payload) {
   process.stdout.write(`${JSON.stringify(payload)}\n`);
 }
 
-function allowPayload(input) {
-  return { behavior: "allow", updatedInput: input || {} };
+// `AskUserQuestion` has no interactive surface under `claude -p`: allowed as-is
+// it comes straight back with "The user did not answer the questions." and the
+// turn carries on having asked into the void. Its schema calls `answers` the
+// field the permission component fills in, so the operator's choices ride back
+// on the allow as part of the tool's own input.
+function allowPayload(input, answers) {
+  const updatedInput = { ...(input || {}) };
+  if (answers && typeof answers === "object" && Object.keys(answers).length) updatedInput.answers = answers;
+  return { behavior: "allow", updatedInput };
 }
 
 function denyPayload(message) {
@@ -67,7 +74,7 @@ function askBridge(request) {
         finish(denyPayload(`承認応答を解釈できませんでした: ${error.message}`));
         return;
       }
-      finish(reply.decision === "accept" ? allowPayload(request.input) : denyPayload(reply.message));
+      finish(reply.decision === "accept" ? allowPayload(request.input, reply.answers) : denyPayload(reply.message));
     });
   });
 }

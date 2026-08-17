@@ -2726,6 +2726,10 @@ class SharedBridge {
       clients: this.clients.size,
       history: this.history,
       terminalHistory: this.terminalHistory,
+      // Codex reports no command list of its own, and the field has to be here
+      // to say so: without it a phone arriving from a Claude chat keeps that
+      // chat's commands on screen and offers `/context` to Codex.
+      slashCommands: [],
       run: this.runPayload(),
     };
   }
@@ -3431,6 +3435,39 @@ function approvalMcpConfig(socketPath) {
   });
 }
 
+const askQuestionToolName = "AskUserQuestion";
+const maxAnswerLength = 2000;
+
+function askUserQuestions(params = {}) {
+  if (params.toolName !== askQuestionToolName) return [];
+  const questions = params.input?.questions;
+  return Array.isArray(questions) ? questions.filter((question) => typeof question?.question === "string" && question.question) : [];
+}
+
+// The phone is not trusted to say what was asked, only what was chosen: answers
+// are matched back to the questions the tool actually sent, and anything else in
+// the message is dropped. Keyed by question text because that is the key
+// `AskUserQuestion` reads its answers under.
+function questionAnswersFor(params, answers) {
+  const questions = askUserQuestions(params);
+  if (!questions.length || !answers || typeof answers !== "object") return null;
+  const cleaned = {};
+  for (const question of questions) {
+    const value = answers[question.question];
+    if (typeof value !== "string") continue;
+    const trimmed = value.trim().slice(0, maxAnswerLength);
+    if (trimmed) cleaned[question.question] = trimmed;
+  }
+  return Object.keys(cleaned).length ? cleaned : null;
+}
+
+// The phone sends a slash command as ordinary prompt text, so the only way to
+// know a turn is one is to read it back off the front of the prompt.
+function slashCommandFromPrompt(text) {
+  const match = /^\s*\/([\w:-]+)/.exec(String(text || ""));
+  return match ? match[1].toLowerCase() : "";
+}
+
 function truncateStatusText(value, limit = 300) {
   const text = String(value || "").replace(/\s+/g, " ").trim();
   return text.length > limit ? `${text.slice(0, limit)}…` : text;
@@ -3519,6 +3556,7 @@ class ClaudeBridge {
     this.terminalHistory = terminalHistoryFromChatHistory(this.history);
     this.pendingApproval = null;
     this.slashCommands = [];
+    this.clearRequested = false;
     this.turnQueue = [];
     this.activeProcess = null;
     const idleState = idleRunStateFromHistory(this.history);
@@ -3636,27 +3674,35 @@ class ClaudeBridge {
         turnId: this.activeTurnId,
         pendingApproval: this.pendingApproval,
         updatedAt: Date.now(),
-        ...currentWorkspaceMeta(),
+        ...this.workspaceMeta(),
       };
     }
     if (this.activeTurnId || this.activeProcess) {
-      if (this.runState?.state === "interrupting") return { ...this.runState, ...currentWorkspaceMeta() };
+      if (this.runState?.state === "interrupting") return { ...this.runState, ...this.workspaceMeta() };
       return {
         state: this.streamingStarted ? "streaming" : "running",
         label: this.streamingStarted ? "回答生成中" : "Agent 処理中",
         turnId: this.activeTurnId,
         updatedAt: Date.now(),
-        ...currentWorkspaceMeta(),
+        ...this.workspaceMeta(),
       };
     }
     return {
       ...(this.runState || { state: "ready", label: "未実行・送信できます", turnId: null, updatedAt: Date.now() }),
-      ...currentWorkspaceMeta(),
+      ...this.workspaceMeta(),
     };
   }
 
+  // The session's folder, not this process's. Read without the argument, every
+  // run this bridge reported described the folder the bridge was started in:
+  // a chat opened in `00_受け渡し` was announced as `codex-remote-control-lab`
+  // on branch `develop`, and the phone believed the report over its own folder.
+  workspaceMeta() {
+    return currentWorkspaceMeta(this.workdir || workdir);
+  }
+
   setBridgeRunState(state, label, turnId = this.activeTurnId || null) {
-    const next = { state, label, turnId, updatedAt: Date.now(), ...currentWorkspaceMeta() };
+    const next = { state, label, turnId, updatedAt: Date.now(), ...this.workspaceMeta() };
     const previous = this.runState || {};
     if (state !== "approval") this.pendingApproval = null;
     this.runState = next;
@@ -3725,18 +3771,38 @@ class ClaudeBridge {
     if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify({ type, ...payload }));
   }
 
+  // Answers whether the key change carried a fresh `ready` out, so a caller
+  // that changed what `ready` says does not have to send a second one.
   promoteBridgeKey() {
-    if (!this.claudeSessionId || this.baseBridgeKey === this.claudeSessionId) return;
+    if (!this.claudeSessionId || this.baseBridgeKey === this.claudeSessionId) return false;
     const previousKey = this.bridgeKey;
     const nextKey = bridgeMapKey(this.provider, this.claudeSessionId);
-    if (bridges.has(nextKey) && bridges.get(nextKey) !== this) return;
-    if (bridges.get(previousKey) !== this) return;
+    if (bridges.has(nextKey) && bridges.get(nextKey) !== this) return false;
+    if (bridges.get(previousKey) !== this) return false;
     this.threadId = this.claudeSessionId;
     this.baseBridgeKey = this.claudeSessionId;
     this.bridgeKey = nextKey;
     bridges.delete(previousKey);
     bridges.set(this.bridgeKey, this);
     this.emit("ready", this.readyPayload());
+    return true;
+  }
+
+  // `/clear` is the one command that answers with nothing at all: the CLI forks
+  // a clean session, this bridge adopts the new id, and the phone is left
+  // showing a conversation the model can no longer see. Say it happened, drop
+  // the transcript that is no longer true, and follow the new session file
+  // instead of the abandoned one.
+  forgetClearedConversation() {
+    this.clearRequested = false;
+    this.history = [];
+    // The terminal pane is this bridge's own log of what it watched happen, not
+    // the model's memory, so clearing the model's does not falsify it.
+    this.emit("status", { text: "会話の記憶をリセットしました。ここから先は前のやり取りを引き継ぎません。" });
+    if (this.clients.size) {
+      this.unwatchSession();
+      this.watchSession();
+    }
   }
 
   interrupt() {
@@ -3817,6 +3883,8 @@ class ClaudeBridge {
     const promptText =
       summarizeClaudeAttachmentPrompt(text, pathOnlyAttachments) ||
       (imageBlocks.length ? "添付画像を確認してください。" : text);
+    // Only the turn that asked for it may drop the transcript.
+    this.clearRequested = slashCommandFromPrompt(promptText) === "clear";
     const displayText = savedAttachments.length ? `${text || "添付ファイルを確認してください。"}\n\n添付: ${savedAttachments.map((file) => file.name).join(", ")}` : text;
     const turnId = `claude-turn:${crypto.randomUUID()}`;
     this.activeTurnId = turnId;
@@ -3929,8 +3997,15 @@ class ClaudeBridge {
         return { ...routed, handled: "rateLimits" };
       }
       if (msg.session_id) {
+        // A turn keeps the id it resumed; `/clear` is what makes one fork.
+        const forked = Boolean(this.claudeSessionId) && msg.session_id !== this.claudeSessionId;
         this.claudeSessionId = msg.session_id;
-        this.promoteBridgeKey();
+        if (forked && this.clearRequested) {
+          // Before the key change, so no `ready` ever carries the transcript
+          // together with the session that no longer holds it.
+          this.forgetClearedConversation();
+          if (!this.promoteBridgeKey()) this.emit("ready", this.readyPayload());
+        } else this.promoteBridgeKey();
       }
       if (msg.type === "system" && msg.subtype === "init") {
         // Claude opens every turn by listing what it can do. Taking the list
@@ -4056,6 +4131,9 @@ class ClaudeBridge {
       if (!clearActiveProcess()) return;
       if (stdoutBuffer.trim()) handleLine(stdoutBuffer);
       this.interruptRequested = false;
+      // A `/clear` that never forked - it failed, or was interrupted - must not
+      // leave the next turn armed to drop the transcript.
+      this.clearRequested = false;
       // An empty `assistantText` on a clean exit is the whole bug in one field:
       // the turn ran, and nothing was appended for the phone to show.
       finishTurnDebug({
@@ -4189,7 +4267,7 @@ class ClaudeBridge {
       runState: this.runState?.state || null,
     });
 
-    const settle = (decision, message) => {
+    const settle = (decision, message, answers) => {
       if (!this.pendingApprovals.has(id)) {
         debugLog("claude.approval.settleIgnored", { id, decision, threadId: this.threadId });
         return;
@@ -4197,14 +4275,18 @@ class ClaudeBridge {
       clearTimeout(timer);
       this.pendingApprovals.delete(id);
       if (this.pendingApproval?.id === id) this.pendingApproval = null;
+      const chosen = questionAnswersFor(request.params, answers);
       debugLog("claude.approval.settled", {
         id,
         decision,
         message,
+        // The choices themselves are the operator's, so the log counts them
+        // rather than repeating them.
+        answered: chosen ? Object.keys(chosen).length : 0,
         threadId: this.threadId,
         socketDestroyed: socket.destroyed,
       });
-      if (!socket.destroyed) socket.end(`${JSON.stringify({ decision, message })}\n`);
+      if (!socket.destroyed) socket.end(`${JSON.stringify({ decision, message, answers: chosen || undefined })}\n`);
     };
 
     const timer = setTimeout(() => {
@@ -4248,13 +4330,14 @@ class ClaudeBridge {
       runState: this.runState?.state || null,
       pendingApprovalId: this.pendingApproval?.id || null,
     });
+    const questions = askUserQuestions(request.params);
     notifyBridgeEvent("approval_required", {
       provider: this.provider,
       threadId: this.threadId,
       turnId: this.activeTurnId,
       severity: "warning",
-      title: "承認待ち",
-      message: `${request.params.toolName} の承認待ちです`,
+      title: questions.length ? "質問待ち" : "承認待ち",
+      message: questions.length ? `${questions.length}件の質問に回答してください` : `${request.params.toolName} の承認待ちです`,
     });
   }
 
@@ -4291,7 +4374,7 @@ class ClaudeBridge {
     return true;
   }
 
-  approval(requestMsg, decision) {
+  approval(requestMsg, decision, answers) {
     const id = requestMsg?.id;
     const settle = id ? this.pendingApprovals?.get(id) : null;
     if (!settle) {
@@ -4307,9 +4390,14 @@ class ClaudeBridge {
       return;
     }
     const accepted = decision === "accept";
-    settle(accepted ? "accept" : "decline", accepted ? undefined : "ブラウザから拒否されました。");
+    const asked = askUserQuestions(requestMsg?.params).length > 0;
+    settle(
+      accepted ? "accept" : "decline",
+      accepted ? undefined : asked ? "回答せずに進めることを選びました。前提を明示して進めてください。" : "ブラウザから拒否されました。",
+      accepted ? answers : null,
+    );
     this.setBridgeRunState("running", "Agent 処理中", this.activeTurnId);
-    this.emit("status", { text: accepted ? "承認しました" : "拒否しました" });
+    this.emit("status", { text: asked ? (accepted ? "回答を送信しました" : "回答せずに進めます") : accepted ? "承認しました" : "拒否しました" });
   }
 }
 
@@ -4438,7 +4526,7 @@ async function bindBrowser(browser, phoneToken, threadId, provider = agentProvid
     }
     if (msg.type === "prompt") bridge.prompt(msg.text, msg.attachments, msg.options, msg.clientMessageId);
     if (msg.type === "interrupt") bridge.interrupt();
-    if (msg.type === "approval") bridge.approval(msg.request, msg.decision);
+    if (msg.type === "approval") bridge.approval(msg.request, msg.decision, msg.answers);
   });
 }
 
@@ -5500,6 +5588,8 @@ if (require.main === module) {
 module.exports = {
   ClaudeBridge,
   approvalMcpConfig,
+  askUserQuestions,
+  questionAnswersFor,
   bindBrowser,
   bookmarkIconFiles,
   bridgeIconVariant,

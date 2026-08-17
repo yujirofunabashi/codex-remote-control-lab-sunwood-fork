@@ -17,10 +17,8 @@
 // matched against a request - it opens with "Use when…", runs to a paragraph,
 // and is usually English - which is the wrong shape for a row on a phone.
 const commandDescriptions = {
-  agents: "サブエージェントの一覧と管理",
   autocompact: "自動要約が始まるサイズを変える",
   clear: "会話をリセットして最初から",
-  color: "プロンプトバーの色を変える",
   // `/design` on its own answers `Usage: /design consent | /design revoke`, so
   // the other two are its subcommands registered flat, and all three are about
   // the design-system authorization that /design-sync needs.
@@ -28,21 +26,18 @@ const commandDescriptions = {
   "design-consent": "Claude Design のデザインシステムへのアクセスを許可する",
   "design-revoke": "Claude Design のデザインシステムへのアクセスを取り消す",
   compact: "会話を要約して文脈を空ける",
-  config: "設定を開く",
+  config: "設定を key=value で変える",
   context: "文脈の使用量を内訳つきで見る",
   "code-review": "変更をレビューして指摘を出す",
   debug: "デバッグ情報を仕込んで原因を絞る",
   doctor: "インストール状態を診断する",
-  effort: "考える深さを変える",
-  "extra-usage": "クレジット残量を見る（/usage-credits の旧名）",
-  fast: "高速モードを切り替える",
+  "extra-usage": "/usage-credits の旧名。同じページを Mac 側で開く",
   goal: "完了条件を決めて、満たすまで作業を続けさせる",
   import: "Codex / Gemini CLI の設定を取り込む",
   init: "このリポジトリの CLAUDE.md を作る",
-  insights: "セッションを分析して傾向とつまずきを報告する",
+  insights: "セッションを分析し、Mac 側にレポートを書き出す",
   loop: "同じ作業を一定間隔で繰り返す",
-  mcp: "MCP サーバーの接続状態を見る",
-  model: "使うモデルを変える",
+  mcp: "MCP サーバーの接続状態を見る・つなぎ直す",
   recap: "セッションに戻ったとき経緯を思い出す",
   "reload-skills": "再起動せずスキルを読み込み直す",
   rename: "このセッションの名前を変える",
@@ -54,7 +49,7 @@ const commandDescriptions = {
   "team-onboarding": "利用状況からチーム向けの入門ガイドを作る",
   ultrareview: "クラウドで複数エージェントによるレビューを走らせる",
   usage: "利用量と上限までの余裕を見る",
-  "usage-credits": "クレジット残量を見る",
+  "usage-credits": "クレジット購入ページを Mac 側で開く",
   verify: "作業結果が本当に通るか検証する",
 
   // Skills that ship with the CLI. Their descriptions live inside the binary
@@ -119,7 +114,23 @@ const unavailableHeadless = new Set([
   "exit",
   "quit",
   "workflow-launch-exec",
+  // "Fast mode is not available in the Agent SDK" - the only answer it has for
+  // a bridge, whatever the CLI does in a terminal.
+  "fast",
+  // "The /agents wizard has been removed." The CLI still lists it; tapping it
+  // gets that sentence and a suggestion to edit files on the Mac.
+  "agents",
 ]);
+
+// Commands the CLI runs happily and the phone never sees the result of. Each
+// says it worked, so listing them is worse than leaving them out: the operator
+// is told a setting changed and it did not.
+//
+// `/model` and `/effort` answer "for this session only", and this bridge starts
+// a process per turn with `--model` and `--effort` always set from the phone's
+// own pickers - so the next turn overwrites both. The pickers are the surface
+// that works. `/color` tints a terminal prompt bar that no phone draws.
+const withoutEffectOnPhone = new Set(["model", "effort", "color"]);
 
 function isInternalCommand(name) {
   return name.startsWith("__");
@@ -160,7 +171,7 @@ function slashCommandCatalog({ commands = [], skills = [], descriptions = {} } =
   const catalog = [];
   for (const raw of commands || []) {
     const name = normalizeCommandName(raw);
-    if (!name || seen.has(name) || unavailableHeadless.has(name) || isInternalCommand(name)) continue;
+    if (!name || seen.has(name) || unavailableHeadless.has(name) || withoutEffectOnPhone.has(name) || isInternalCommand(name)) continue;
     seen.add(name);
     const kind = classifySlashCommand(name, skillSet);
     // The written-for-a-phone line first, then whatever the skill said itself.
@@ -181,4 +192,5 @@ module.exports = {
   shortDescription,
   slashCommandCatalog,
   unavailableHeadless,
+  withoutEffectOnPhone,
 };

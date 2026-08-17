@@ -82,15 +82,34 @@ test("internal plumbing commands are not offered", () => {
 
 test("built-ins come first, then skills, then plugins, alphabetical within each", () => {
   const catalog = slashCommandCatalog({
-    commands: ["claude-mem:do", "verify", "model", "agents", "batch"],
+    commands: ["claude-mem:do", "verify", "usage", "context", "batch"],
     skills: ["verify", "batch"],
   });
-  assert.deepEqual(catalog.map((item) => item.name), ["agents", "model", "batch", "verify", "claude-mem:do"]);
+  assert.deepEqual(catalog.map((item) => item.name), ["context", "usage", "batch", "verify", "claude-mem:do"]);
 });
 
 test("commands that only answer that they are unavailable are left out", () => {
-  const catalog = slashCommandCatalog({ commands: ["help", "clear", "heapdump"], skills: [] });
+  // `/fast` answers that fast mode is not available in the Agent SDK, and
+  // `/agents` that the wizard has been removed.
+  const catalog = slashCommandCatalog({ commands: ["help", "clear", "heapdump", "fast", "agents"], skills: [] });
   assert.deepEqual(catalog.map((item) => item.name), ["clear"]);
+});
+
+// The bridge starts a process per turn with `--model` and `--effort` set from
+// the phone's own pickers, so a session-only change made here is overwritten
+// before the operator can use it. `/color` tints a terminal nothing draws.
+test("commands the phone would overwrite or never show are left out", () => {
+  const catalog = slashCommandCatalog({ commands: ["model", "effort", "color", "context"], skills: [] });
+  assert.deepEqual(catalog.map((item) => item.name), ["context"]);
+});
+
+test("a description says what the command does here, not what it does in a terminal", () => {
+  const catalog = slashCommandCatalog({ commands: ["config", "usage-credits"], skills: [] });
+  const described = Object.fromEntries(catalog.map((item) => [item.name, item.description]));
+  // It opens no settings screen through the bridge; it takes `key=value`.
+  assert.match(described.config, /key=value/);
+  // The page opens on the Mac running the bridge, not on the phone.
+  assert.match(described["usage-credits"], /Mac/);
 });
 
 test("a repeated command is listed once", () => {

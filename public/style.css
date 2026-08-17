@@ -507,6 +507,30 @@ button {
   cursor: pointer;
 }
 
+/* A control that cannot be used has to look like it. Most of these are switched
+   off from JS with no style behind them - the 削除 on the bridge serving the
+   page, the send under a half-answered question, the thread rows held during a
+   live turn - so they read as ordinary buttons that simply do nothing when
+   tapped, and the only way to learn the state was to tap and watch for nothing
+   to happen. Element-level selectors, so the components that already dress
+   their own disabled state keep winning. */
+button:disabled,
+input:disabled,
+select:disabled,
+textarea:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+/* `disabled` is also used for "this is the one you are on" - 表示中, the active
+   machine chip. Fading those says unavailable when it means current, so they
+   opt out by declaring which they are. */
+button[aria-current="true"]:disabled,
+button[aria-pressed="true"]:disabled {
+  opacity: 1;
+  cursor: default;
+}
+
 .app-shell {
   display: grid;
   grid-template-columns: 292px minmax(0, 1fr);
@@ -1084,7 +1108,14 @@ button {
   margin: 14px 0 20px;
 }
 
+/* Scrolled a little way in, a heading leaves the list entirely and the rows it
+   named are left with the next project's heading as the nearest label - below
+   them, which is the wrong side to read a name from. Pinned, the rows on
+   screen always have their own project named above them. */
 .project-heading {
+  position: sticky;
+  top: 0;
+  z-index: 2;
   display: grid;
   grid-template-columns: 26px minmax(0, 1fr) 30px 28px;
   align-items: center;
@@ -1094,17 +1125,36 @@ button {
   border: 0;
   border-radius: 10px;
   padding: 0 8px;
-  background: transparent;
-  color: var(--muted);
+  /* Opaque or the rows scroll through the pinned heading. Flat `--sidebar`
+     rather than a slice of the drawer's gradient: the two are within a few
+     percent of each other anywhere the list reaches, and the rule below gives
+     the band an edge of its own regardless. */
+  background: var(--sidebar);
+  color: var(--nav-text);
   text-align: left;
   font-size: 16px;
-  font-weight: 570;
+  font-weight: 620;
+}
+
+/* Full-bleed, so it does not taper off with the heading's rounded corners the
+   way a bottom border or box-shadow would. */
+.project-heading::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 1px;
+  background: color-mix(in srgb, var(--line) 76%, transparent);
 }
 
 button.project-heading:hover,
 div.project-heading:hover,
 button.project-heading.active {
-  background: var(--hover);
+  /* `--hover` is a translucent tint, and a pinned heading needs to stay opaque,
+     so it goes on as a layer over the band rather than replacing it. */
+  background-color: var(--sidebar);
+  background-image: linear-gradient(var(--hover), var(--hover));
   color: var(--text);
 }
 
@@ -2107,7 +2157,9 @@ body.terminal-focus-mode .composer-footer {
   z-index: var(--layer-sheet);
   display: flex;
   flex-direction: column;
-  max-height: min(62dvh, 470px);
+  /* A session offers dozens of commands, and at 470px seven of them reached the
+     screen at a time. Tall enough to scan, still short of the header. */
+  max-height: min(72dvh, 560px);
   border: 1px solid var(--composer-border);
   border-radius: 16px;
   background: var(--card);
@@ -3378,6 +3430,151 @@ body[data-terminal-input-mode="keys"] .terminal-input-mode-button {
   font-size: 12px;
 }
 
+/* A question is not a warning - nothing is waiting on a risk judgement - so the
+   card drops the amber and reads as something to answer. */
+.approval[data-kind="question"] {
+  border-color: color-mix(in srgb, var(--accent) 38%, var(--line));
+  background: var(--card);
+  box-shadow: 0 14px 32px color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.approval[data-kind="question"] .approval-header span {
+  border-color: color-mix(in srgb, var(--accent) 38%, var(--line));
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+}
+
+/* Three questions with descriptions is taller than a phone, and a card that
+   pushes its own send button past the fold cannot be answered. */
+.approval-questions {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 46vh;
+  margin-bottom: 10px;
+  overflow-y: auto;
+}
+
+.approval-question {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 11px 12px;
+  background: color-mix(in srgb, var(--card) 60%, transparent);
+}
+
+.approval-question-header {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+/* The global `p` rule clips to one ellipsised line - it is written for the
+   header's subtitle - and a question cut off at "外部サービス…" is a question
+   nobody can answer. */
+.approval-question-text {
+  margin: 0;
+  overflow: visible;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 640;
+  line-height: 1.45;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.approval-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Full-width rows rather than a chip row: the description is the part that makes
+   an option decidable, and it needs the line to itself on a phone. */
+.approval-option {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  width: 100%;
+  min-height: 46px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: var(--card);
+  color: var(--text);
+  text-align: left;
+}
+
+.approval-option[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 9%, var(--card));
+}
+
+.approval-option-mark {
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+  border: 2px solid color-mix(in srgb, var(--muted) 60%, transparent);
+  border-radius: 50%;
+}
+
+.approval-option-mark[data-multi="true"] {
+  border-radius: 5px;
+}
+
+.approval-option[aria-pressed="true"] .approval-option-mark {
+  border-color: var(--accent);
+  background: var(--accent);
+  box-shadow: inset 0 0 0 3px var(--card);
+}
+
+.approval-option-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.approval-option-label {
+  font-size: 15px;
+  font-weight: 640;
+}
+
+.approval-option-description {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.approval-question-other {
+  width: 100%;
+  min-height: 42px;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  padding: 9px 11px;
+  background: var(--field);
+  color: var(--text);
+  font-size: 14px;
+}
+
+/* Two Japanese labels side by side on a 390px phone wrap mid-word - "回答せず進め
+   / る" - which reads as a broken button. They keep their line and give up
+   padding instead. */
+.approval[data-kind="question"] .actions button {
+  padding: 0 14px;
+  white-space: nowrap;
+}
+
+.approval-question-other:focus {
+  border-style: solid;
+  border-color: var(--accent);
+  outline: 0;
+}
+
 .approval-reason {
   width: 100%;
   min-height: 42px;
@@ -3603,6 +3800,12 @@ body[data-main-view="terminal"] .composer {
   border-left: 1px solid var(--line);
   scroll-snap-type: x proximity;
   -webkit-overflow-scrolling: touch;
+  /* The row has always scrolled, and a chip meeting the edge was simply cut in
+     half - the shape of a layout bug, not of "there is more this way". The fade
+     draws itself only when a chip actually reaches the edge, so a row that fits
+     looks untouched. */
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent);
 }
 
 /* Sits outside the scrolling chip row so it stays reachable at the edge, and
@@ -6084,19 +6287,6 @@ body[data-main-view="terminal"] .pwa-install-hint {
     display: none;
   }
 
-  .project-group {
-    margin: 8px 0 14px;
-  }
-
-  .project-heading {
-    grid-template-columns: 22px minmax(0, 1fr) 28px 26px;
-    gap: 7px;
-    min-height: 34px;
-    padding: 0 7px;
-    font-size: 15px;
-    font-weight: 540;
-  }
-
   .thread-item {
     grid-template-columns: 22px minmax(0, 1fr) auto;
     gap: 6px;
@@ -6449,11 +6639,13 @@ body[data-main-view="terminal"] .pwa-install-hint {
     min-height: 34px;
     padding: 0 6px;
     font-size: 15px;
-    font-weight: 540;
+    font-weight: 620;
   }
 
+  /* Nothing sits between a heading and the rows under it, so the space above it
+     is what has to say "a different project starts here". */
   .project-group {
-    margin: 10px 0 16px;
+    margin: 18px 0 6px;
   }
 
   .thread-item {
@@ -6512,6 +6704,30 @@ body[data-main-view="terminal"] .pwa-install-hint {
   body.terminal-command-focused .bottom-nav,
   body.terminal-focus-mode .bottom-nav {
     display: none;
+  }
+
+  /* Going down through a long answer, neither of these is in use, and together
+     they hold 212px of the 549px this screen gives the conversation. The reader
+     gets them back by scrolling up, by reaching the end, or by the run asking
+     for something - see `chromeMayHide` in main.js. Kept out of the flow rather
+     than merely transparent, so the log actually grows into the space. */
+  body.reading-mode .composer,
+  body.reading-mode .bottom-nav {
+    display: none;
+  }
+
+  /* The bar above carries this same pair, with the same unread badges, and sits
+     where a thumb already is. Up in the titlebar it cost the chat its name: at
+     390px the pair took 147px and left the title 94px, so a session arrived as
+     `Artifact pre…` - and the title is the only thing on screen that says which
+     chat this is. It comes back in exactly the states the bar is gone from. */
+  .main-view-toggle {
+    display: none;
+  }
+
+  body.composer-focused .main-view-toggle,
+  body.terminal-command-focused .main-view-toggle {
+    display: inline-grid;
   }
 
   .bottom-nav-item {
@@ -6578,7 +6794,15 @@ body[data-main-view="terminal"] .pwa-install-hint {
   }
 
   body.composer-focused .log {
-    padding-bottom: 150px;
+    padding-bottom: 112px;
+  }
+
+  /* With the keyboard up there is barely a screen left, and this row is the part
+     of the composer nobody uses mid-sentence: the run state is already in the
+     titlebar pill, and the chips and 下書き are things tapped instead of typing,
+     not while typing. They come back the moment the field is let go. */
+  body.composer-focused .composer-status-bar {
+    display: none;
   }
 
   body.composer-focused .composer {

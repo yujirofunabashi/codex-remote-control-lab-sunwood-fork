@@ -59,6 +59,13 @@ const history = [
   { type: "user", text: "モバイルの terminal compact レイアウトを確認したい。" },
   { type: "assistant", text: "ヘッダー・ステータス帯・ワンタップ入力・作業ストリップを点検しました。" },
   { type: "status", text: "前回完了・送信できます" },
+  // Long enough to be read rather than glanced at, which is what the chat does
+  // most of the time and the only state the reading-mode checks can run in.
+  ...Array.from({ length: 24 }, (_, index) =>
+    index % 2
+      ? { type: "assistant", text: `続けて点検しました。${"確認した箇所は記録に残しています。".repeat(3)}${index}` }
+      : { type: "user", text: `次の箇所も見てほしい ${index}` },
+  ),
 ];
 
 function isInsideDir(base, target) {
@@ -93,6 +100,9 @@ let hiddenProjects = [];
 // test; the mock exists so the request is answered rather than logged as an
 // error by the console check.
 let registryBackup = { version: 2, revision: 0, updatedAt: 0, bridges: [], deleted: [], tokens: {} };
+// Sessions the bridge is holding open beyond the one it starts with. Filled in
+// mid-run to put a chat's live session in front of the poll.
+let extraRuns = [];
 const restartCalls = [];
 
 async function mockApi(page, origin) {
@@ -103,6 +113,12 @@ async function mockApi(page, origin) {
     const activeRoot = artifactBridge ? artifactRepo : root;
     const activeRepoName = artifactBridge ? "artifact-workspace" : "codex-remote-control-lab";
     const activeBranch = artifactBridge ? "feature/artifacts" : "feature/mobile-terminal-compact";
+    // Asked on load and on every bridge switch, so leaving it out of the mock
+    // filled the console-error check with 404s and left it unable to fail for
+    // any other reason.
+    if (url.pathname === "/api/info") {
+      return route.fulfill({ json: { provider: "codex", providers: ["codex", "claude"], model: "gpt-5.5", workdir: activeRoot, tokenRequired: true } });
+    }
     if (url.pathname === "/api/bridge/info") {
       return route.fulfill({
         json: {
@@ -195,6 +211,7 @@ async function mockApi(page, origin) {
                 gitBranch: activeBranch,
               },
             },
+            ...extraRuns,
           ],
         },
       });
@@ -209,10 +226,17 @@ async function mockWebSocket(page) {
     class MockWebSocket extends EventTarget {
       constructor(url) {
         super();
+        // Held so a check can play the bridge and push a message mid-run.
+        window.__mockSocket = this;
         window.__mockWebSocketUrls.push(String(url || ""));
         const target = new URL(String(url || ""), location.href);
-        const requestedThreadId = target.searchParams.get("thread") || payload.threadId;
-        const requestedThread = payload.threadsById[requestedThreadId] || payload.threadsById[payload.threadId] || {};
+        // A chat started in a chosen folder arrives with no id of its own, and
+        // the bridge answers with the one it just opened. Falling back to the
+        // id of the chat that was on screen would put the session back in that
+        // chat's folder, which is the case worth exercising here.
+        const fresh = target.searchParams.get("fresh") === "1";
+        const requestedThreadId = target.searchParams.get("thread") || (fresh ? payload.freshThreadId : payload.threadId);
+        const requestedThread = payload.threadsById[requestedThreadId] || (fresh ? {} : payload.threadsById[payload.threadId]) || {};
         const requestedWorkdir = target.searchParams.get("workdir") || requestedThread.cwd || payload.workdir;
         const repoName = requestedWorkdir.split(/[\\/]/).filter(Boolean).pop() || payload.repoName;
         const threadTitle = requestedThread.name || requestedThread.displayTitle || payload.threadTitle || "Mobile terminal compact polish";
@@ -266,6 +290,7 @@ async function mockWebSocket(page) {
   }, {
     type: "ready",
     threadId: "thread-mobile-compact",
+    freshThreadId: "thread-fresh-folder",
     history,
     model: "gpt-5.5",
     clients: 1,
@@ -427,7 +452,9 @@ async function run() {
       userFacingLabels.fleet === "artifact-workspace" && userFacingLabels.bridge === "artifact-workspace",
       JSON.stringify(userFacingLabels),
     );
-    check("main tabs identify Codex and Terminal views", userFacingLabels.chatTab?.includes("Codex") && userFacingLabels.logTab?.includes("Terminal"), JSON.stringify(userFacingLabels));
+    // The log tab was translated and this expectation was not, so it had been
+    // asserting the one word on that tab that is no longer there.
+    check("main tabs identify Codex and Terminal views", userFacingLabels.chatTab?.includes("Codex") && userFacingLabels.logTab?.includes("ターミナル"), JSON.stringify(userFacingLabels));
     check("status panel is named for connection state", userFacingLabels.statusTitle === "接続状態", JSON.stringify(userFacingLabels));
     await page.locator("#bridgePill").click();
     await page.waitForTimeout(120);
@@ -977,8 +1004,11 @@ async function run() {
       await page.screenshot({ path: path.join(shotsDir, "chat.png") });
     }
 
-    // Codex / Terminal switch still works.
-    await page.locator("#terminalViewButton").click();
+    // Codex / Terminal switch still works. From the bar below, which is where a
+    // thumb reaches it: the titlebar keeps the same pair for the states that bar
+    // is hidden in, so tapping it here would test a control this screen no
+    // longer offers.
+    await page.locator('[data-nav="terminal"]').click();
     await page.waitForTimeout(250);
     check("terminal view activates", (await page.locator("#mainTerminalView:not(.hidden)").count()) === 1);
     check("terminal command input is available", (await page.locator("#terminalCommandInput").count()) === 1);
@@ -1051,10 +1081,121 @@ async function run() {
     if (wantShots) await page.screenshot({ path: path.join(shotsDir, "terminal.png") });
 
     // Focus the composer: it must stay fully inside the visible viewport (issue 1).
+    // From the titlebar, deliberately: the terminal's own input still has focus
+    // here, so the bar below is hidden and this is the way back to the chat.
     await page.locator("#chatViewButton").click();
-    await page.waitForTimeout(150);
+    // The terminal input's focus leaves on its own schedule, and both bars below
+    // read that flag. Waiting for the state rather than for a moment, because a
+    // fixed wait made this pass or fail by luck.
+    await page.waitForFunction(
+      () => !document.body.classList.contains("terminal-command-focused") && !document.body.classList.contains("composer-focused"),
+    );
+    // One switch on screen at a time, and the title takes back what it costs.
+    const headerAtRest = await page.evaluate(() => ({
+      switchVisible: Boolean(document.querySelector(".main-view-toggle")?.getBoundingClientRect().width),
+      barVisible: Boolean(document.querySelector(".bottom-nav")?.getBoundingClientRect().height),
+      titleWidth: Math.round(document.querySelector("#threadTitle")?.getBoundingClientRect().width || 0),
+      // Which state the body thinks it is in, so a failure here says why.
+      body: document.body.className,
+    }));
+    check(
+      "at rest the titlebar leaves the switching to the bar below",
+      headerAtRest.switchVisible === false && headerAtRest.barVisible === true && headerAtRest.titleWidth >= 180,
+      JSON.stringify(headerAtRest),
+    );
+    // A chat long enough to read: the composer and the bar below it step out of
+    // the way on the way down, and come back on the way up.
+    const reading = await page.evaluate(async () => {
+      const prompt = document.querySelector("#prompt");
+      prompt.value = "";
+      prompt.blur();
+      const settle = () => new Promise((resolve) => setTimeout(resolve, 160));
+      await settle();
+      const log = document.querySelector("#log");
+      log.scrollTop = 0;
+      await settle();
+      // Getting to the top is itself reading, so the controls are already gone;
+      // ask for them back to have something to measure the gain against.
+      log.click();
+      await settle();
+      const resting = Math.round(log.clientHeight);
+      log.scrollTop += 400;
+      await settle();
+      log.scrollTop += 400;
+      await settle();
+      const readingState = {
+        on: document.body.classList.contains("reading-mode"),
+        conversation: Math.round(log.clientHeight),
+        latestVisible: !document.querySelector("#chatLatestButton").classList.contains("hidden"),
+        // How much there was to read, and how far down it got: a failure here is
+        // otherwise indistinguishable from a chat that was too short to scroll.
+        scrollHeight: Math.round(log.scrollHeight),
+        scrollTop: Math.round(log.scrollTop),
+      };
+      // Going back up through an answer is reading too, so it stays out of the
+      // way; a tap on what is being read is what asks for it back.
+      log.scrollTop -= 200;
+      await settle();
+      const backUp = document.body.classList.contains("reading-mode");
+      log.click();
+      await settle();
+      const afterTap = document.body.classList.contains("reading-mode");
+      // A draft is the one thing on that bar nobody would want taken away.
+      log.scrollTop = 0;
+      prompt.value = "書きかけ";
+      await settle();
+      log.scrollTop += 500;
+      await settle();
+      const withDraft = document.body.classList.contains("reading-mode");
+      prompt.value = "";
+      log.scrollTop = log.scrollHeight;
+      await settle();
+      return { resting, ...readingState, backUp, afterTap, withDraft, atEnd: document.body.classList.contains("reading-mode") };
+    });
+    check(
+      "reading down a long answer hands its space to the conversation",
+      reading.on === true && reading.conversation >= reading.resting + 180 && reading.latestVisible === true,
+      JSON.stringify(reading),
+    );
+    check(
+      "reading back up keeps the space, and a tap hands the controls back",
+      reading.backUp === true && reading.afterTap === false,
+      JSON.stringify(reading),
+    );
+    check(
+      "the end of the chat and an unsent draft both keep the composer",
+      reading.atEnd === false && reading.withDraft === false,
+      JSON.stringify(reading),
+    );
+
     await page.locator("#prompt").focus();
     await page.waitForTimeout(200);
+    const headerWhileTyping = await page.evaluate(() => {
+      const shown = (sel) => {
+        const el = document.querySelector(sel);
+        return Boolean(el) && getComputedStyle(el).display !== "none" && Boolean(el.getBoundingClientRect().height);
+      };
+      return {
+        switchVisible: Boolean(document.querySelector(".main-view-toggle")?.getBoundingClientRect().width),
+        barVisible: shown(".bottom-nav"),
+        statusRowVisible: shown(".composer-status-bar"),
+        composer: Math.round(document.querySelector(".composer")?.getBoundingClientRect().height || 0),
+      };
+    });
+    check(
+      // The bar below is hidden under the keyboard, so this is the only way out
+      // of the chat while typing.
+      "while typing the switch comes back to the titlebar",
+      headerWhileTyping.switchVisible === true && headerWhileTyping.barVisible === false,
+      JSON.stringify(headerWhileTyping),
+    );
+    check(
+      // The run state is in the titlebar pill, and the chips are tapped instead
+      // of typing rather than during it.
+      "the composer drops its status row while the keyboard is up",
+      headerWhileTyping.statusRowVisible === false && headerWhileTyping.composer <= 130,
+      JSON.stringify(headerWhileTyping),
+    );
     const composerFit = await page.evaluate(() => {
       const rect = document.querySelector("#composer").getBoundingClientRect();
       const style = getComputedStyle(document.querySelector("#composer"));
@@ -1104,7 +1245,169 @@ async function run() {
     if (wantShots) await page.screenshot({ path: path.join(shotsDir, "keyboard-open.png") });
     await page.evaluate(() => document.body.classList.remove("keyboard-open"));
 
+    // A folder picked from the drawer has to survive the bridge poll that comes
+    // seven seconds later. The bridge reports the sessions it is holding open,
+    // and a chat nothing has been sent to yet is not among them; reading that
+    // silence as "this chat is in the bridge's own folder" renamed the header to
+    // the repo the bridge was started in. At this width that header is the only
+    // thing on screen that names the folder - the workspace strip is hidden - so
+    // the folder simply disappeared from the chat.
+    await page.locator("#mobileThreads").click();
+    await page.waitForTimeout(200);
+    const drawerGroup = page.locator(".project-group", { hasText: "drawer-workspace" }).first();
+    check("the chosen project offers a new chat", (await drawerGroup.locator(".project-new-thread").count()) === 1);
+    await drawerGroup.locator(".project-new-thread").first().click();
+    await page.waitForTimeout(500);
+    const pickedFolder = await page.evaluate(() => document.querySelector("#bridgePillLabel")?.textContent?.trim() || "");
+    check("a folder picked from the drawer names itself in the header", pickedFolder === "drawer-workspace", pickedFolder);
+    await page.waitForTimeout(7600);
+    const afterPoll = await page.evaluate(() => ({
+      pill: document.querySelector("#bridgePillLabel")?.textContent?.trim() || "",
+      workdir: new URL([...(window.__mockWebSocketUrls || [])].pop() || "ws://x/", location.href).searchParams.get("workdir") || "",
+    }));
+    check(
+      "and the bridge poll does not move the chat back to the bridge's folder",
+      afterPoll.pill === "drawer-workspace" && afterPoll.workdir === drawerRepo,
+      JSON.stringify(afterPoll),
+    );
+    // The shape a bridge that has not been updated still sends: the entry reads
+    // the session's folder correctly, while the run nested inside it describes
+    // the folder the bridge process itself was started in. Believing the inner
+    // one renamed the chat to that repo within seconds of opening it.
+    extraRuns = [
+      {
+        threadId: "thread-fresh-folder",
+        clients: 1,
+        ready: true,
+        workdir: drawerRepo,
+        repoName: "drawer-workspace",
+        workspaceLocation: drawerRepo,
+        gitBranch: "",
+        run: { state: "ready", repoName: "artifact-workspace", workspaceLocation: ".", gitBranch: "feature/artifacts" },
+      },
+    ];
+    await page.waitForTimeout(7600);
+    const afterRunReport = await page.evaluate(() => ({
+      pill: document.querySelector("#bridgePillLabel")?.textContent?.trim() || "",
+      meta: document.querySelector("#bridgePillMeta")?.textContent?.trim() || "",
+    }));
+    check(
+      "a live session is named by its own folder, not by the bridge's",
+      afterRunReport.pill === "drawer-workspace" && !afterRunReport.meta.includes("feature/artifacts"),
+      JSON.stringify(afterRunReport),
+    );
+    extraRuns = [];
+
+    // The command sheet is filled from what the session itself reported, and a
+    // chat that reports nothing has to empty it: a phone arriving from a Claude
+    // chat kept that chat's commands on screen and offered `/context` to Codex.
+    await page.evaluate(() => {
+      document.querySelector("#prompt")?.blur();
+      window.__mockSocket.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "slashCommands",
+            slashCommands: [
+              { name: "context", kind: "builtin", description: "文脈の使用量を内訳つきで見る" },
+              { name: "verify", kind: "skill", description: "作業結果が本当に通るか検証する" },
+            ],
+          }),
+        }),
+      );
+    });
+    await page.waitForTimeout(150);
+    await page.locator('[data-nav="commands"]').click();
+    await page.waitForTimeout(200);
+    const commandSheet = await page.evaluate(() => ({
+      names: [...document.querySelectorAll(".command-item .command-name")].map((item) => item.textContent),
+      groups: [...document.querySelectorAll(".command-group")].map((item) => item.textContent),
+      // A row has to be reachable by thumb, and legible without one.
+      rowHeight: Math.round(document.querySelector(".command-item")?.getBoundingClientRect().height || 0),
+      described: [...document.querySelectorAll(".command-item .command-description")].length,
+    }));
+    check(
+      "the command sheet lists what the session reported, grouped and described",
+      commandSheet.names.join(",") === "/context,/verify" &&
+        commandSheet.groups.join(",") === "組み込み,スキル" &&
+        commandSheet.described === 2 &&
+        commandSheet.rowHeight >= 44,
+      JSON.stringify(commandSheet),
+    );
+    if (wantShots) await page.screenshot({ path: path.join(shotsDir, "commands.png") });
+    await page.locator(".command-item").first().click();
+    await page.waitForTimeout(150);
+    const commandTapped = await page.evaluate(() => ({
+      prompt: document.querySelector("#prompt")?.value || "",
+      hidden: document.querySelector("#commandSheet")?.classList.contains("hidden"),
+      focused: document.activeElement?.id || "",
+    }));
+    check(
+      // Inserted rather than sent: several of them take an argument.
+      "tapping a command leaves it in the composer, ready for its argument",
+      commandTapped.prompt === "/context " && commandTapped.hidden === true && commandTapped.focused === "prompt",
+      JSON.stringify(commandTapped),
+    );
+    const commandsAfterCodex = await page.evaluate(async (fixture) => {
+      const prompt = document.querySelector("#prompt");
+      prompt.value = "";
+      prompt.blur();
+      // The chat the phone is already on, re-announced. Naming any other one
+      // would move it, and the checks after this read where it ended up.
+      const current = new URL([...window.__mockWebSocketUrls].reverse()[0]);
+      const workdir = current.searchParams.get("workdir") || "";
+      // The shape a Codex bridge sends: no command list at all.
+      window.__mockSocket.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({
+            type: "ready",
+            provider: "codex",
+            threadId: current.searchParams.get("thread") || "",
+            workdir,
+            workspaceLocation: workdir,
+            repoName: workdir.split("/").filter(Boolean).pop() || "",
+            model: "gpt-5.5",
+            clients: 1,
+            history: fixture.history,
+            terminalHistory: [],
+            run: { state: "done", label: "完了しました", updatedAt: Date.now() },
+          }),
+        }),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      document.querySelector('[data-nav="commands"]').click();
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      return {
+        items: document.querySelectorAll(".command-item").length,
+        empty: document.querySelector(".command-empty")?.textContent || "",
+      };
+    }, { history });
+    check(
+      "a chat that reports no commands does not inherit the last one's",
+      commandsAfterCodex.items === 0 && commandsAfterCodex.empty.includes("このチャットにコマンドはありません"),
+      JSON.stringify(commandsAfterCodex),
+    );
+    await page.evaluate(() => document.querySelector("#commandSheetClose")?.click());
+
     check("no console / page errors", consoleErrors.length === 0, consoleErrors.join(" | "));
+
+    // And it has to survive the reload a bridge restart puts the phone through.
+    // Nothing on the Mac can answer for this chat's folder yet - no transcript
+    // to read it from, and the thread list is built from transcripts - so the
+    // folder exists only here. Dialling back in with this bridge's folder
+    // instead did not merely mislabel the chat: the session was reopened there,
+    // and the work went to the wrong folder for real.
+    await page.reload({ waitUntil: "networkidle" });
+    await page.waitForTimeout(1200);
+    const afterReload = await page.evaluate(() => ({
+      pill: document.querySelector("#bridgePillLabel")?.textContent?.trim() || "",
+      dialled: (window.__mockWebSocketUrls || []).map((url) => new URL(url, location.href).searchParams.get("workdir") || ""),
+      thread: new URL(location.href).searchParams.get("thread") || "",
+    }));
+    check(
+      "a restart brings the chat back up in the folder it was opened in",
+      afterReload.thread === "thread-fresh-folder" && afterReload.pill === "drawer-workspace" && afterReload.dialled.every((dir) => dir === drawerRepo),
+      JSON.stringify(afterReload),
+    );
 
     // Last on purpose: a restart that goes through reloads the page 1.8s later,
     // which would pull the ground out from under anything checked after it.
