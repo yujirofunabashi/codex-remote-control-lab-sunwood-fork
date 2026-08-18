@@ -57,11 +57,34 @@ function writeSession(cwd, id, prompt, at = Date.now()) {
   return file;
 }
 
+// A long session does not stay in one directory: every turn records the folder
+// it ran in, and a turn that worked in a subfolder records that. The transcript
+// still lives under the folder `claude` was started in, so the two disagree.
+function writeMovedSession(startCwd, laterCwd, id, at = Date.now()) {
+  const file = writeSession(startCwd, id, "started at the top of the repo", at);
+  fs.appendFileSync(
+    file,
+    `${JSON.stringify({
+      type: "user",
+      cwd: laterCwd,
+      sessionId: id,
+      timestamp: new Date(at + 1000).toISOString(),
+      message: { role: "user", content: [{ type: "text", text: "then went into a subfolder" }] },
+    })}\n`,
+  );
+  fs.utimesSync(file, at / 1000, at / 1000);
+  return file;
+}
+
 const activeId = "aaaaaaaa-0000-0000-0000-000000000001";
 const otherId = "bbbbbbbb-0000-0000-0000-000000000002";
+const movedId = "dddddddd-0000-0000-0000-000000000004";
+const movedSubdir = path.join(otherWorkdir, "subproject");
 
 writeSession(activeWorkdir, activeId, "work in the active folder");
 writeSession(otherWorkdir, otherId, "work from before the workdir changed");
+fs.mkdirSync(movedSubdir, { recursive: true });
+writeMovedSession(otherWorkdir, movedSubdir, movedId);
 
 test.after(() => {
   for (const dir of [projectDirFor(activeWorkdir), projectDirFor(otherWorkdir), activeWorkdir, otherWorkdir]) {
@@ -81,6 +104,17 @@ test("each session reports the directory it belongs to, so it can be grouped", a
   const threads = (await claudeThreadListPayload()).data;
   assert.equal(threads.find((thread) => thread.id === otherId).cwd, otherWorkdir);
   assert.equal(threads.find((thread) => thread.id === activeId).cwd, activeWorkdir);
+});
+
+test("a session that worked in a subfolder still belongs to the folder it was started in", async () => {
+  // Reading the newest cwd instead filed it under the subfolder, where no
+  // transcript by that id exists. The row was drawn under the wrong heading and
+  // opening it ran `claude --resume` somewhere the CLI could not find it, so
+  // the chat came back as an error rather than its own history.
+  const threads = (await claudeThreadListPayload()).data;
+  assert.equal(threads.find((thread) => thread.id === movedId).cwd, otherWorkdir);
+  assert.equal(new ClaudeBridge(movedId, `${movedId}::k`).workdir, otherWorkdir);
+  assert.equal(claudeSessionFilePath(movedId), path.join(projectDirFor(otherWorkdir), `${movedId}.jsonl`));
 });
 
 test("a session outside the active workdir can still be located by id", async () => {

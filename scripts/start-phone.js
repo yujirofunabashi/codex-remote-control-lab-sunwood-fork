@@ -2545,7 +2545,15 @@ function parseClaudeSessionFile(filePath, stat, text) {
   let customTitle = "";
   let firstUserText = "";
   let lastUserText = "";
-  let cwd = workdir;
+  // The folder the session was started in, not the last one a turn happened to
+  // run in. Claude Code files a transcript under the directory `claude` was
+  // launched from and never re-files it, so `--resume` finds the session from
+  // there and nowhere else. Taking the newest cwd instead put a long session
+  // that had cd'd into a subfolder under that subfolder's heading, and opening
+  // it from there resumed in a directory whose project slug holds no transcript
+  // by that id — the CLI exits, and the chat the phone had just opened is left
+  // showing an error instead of its own history.
+  let cwd = "";
   let createdAt = Number.POSITIVE_INFINITY;
   let updatedAt = stat.mtimeMs;
 
@@ -2557,7 +2565,7 @@ function parseClaudeSessionFile(filePath, stat, text) {
     } catch {
       continue;
     }
-    if (item.cwd) cwd = item.cwd;
+    if (!cwd && item.cwd) cwd = item.cwd;
     if (item.type === "ai-title" && item.aiTitle) title = String(item.aiTitle);
     if (item.type === "custom-title" && item.customTitle) customTitle = String(item.customTitle);
     const timestamp = Date.parse(item.timestamp || "");
@@ -2588,7 +2596,7 @@ function parseClaudeSessionFile(filePath, stat, text) {
       id: sessionId,
       name: customTitle || title || fallbackTitle,
       preview: lastUserText || fallbackTitle,
-      cwd,
+      cwd: cwd || workdir,
       provider: "claude",
       updatedAt,
       updated_at: updatedAt,
