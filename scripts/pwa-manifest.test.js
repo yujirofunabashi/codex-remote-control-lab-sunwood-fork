@@ -125,3 +125,69 @@ test("service worker avoids caching tokenized API and bridge traffic", () => {
   assert.match(source, /proxy/);
   assert.match(source, /appPath === "\/bridge"/);
 });
+
+const { serveIndex } = require("./start-phone");
+
+function fakeResponse() {
+  const res = { statusCode: 0, headers: {}, body: "" };
+  res.writeHead = (status, headers) => {
+    res.statusCode = status;
+    res.headers = headers || {};
+  };
+  res.end = (chunk) => {
+    res.body += chunk || "";
+  };
+  return res;
+}
+
+test("an explicit provider on the install page makes an icon for that provider", () => {
+  const token = "secret123";
+  for (const provider of ["codex", "claude"]) {
+    const req = { url: `/install?token=${token}&provider=${provider}`, headers: { host: "127.0.0.1:45214" } };
+    const manifestUrl = new URL(manifestHrefForRequest(req, token), "http://127.0.0.1:45214/install");
+    assert.equal(manifestUrl.searchParams.get("provider"), provider);
+
+    const manifest = manifestPayloadForRequest(manifestUrl, token);
+    assert.equal(manifest.start_url, `/install?provider=${provider}#token=${token}`);
+    assert.doesNotMatch(manifest.start_url, /[?&]token=/);
+    assert.match(manifest.name, provider === "codex" ? /^Codex Remote / : /^Claude Remote /);
+    assert.match(manifest.short_name, provider === "codex" ? /^Codex / : /^Claude /);
+    assert.match(manifest.id, new RegExp(`/codex-remote-${provider}-\\d+$`));
+    assert.match(manifest.description, new RegExp(`\\(${provider}:`));
+    assert.ok(manifest.icons.length >= 2);
+    for (const icon of manifest.icons) assert.match(icon.src, new RegExp(provider));
+  }
+});
+
+test("an unknown provider on the install page is ignored", () => {
+  const token = "secret123";
+  const req = { url: `/install?token=${token}&provider=gemini`, headers: { host: "127.0.0.1:45214" } };
+  const href = manifestHrefForRequest(req, token);
+  assert.doesNotMatch(href, /provider=/);
+  const manifest = manifestPayloadForRequest(new URL(href, "http://127.0.0.1:45214/install"), token);
+  assert.equal(manifest.start_url, `/install#token=${token}`);
+});
+
+test("the install page carries the requested provider's icon, name and manifest", () => {
+  const token = "secret123";
+  const res = fakeResponse();
+  serveIndex(
+    { url: `/install?token=${token}&provider=codex`, headers: { host: "127.0.0.1:45214" } },
+    res,
+    { includeManifest: true, standalone: true, phoneToken: token },
+  );
+  assert.equal(res.statusCode, 200);
+  assert.match(res.body, /<title>Codex Remote [^<]+<\/title>/);
+  assert.match(res.body, /<meta name="apple-mobile-web-app-title" content="Codex [^"]+" \/>/);
+  assert.match(res.body, /<link rel="apple-touch-icon" sizes="180x180" href="[^"]*codex[^"]*" \/>/);
+  assert.match(res.body, /<link rel="manifest" href="site\.webmanifest\?[^"]*provider=codex[^"]*" \/>/);
+
+  const plain = fakeResponse();
+  serveIndex({ url: `/install?token=${token}`, headers: { host: "127.0.0.1:45214" } }, plain, {
+    includeManifest: true,
+    standalone: true,
+    phoneToken: token,
+  });
+  assert.equal(plain.statusCode, 200);
+  assert.doesNotMatch(plain.body, /provider=/);
+});

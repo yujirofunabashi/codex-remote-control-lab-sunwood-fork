@@ -432,9 +432,11 @@ const codexPort = Number(
 );
 const codexSocketPath = process.env.CODEX_APP_SERVER_SOCK || "";
 const codexUrl = process.env.CODEX_APP_SERVER_URL || (codexSocketPath ? "ws://codex-app-server/rpc" : `ws://127.0.0.1:${codexPort}`);
-// A Claude-default bridge has no use for the Codex app-server, and starting one
-// anyway makes the bridge depend on the codex binary being present and runnable.
-const shouldStartCodexServer = isCodexProvider && !process.env.CODEX_APP_SERVER_URL && !codexSocketPath;
+// The Codex app-server is started on demand, not at boot. A Claude-default
+// bridge only reaches for it once a request names the codex provider, so the
+// bridge does not depend on the codex binary until someone actually asks for
+// Codex. A configured URL or socket means an external server owns it instead.
+const shouldStartCodexServer = !process.env.CODEX_APP_SERVER_URL && !codexSocketPath;
 // Set by the `phone:loop*` supervisor scripts. Exiting 42 only restarts the
 // bridge when something is watching for that code.
 const bridgeIsSupervised = /^(1|true|yes|on)$/i.test(process.env.PHONE_SUPERVISED || "");
@@ -2031,6 +2033,8 @@ function manifestHrefForRequest(req, phoneToken) {
   const safeBasePath = safeProxyBasePath(url.searchParams.get("base"));
   const params = new URLSearchParams();
   if (safeBasePath) params.set("base", safeBasePath);
+  const provider = requestedAppProvider(url);
+  if (provider) params.set("provider", provider);
   // A Home Screen web app has storage isolated from Safari. On the protected
   // install page, give iOS an explicit start_url that can seed that isolated
   // storage. Normal manifests remain public and token-free.
@@ -2107,37 +2111,62 @@ function bookmarkIconFiles({
   );
 }
 
-function bookmarkIconFileName() {
-  return bookmarkIconFiles().icon180;
+// `/install?token=...&provider=codex` on a Claude-default bridge (or the other
+// way round) makes a Home Screen icon that opens in the other provider. The
+// page title, the icon and the manifest all follow that parameter; without it
+// the bridge's own default provider and names are used, as before.
+function requestedAppProvider(url) {
+  const value = String(url?.searchParams?.get("provider") || "")
+    .trim()
+    .toLowerCase();
+  return value === "codex" || value === "claude" ? value : "";
 }
 
-function bookmarkIcon512FileName() {
-  return bookmarkIconFiles().icon512;
+function appIdentityForProvider(provider = "") {
+  if (!provider) return { provider: agentProvider, appId: phoneAppId, name: phoneAppName, shortName: phoneAppShortName };
+  const normalizedProvider = normalizeProvider(provider);
+  const machine = phoneMachineLabel || String(uiPort);
+  return {
+    provider: normalizedProvider,
+    appId: appIdSlug("", `${normalizedProvider}-${uiPort}`),
+    name: `${defaultAppNameForProvider(normalizedProvider)} ${machine}`,
+    shortName: `${defaultAppShortNameForProvider(normalizedProvider)} ${machine}`,
+  };
 }
 
-function iconHrefForRequest() {
-  return staticAssetHref(bookmarkIconFileName());
+function bookmarkIconFileName(provider = "") {
+  return bookmarkIconFiles(provider ? { provider } : {}).icon180;
+}
+
+function bookmarkIcon512FileName(provider = "") {
+  return bookmarkIconFiles(provider ? { provider } : {}).icon512;
+}
+
+function iconHrefForRequest(provider = "") {
+  return staticAssetHref(bookmarkIconFileName(provider));
 }
 
 function serveIndex(req, res, { includeManifest = true, standalone = true, phoneToken = "" } = {}) {
   const indexPath = path.join(root, "public", "index.html");
-  const pageTitle = standalone ? phoneAppName : phoneAppShortName;
+  const identity = appIdentityForProvider(requestedAppProvider(new URL(req.url, `http://${req.headers.host}`)));
+  const pageTitle = standalone ? identity.name : identity.shortName;
+  const iconHref = iconHrefForRequest(identity.provider);
   let html = fs.readFileSync(indexPath, "utf8");
   html = html
     .replace(/<title>[^<]*<\/title>/, `<title>${escapeHtml(pageTitle)}</title>`)
     .replace(
       /<link rel="icon" type="image\/png" sizes="192x192" href="icon-192\.png" \/>/,
-      `<link rel="icon" type="image/png" sizes="180x180" href="${escapeHtmlAttribute(iconHrefForRequest())}" />`,
+      `<link rel="icon" type="image/png" sizes="180x180" href="${escapeHtmlAttribute(iconHref)}" />`,
     )
     .replace(
       /<link rel="apple-touch-icon" href="apple-touch-icon\.png" \/>/,
-      `<link rel="apple-touch-icon" sizes="180x180" href="${escapeHtmlAttribute(iconHrefForRequest())}" />`,
+      `<link rel="apple-touch-icon" sizes="180x180" href="${escapeHtmlAttribute(iconHref)}" />`,
     )
     .replace(/<link rel="stylesheet" href="style\.css" \/>/, `<link rel="stylesheet" href="${escapeHtmlAttribute(staticAssetHref("style.css"))}" />`)
     .replace(/<script src="main\.js"><\/script>/, `<script src="${escapeHtmlAttribute(staticAssetHref("main.js"))}"></script>`)
     .replace(
       /<meta name="apple-mobile-web-app-title" content="[^"]*" \/>/,
-      `<meta name="apple-mobile-web-app-title" content="${escapeHtmlAttribute(phoneAppShortName)}" />`,
+      `<meta name="apple-mobile-web-app-title" content="${escapeHtmlAttribute(identity.shortName)}" />`,
     );
   if (!standalone) {
     html = html
@@ -2179,29 +2208,34 @@ function manifestPayloadForRequest(url, phoneToken = "") {
   const manifestPath = path.join(root, "public", "site.webmanifest");
   const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
   const safeBasePath = safeProxyBasePath(url.searchParams.get("base"));
-  manifest.name = phoneAppName;
-  manifest.short_name = phoneAppShortName;
-  manifest.id = `${safeBasePath}/codex-remote-${phoneAppId}`;
+  const requestedProvider = requestedAppProvider(url);
+  const identity = appIdentityForProvider(requestedProvider);
+  manifest.name = identity.name;
+  manifest.short_name = identity.shortName;
+  manifest.id = `${safeBasePath}/codex-remote-${identity.appId}`;
   manifest.scope = `${safeBasePath}/`;
-  manifest.description = `${phoneAppName} local phone bridge (${agentProvider}:${uiPort}).`;
+  manifest.description = `${identity.name} local phone bridge (${identity.provider}:${uiPort}).`;
   manifest.icons = [
     {
-      src: `${safeBasePath}/${staticAssetHref(bookmarkIconFileName())}`,
+      src: `${safeBasePath}/${staticAssetHref(bookmarkIconFileName(identity.provider))}`,
       sizes: "180x180",
       type: "image/png",
       purpose: "any",
     },
     {
-      src: `${safeBasePath}/${staticAssetHref(bookmarkIcon512FileName())}`,
+      src: `${safeBasePath}/${staticAssetHref(bookmarkIcon512FileName(identity.provider))}`,
       sizes: "512x512",
       type: "image/png",
       purpose: "any maskable",
     },
   ];
+  // The start_url keeps the provider so the icon opens in the AI it was made
+  // for; the token still travels in the fragment, never in the query.
+  const providerQuery = requestedProvider ? `?provider=${requestedProvider}` : "";
   const authenticatedInstall = url.searchParams.get("install") === "1" && phoneToken && requestToken(url) === phoneToken;
   manifest.start_url = authenticatedInstall
-    ? `${safeBasePath}/install#token=${encodeURIComponent(phoneToken)}`
-    : `${safeBasePath}/`;
+    ? `${safeBasePath}/install${providerQuery}#token=${encodeURIComponent(phoneToken)}`
+    : `${safeBasePath}/${providerQuery}`;
   return manifest;
 }
 
@@ -5780,7 +5814,11 @@ if (require.main === module) {
 
 module.exports = {
   ClaudeBridge,
+  appIdentityForProvider,
   approvalMcpConfig,
+  requestedAppProvider,
+  serveIndex,
+  shouldStartCodexServer,
   askUserQuestions,
   capHistoryWithStatus,
   questionAnswersFor,

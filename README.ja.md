@@ -151,7 +151,7 @@ terminal toolbar は普段は `Filter / All / Search / Auto / ...` の 1 行だ�
 
 `site.webmanifest`、touch icon、standalone detection に対応しています。PWA は表示領域を増やす補助であり、通常 Safari tab でも compact layout は有効です。環境により LAN HTTP では PWA 化が制限されることがあります。
 
-manifest の `start_url` には token を入れません。そのため root URL をそのままホーム画面に追加すると、standalone 起動時に token を持たない状態になります。standalone と token を両立させたい場合は `/install?token=...` を Safari で開いてから「ホーム画面に追加」してください。このページは manifest を出さず standalone meta だけを残すので、iOS は manifest の `start_url` ではなくアドレスバーの URL をそのまま起動 URL に採用します。UI 側の「ホーム画面に追加」ヒントの `追加用` ボタンも同じ URL を開きます。`/bookmark` は standalone にせず Safari tab で開く従来のブックマーク用です。token が見つからない場合は、private な起動通知の URL で開き直すか、token 入力欄から local の `.phone-token` / `PHONE_TOKEN` を保存してください。token 付き URL は公開 issue、共有チャット、スクリーンショット、配信に載せないでください。
+manifest の `start_url` には token を入れません。そのため root URL をそのままホーム画面に追加すると、standalone 起動時に token を持たない状態になります。standalone と token を両立させたい場合は `/install?token=...` を Safari で開いてから「ホーム画面に追加」してください。このページは manifest を出さず standalone meta だけを残すので、iOS は manifest の `start_url` ではなくアドレスバーの URL をそのまま起動 URL に採用します。UI 側の「ホーム画面に追加」ヒントの `追加用` ボタンも同じ URL を開きます。`/install?token=...&provider=codex` のように `provider` を付けると、その AI 用のアイコン画像と名前（例: `Codex mini`）でホーム画面に追加でき、起動時もその AI で開きます。Claude 既定の bridge でも Codex 用アイコンを作れ、`追加用` ボタンは今開いているチャットの AI を自動で付けます。`/bookmark` は standalone にせず Safari tab で開く従来のブックマーク用です。token が見つからない場合は、private な起動通知の URL で開き直すか、token 入力欄から local の `.phone-token` / `PHONE_TOKEN` を保存してください。token 付き URL は公開 issue、共有チャット、スクリーンショット、配信に載せないでください。
 
 Service Worker は secure context または localhost で app shell のみを cache します。`/api/*`、WebSocket、token 付き URL、raw file、uploads、artifacts、terminal history、approval payload は cache しません。LAN HTTP ではブラウザ制約により登録できない場合があります。
 

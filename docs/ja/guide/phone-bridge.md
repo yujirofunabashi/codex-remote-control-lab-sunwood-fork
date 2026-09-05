@@ -268,7 +268,7 @@ terminal の key row は、認証なしの raw shell 実行口ではありませ
 
 ## PWA 注意
 
-通常公開する `site.webmanifest` は token を含まず、`display: standalone` を使います。有効な protected `/install?token=...` page だけが no-store の install manifest を参照し、その `start_url` は credential を URL fragment で渡します。以前の protected access により Safari に credential が残っていれば、短い `/install` URL を開くだけで、ホーム画面へ追加する前に protected install page へ自動再読込します。Safari とホーム画面 Web App は storage が別であるため、この受け渡しが必要です。初回起動時に Web App 自身の local storage へ保存し、fragment は即時削除します。fragment は bridge へ送信されず、無効または token なしの install-manifest request が credential 付き `start_url` を受け取ることもありません。
+通常公開する `site.webmanifest` は token を含まず、`display: standalone` を使います。有効な protected `/install?token=...` page だけが no-store の install manifest を参照し、その `start_url` は credential を URL fragment で渡します。以前の protected access により Safari に credential が残っていれば、短い `/install` URL を開くだけで、ホーム画面へ追加する前に protected install page へ自動再読込します。Safari とホーム画面 Web App は storage が別であるため、この受け渡しが必要です。初回起動時に Web App 自身の local storage へ保存し、fragment は即時削除します。fragment は bridge へ送信されず、無効または token なしの install-manifest request が credential 付き `start_url` を受け取ることもありません。`/install?token=...&provider=codex` のように `provider` を付けると、install page・アイコン・manifest はその provider の画像と名前（例: `Codex mini`）になり、`start_url` にも `provider` が残るため、そのアイコンはその provider で開きます。Claude 既定の bridge でも Codex 用アイコンを作れます。
 
 secure context または localhost では `service-worker.js` を登録し、app shell だけを cache します。通常 manifest、API response、WebSocket、token 付き URL と install manifest、upload、raw file route、terminal history、approval payload は cache しません。LAN HTTP ではブラウザ制約で Service Worker 登録ができないことがありますが、通常の browser UI はそのまま使えます。
 

@@ -252,6 +252,10 @@ function installEntryUrl() {
   const url = new URL(appPath("/install"), location.href);
   const value = effectiveBridgeToken(activeBridge()) || token;
   if (value) url.searchParams.set("token", value);
+  // The icon opens in the AI this chat is using, so a Codex chat on a
+  // Claude-default bridge yields a Codex icon, with its own picture and name.
+  const provider = currentThreadProvider();
+  if (provider) url.searchParams.set("provider", provider);
   return url.href;
 }
 
