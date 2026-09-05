@@ -14,8 +14,23 @@ const mainSource = fs.readFileSync(path.join(__dirname, "..", "public", "main.js
 function functionSource(name) {
   const start = mainSource.indexOf(`function ${name}(`);
   assert.notEqual(start, -1, `${name} is no longer declared the way this test finds it`);
+  // The body starts at the first brace after the parameter list, not at a
+  // brace inside it: `({ force = false } = {})` would otherwise end the read.
+  let parens = 0;
+  let bodyStart = -1;
+  for (let i = mainSource.indexOf("(", start); i < mainSource.length; i += 1) {
+    if (mainSource[i] === "(") parens += 1;
+    else if (mainSource[i] === ")") {
+      parens -= 1;
+      if (parens === 0) {
+        bodyStart = mainSource.indexOf("{", i);
+        break;
+      }
+    }
+  }
+  assert.notEqual(bodyStart, -1, `could not find the body of ${name}`);
   let depth = 0;
-  for (let i = mainSource.indexOf("{", start); i < mainSource.length; i += 1) {
+  for (let i = bodyStart; i < mainSource.length; i += 1) {
     if (mainSource[i] === "{") depth += 1;
     else if (mainSource[i] === "}") {
       depth -= 1;
@@ -102,4 +117,85 @@ test("a Mac's remembered provider outranks the provider its bridge started with"
     activeLine.indexOf("view.provider") < activeLine.indexOf("state.info?.provider"),
     "the bridge's startup provider must not outrank the choice remembered for that Mac",
   );
+});
+
+// Once each Mac could be left in its own provider, the sidebar mixed them: the
+// Air's Claude chats sat on top of the mini's Codex list, and the Codex chats
+// read as missing. The list now follows the provider the phone is in, on every
+// Mac, and a row opened from it puts the phone in that row's provider.
+const fleetRecords = new Function(`
+  let activeBridgeId = "mini";
+  let threadCache = [];
+  let currentProvider = "codex";
+  const bridgeRegistry = { bridges: [{ id: "mini" }, { id: "air" }] };
+  const states = { mini: { threadCache: [] }, air: { threadCache: [] } };
+  function getBridgeState(id) { return states[id]; }
+  function shortMachineName(entry) { return entry.id; }
+  function bridgeMachineKey(entry) { return entry.id; }
+  function normalizeProviderName(value) {
+    const text = String(value || "").trim().toLowerCase();
+    return text === "codex" || text === "claude" ? text : "";
+  }
+  function currentThreadProvider() { return currentProvider; }
+  ${functionSource("fleetThreadRecords")}
+  return function run({ provider, active, other }) {
+    currentProvider = provider;
+    threadCache = active;
+    states.air.threadCache = other;
+    return fleetThreadRecords().map((thread) => thread.machineKey + ":" + thread.provider + ":" + thread.id);
+  };
+`)();
+
+test("the sidebar shows one provider across every Mac, the one the phone is in", () => {
+  const active = [
+    { id: "c1", provider: "codex" },
+    { id: "k1", provider: "claude" },
+  ];
+  const other = [
+    { id: "k2", provider: "claude" },
+    { id: "c2", provider: "codex" },
+    { id: "u1" }, // no provider on the record: taken as the list's own
+  ];
+  assert.deepEqual(fleetRecords({ provider: "codex", active, other }), ["mini:codex:c1", "air:codex:c2", "air:undefined:u1"]);
+  assert.deepEqual(fleetRecords({ provider: "claude", active, other }), ["mini:claude:k1", "air:claude:k2", "air:undefined:u1"]);
+});
+
+test("asking the other Mac for chats does not rewrite the provider that Mac was left in", () => {
+  const source = functionSource("loadFleetThreads");
+  assert.doesNotMatch(source, /state\.activeProvider\s*=/, "the fleet refresh must not overwrite a Mac's remembered provider");
+  assert.match(source, /currentThreadProvider\(\)/, "the other Mac is asked for the provider the phone is in");
+});
+
+const useProvider = new Function(`
+  let threadProvider = "claude";
+  let activeProvider = "claude";
+  let threadProviderExplicit = false;
+  let selectedThread = "k1";
+  const selectedThreadByProvider = new Map();
+  function normalizeProviderName(value) {
+    const text = String(value || "").trim().toLowerCase();
+    return text === "codex" || text === "claude" ? text : "";
+  }
+  function currentThreadProvider() { return normalizeProviderName(threadProvider || activeProvider) || "codex"; }
+  function setActiveProvider(provider) { activeProvider = normalizeProviderName(provider) || "codex"; }
+  ${functionSource("useThreadProvider")}
+  return function run(provider) {
+    const changed = useThreadProvider(provider);
+    return { changed, threadProvider, activeProvider, threadProviderExplicit, remembered: Object.fromEntries(selectedThreadByProvider) };
+  };
+`)();
+
+test("opening a row puts the phone in that row's provider, and remembers where it was", () => {
+  let result = useProvider("codex");
+  assert.equal(result.changed, true);
+  assert.equal(result.threadProvider, "codex");
+  assert.equal(result.activeProvider, "codex");
+  assert.equal(result.threadProviderExplicit, true);
+  assert.deepEqual(result.remembered, { claude: "k1" });
+  // Same provider, or no provider on the row: nothing to change.
+  result = useProvider("codex");
+  assert.equal(result.changed, false);
+  result = useProvider("");
+  assert.equal(result.changed, false);
+  assert.match(functionSource("selectThread"), /useThreadProvider\(options\.thread\?\.provider\)/);
 });

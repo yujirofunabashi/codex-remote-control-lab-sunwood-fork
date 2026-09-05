@@ -6087,6 +6087,9 @@ function switchThreadProvider(provider, { reload = true } = {}) {
   connect();
 
   if (reload) loadThreads({ provider: nextProvider, background: true }).catch(() => {});
+  // The other Macs' rows are in the previous provider until they are asked
+  // again, and the list would show only this Mac in the meantime.
+  loadFleetThreads({ force: true }).catch(() => {});
 }
 
 async function loadThreads({ background = false, provider = "" } = {}) {
@@ -6199,19 +6202,24 @@ async function loadFleetThreads({ force = false } = {}) {
       if (!effectiveBridgeToken(entry) && !token) return;
       state.threadsLoading = true;
       try {
-        // Every bridge the app has not met yet is seeded as codex, so the first
-        // pass over a newly registered Mac asked a Claude-only one for codex
-        // threads: a 500, an empty list, and that Mac's chats missing from the
-        // sidebar until a later poll happened to ask again. The seed is a guess
-        // and is treated as one - until the bridge has answered for itself there
-        // is nothing worth sending, and a request without a provider is answered
-        // by whichever one the bridge is actually running.
+        // The other Mac is asked for the provider this phone is in, since the
+        // list shows one provider across every Mac. Only a bridge that has said
+        // it serves that provider is asked for it; one that has not answered
+        // yet, or an older one that lists a single provider, is asked for
+        // whatever it runs, and a request without a provider is answered by
+        // that. The Mac's own remembered provider is not touched by any of it.
+        const wanted = currentThreadProvider();
+        // On the first pass after launch the other Mac has not described itself
+        // yet, and asking it blind returns whatever it runs - the wrong provider
+        // half the time, and its rows missing until the next open of the list.
+        if (!state.info) await refreshBridgeState(entry.id).catch(() => {});
+        const served = (Array.isArray(state.info?.providers) ? state.info.providers : []).map(normalizeProviderName);
         const named = state.info || state.status;
-        const provider = named ? normalizeProviderName(state.activeProvider || state.info?.provider) || "" : "";
+        const provider = served.includes(wanted) ? wanted : named ? normalizeProviderName(state.activeProvider || state.info?.provider) || "" : "";
         const result = await fetchJsonForBridge(entry, provider ? `/api/threads?provider=${encodeURIComponent(provider)}` : "/api/threads");
         const resultProvider = normalizeProviderName(result.provider || result.activeProvider || provider) || "codex";
-        state.activeProvider = normalizeProviderName(result.activeProvider) || resultProvider;
         state.threadCache = (result.data || []).map((thread) => normalizeThreadRecord(thread, resultProvider));
+        state.threadCacheProvider = resultProvider;
         state.threadsLoadedAt = Date.now();
         state.threadsError = "";
         changed = true;
@@ -6234,6 +6242,11 @@ function fleetThreadRecords() {
   const ordered = [...entries.filter((entry) => entry.id === activeBridgeId), ...entries.filter((entry) => entry.id !== activeBridgeId)];
   const records = [];
   const seen = new Set();
+  // The list follows the provider the phone is in, on every Mac. Once each Mac
+  // could be left in its own provider, the Air's Claude chats sat on top of the
+  // mini's Codex list and the Codex chats read as missing. The other Mac's
+  // chats in the other provider are one switch away, not mixed in.
+  const provider = currentThreadProvider();
   for (const entry of ordered) {
     const state = getBridgeState(entry.id);
     const threads = entry.id === activeBridgeId ? threadCache : Array.isArray(state.threadCache) ? state.threadCache : [];
@@ -6241,6 +6254,7 @@ function fleetThreadRecords() {
     const machineKey = bridgeMachineKey(entry, state);
     for (const thread of threads) {
       if (!thread?.id) continue;
+      if ((normalizeProviderName(thread.provider) || provider) !== provider) continue;
       // Two bridges on one Mac read the same transcripts, so the same session
       // can arrive twice. It is one session either way.
       const key = `${machineKey}:${normalizeProviderName(thread.provider) || ""}:${thread.id}`;
@@ -6376,6 +6390,7 @@ async function selectThread(threadId, options = {}) {
   // its own bridge that answer is already settled, so the workdir must not be
   // allowed to send the connection back to a same-named folder on this one.
   const switchedByBridge = await switchToNamedBridge(options.bridgeId);
+  useThreadProvider(options.thread?.provider);
   if (workdir && !switchedByBridge && !options.bridgeId) {
     await switchToBridgeForWorkdir(workdir, { reconnect: false, followThreadWorkdir: true });
   }
@@ -6411,6 +6426,20 @@ async function selectThread(threadId, options = {}) {
     updateThreadNavigation();
     updateHeaderStatus();
   }, 420);
+}
+
+// A row carries the provider its chat belongs to, and opening it has to put the
+// phone in that provider, whichever one this Mac was last left in. This sets
+// the choice without touching the socket: the caller connects for the chat
+// itself, and a second connect from here would race it.
+function useThreadProvider(provider) {
+  const next = normalizeProviderName(provider);
+  if (!next || next === currentThreadProvider()) return false;
+  selectedThreadByProvider.set(currentThreadProvider(), selectedThread);
+  threadProvider = next;
+  threadProviderExplicit = true;
+  setActiveProvider(next);
+  return true;
 }
 
 // The sidebar now lists every registered bridge's sessions at once, so a row

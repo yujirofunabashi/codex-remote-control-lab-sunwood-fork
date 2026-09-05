@@ -81,8 +81,23 @@ const mainSource = fs.readFileSync(path.join(__dirname, "..", "public", "main.js
 function functionSource(name) {
   const start = mainSource.indexOf(`function ${name}(`);
   assert.notEqual(start, -1, `${name} is no longer declared the way this test finds it`);
+  // The body starts at the first brace after the parameter list, not at a
+  // brace inside it: `({ force = false } = {})` would otherwise end the read.
+  let parens = 0;
+  let bodyStart = -1;
+  for (let i = mainSource.indexOf("(", start); i < mainSource.length; i += 1) {
+    if (mainSource[i] === "(") parens += 1;
+    else if (mainSource[i] === ")") {
+      parens -= 1;
+      if (parens === 0) {
+        bodyStart = mainSource.indexOf("{", i);
+        break;
+      }
+    }
+  }
+  assert.notEqual(bodyStart, -1, `could not find the body of ${name}`);
   let depth = 0;
-  for (let i = mainSource.indexOf("{", start); i < mainSource.length; i += 1) {
+  for (let i = bodyStart; i < mainSource.length; i += 1) {
     if (mainSource[i] === "{") depth += 1;
     else if (mainSource[i] === "}") {
       depth -= 1;
