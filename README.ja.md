@@ -86,7 +86,7 @@ PHONE_BRIDGE_ID=work-a PHONE_BRIDGE_LABEL=WorkA PHONE_BRIDGE_GROUP=client PHONE_
 PHONE_MACHINE_LABEL=mini npm run phone
 npm run phone:fleet
 CODEX_WORKDIR=/Users/admin/Prj/some-project npm run phone
-CODEX_MODEL=gpt-5.4 npm run phone
+CODEX_MODEL=gpt-5.6-sol npm run phone
 CODEX_APP_SERVER_SOCK=/Users/admin/.codex/app-server-control/app-server-control.sock npm run phone
 CODEX_APP_SERVER_URL=ws://127.0.0.1:45213 npm run phone
 CODEX_HISTORY_SYNC=0 npm run phone
@@ -99,7 +99,7 @@ PHONE_NOTIFY_TIMEOUT_MS=5000 npm run phone
 
 複数 bridge / 複数 worktree を 1 つの browser tab で扱う場合は、Bridge Fleet / Worktree Switchboard を使います。通常通り 1 つ目の bridge を開き、ヘッダーまたは sidebar の bridge/worktree pill から、残りの protected startup URL または base URL と token を追加します。`CODEX_APP_SERVER_PORT` を指定しない場合、各 slot の Codex app-server は `PHONE_UI_PORT - 1` を使います。たとえば `45224 -> 45223` になり、`45214 -> 45213` の既定 app-server を複数 slot が奪い合いません。active bridge を切り替えると chat / terminal / thread / artifact / approval UI はその bridge の状態へ切り替わり、inactive bridge の稼働・エラー・承認待ちは global monitor / inbox に出ます。session は実行した Mac に残るため、sidebar の thread 一覧は登録済み bridge すべてから集めた 1 つの一覧になります。2 台以上の Mac が並ぶときだけ project 見出しと thread 行に機体名（`mini` / `Air` など）が付き、ホーム画面アイコンに合わせて mini は琥珀色、Air は青で表示されます。別の Mac の thread を開くとその bridge へ接続が切り替わります。設定画面の作業場所・フォルダ選択も、いま見ているのがどの Mac かを見出しとパス表示に出し、上部の chip で設定対象の Mac を切り替えられます。機体名は hostname から推定し、`PHONE_MACHINE_LABEL` を指定した場合はそちらが優先されます。
 
-各 bridge は token-protected な `GET /api/bridge/info` で label、port、cwd、branch、dirty summary、model、capabilities を返します。token は UI では mask され、host profile には base URL と metadata だけを保存し、保存 token は端末内の token store、保存しない token は sessionStorage に分けます。`.phone-fleet.local.json` を作って `npm run phone:fleet` を使うと、複数 slot をまとめて起動できます。各 entry に `"provider": "codex"` または `"provider": "claude"` を入れると、その slot の既定 provider を再起動後も固定できます。fleet mode では browser UI から保存した workdir / model / provider も対応する `.phone-fleet.local.json` entry へ反映され、次回の fleet 再起動後も維持されます。この local config は Git に入れないでください。
+各 bridge は token-protected な `GET /api/bridge/info` で label、port、cwd、branch、dirty summary、model、capabilities を返します。token は UI では mask され、host profile には base URL と metadata だけを保存し、保存 token は端末内の token store、保存しない token は sessionStorage に分けます。`.phone-fleet.local.json` を作って `npm run phone:fleet` を使うと、複数 slot をまとめて起動できます。各 entry に `"provider": "codex"` または `"provider": "claude"` を入れると、その slot の既定 provider を再起動後も固定できます。Codex のモデル一覧は app-server の `model/list` に追従します。app-server 起動時とスマホがモデル一覧を開いたときに取得し、最後の応答を `.phone-codex-models.json` に保存して、作業中のモデルメニューと設定画面の両方に組み込みの予備リストより先に出します。アカウントに新しいモデルが届けば、この repo を更新しなくてもそのまま選べます。fleet mode では browser UI から保存した workdir / model / provider も対応する `.phone-fleet.local.json` entry へ反映され、次回の fleet 再起動後も維持されます。この local config は Git に入れないでください。
 
 `CODEX_APP_SERVER_SOCK` または `CODEX_APP_SERVER_URL` を指定すると、bridge は新しい app-server を起動せず、既存の headless app-server に接続します。Codex Desktop 本体とライブ同期したい場合は、Desktop の通常ローカル会話画面ではなく、Desktop の Remote Connection と OCdex を同じ headless app-server に接続してください。Desktop の通常ローカル会話画面は専用の `stdio` app-server を使うため、外部 bridge からその画面へ直接ライブ注入する公開経路はありません。
 

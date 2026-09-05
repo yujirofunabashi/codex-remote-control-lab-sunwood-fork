@@ -1872,10 +1872,29 @@ const serviceTierAliases = new Map([
   ["FLEX", ""],
   ["FAST", "fast"],
 ]);
+// Only what the menu shows before a bridge has answered. The bridge reports the
+// models its account actually has, and that list replaces these.
 const inlineModelChoices = {
-  codex: ["gpt-5.5", "gpt-5.4"],
+  codex: ["gpt-5.6-sol", "gpt-5.5"],
   claude: ["sonnet", "opus", "haiku"],
 };
+let liveModelChoices = {};
+
+// The bridge's `modelChoices` follows the app-server's own list, so a model
+// that reaches the account shows up here the next time Codex runs, with no
+// release of this page. Kept per provider and refreshed on every bridge answer.
+function adoptModelChoices(choices) {
+  if (!choices || typeof choices !== "object") return;
+  const next = {};
+  for (const [provider, list] of Object.entries(choices)) {
+    const key = normalizeProviderName(provider);
+    const models = (Array.isArray(list) ? list : []).map((item) => String(item || "").trim()).filter(Boolean);
+    if (key && models.length) next[key] = models;
+  }
+  if (!Object.keys(next).length) return;
+  liveModelChoices = { ...liveModelChoices, ...next };
+  if (typeof updateModelButton === "function" && modelMenu) updateModelButton();
+}
 
 function normalizeReasoning(value) {
   const key = String(value || "").trim();
@@ -2012,6 +2031,7 @@ async function syncProviderFromBridge() {
   try {
     const info = await apiGet("/api/info");
     adoptBridgeProvider(info?.provider, info?.providers);
+    adoptModelChoices(info?.modelChoices);
   } catch {
     // Falls back to whatever the thread list reports once it loads.
   }
@@ -2092,7 +2112,7 @@ function renderInlineModelChoices() {
   const moreButton = modelMenu.querySelector("#moreModelsButton");
   if (!moreButton) return;
   for (const row of modelMenu.querySelectorAll("[data-model-choice]")) row.remove();
-  const choices = [...(inlineModelChoices[activeProvider] || inlineModelChoices.codex)];
+  const choices = [...(liveModelChoices[activeProvider] || inlineModelChoices[activeProvider] || inlineModelChoices.codex)].slice(0, 6);
   if (selectedModel && !choices.includes(selectedModel)) choices.unshift(selectedModel);
   for (const choice of choices) {
     const row = document.createElement("button");
@@ -5276,6 +5296,7 @@ async function refreshBridgeState(bridgeId, { force = false } = {}) {
   try {
     const info = await fetchJsonForBridge(entry, "/api/bridge/info");
     state.info = info;
+    if (entry.id === activeBridgeId) adoptModelChoices(info?.modelChoices);
     state.connected = true;
     state.lastError = "";
     state.activeProvider = info.provider || state.activeProvider || "codex";
@@ -5364,8 +5385,9 @@ function applyActiveBridgeState(bridgeId) {
   token = effectiveBridgeToken(activeBridge()) || "";
   selectedThreadByProvider.clear();
   if (selectedThread && threadProvider) selectedThreadByProvider.set(threadProvider, selectedThread);
-  // Each bridge answers for one provider, so the composer's model follows the
-  // bridge rather than carrying the previous one across the switch.
+  // The composer's model and its menu follow the Mac being switched to: its
+  // remembered model, and the models that Mac's account actually has.
+  adoptModelChoices(state.info?.modelChoices);
   applySelectedModel();
 }
 

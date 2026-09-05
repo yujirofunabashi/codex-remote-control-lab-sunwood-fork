@@ -62,7 +62,7 @@ npm run phone
 ```bash
 PHONE_UI_PORT=45214 npm run phone
 PHONE_WORKDIR=/Users/admin/Prj/some-project npm run phone
-CODEX_MODEL=gpt-5.4 npm run phone
+CODEX_MODEL=gpt-5.6-sol npm run phone
 CODEX_APP_SERVER_SOCK=/Users/admin/.codex/app-server-control/app-server-control.sock npm run phone
 CODEX_APP_SERVER_URL=ws://127.0.0.1:45213 npm run phone
 CODEX_HISTORY_SYNC=0 npm run phone

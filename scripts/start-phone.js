@@ -473,10 +473,65 @@ const rateLimitCacheTtlMs = positiveNumber(process.env.PHONE_RATE_LIMIT_CACHE_TT
 const rateLimitRefreshTimeoutMs = positiveNumber(process.env.PHONE_RATE_LIMIT_REFRESH_TIMEOUT_MS, 6000);
 const uploadDir = path.join(root, ".uploads");
 const maxUploadBytes = uploadLimitBytes();
-const codexModelOptions = ["gpt-5.5", "gpt-5.4", "gpt-5.3-codex", "gpt-5.3-codex-spark", "gpt-5.2"];
+// Only the fallback for when the app-server has never been asked. The list the
+// phone is shown comes from `model/list`, so a model that reaches this account
+// appears the next time Codex runs, without a release of this bridge.
+const codexModelOptions = ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4-mini"];
 // Aliases rather than pinned full names: they follow the current generation, so
 // the list cannot rot into offering models that no longer exist.
 const claudeModelOptions = ["sonnet", "opus", "haiku", "fable"];
+
+// The last `model/list` answer, kept on disk so a bridge that has not run Codex
+// since it started still offers the models the account actually has.
+const codexModelCachePath = process.env.PHONE_CODEX_MODELS_CACHE_PATH || path.join(root, ".phone-codex-models.json");
+
+function codexModelIdsFromList(list) {
+  const ids = [];
+  for (const item of Array.isArray(list) ? list : []) {
+    if (!item || item.hidden) continue;
+    const id = String(item.id || item.model || item.slug || "").trim();
+    if (id && !ids.includes(id)) ids.push(id);
+  }
+  return ids;
+}
+
+function readCodexModelCache(cachePath = codexModelCachePath) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(cachePath, "utf8"));
+    const models = Array.isArray(parsed?.models) ? parsed.models.map((item) => String(item || "").trim()).filter(Boolean) : [];
+    return { models, updatedAt: parsed?.updatedAt || null };
+  } catch {
+    return { models: [], updatedAt: null };
+  }
+}
+
+let codexModelCache = readCodexModelCache();
+
+function rememberCodexModels(list, { cachePath = codexModelCachePath } = {}) {
+  const models = codexModelIdsFromList(list);
+  if (!models.length) return codexModelCache.models;
+  const changed = JSON.stringify(models) !== JSON.stringify(codexModelCache.models);
+  codexModelCache = { models, updatedAt: new Date().toISOString() };
+  if (changed) {
+    try {
+      fs.writeFileSync(cachePath, `${JSON.stringify(codexModelCache, null, 2)}\n`, { mode: 0o600 });
+    } catch {
+      // The in-memory copy still serves this run; the next answer tries again.
+    }
+  }
+  return models;
+}
+
+// Live models first, in the order the app-server lists them, then any fallback
+// the account has not confirmed. A configured default is always offered even if
+// no list has named it, so a model chosen ahead of its release can be kept.
+function codexModelChoices({ cache = codexModelCache, fallback = codexModelOptions, configured = "" } = {}) {
+  const choices = [];
+  for (const id of [...(cache?.models || []), ...(configured ? [configured] : []), ...fallback]) {
+    if (id && !choices.includes(id)) choices.push(id);
+  }
+  return choices;
+}
 // `claude --effort` accepts any string without complaining, so an unknown value
 // is silently ignored rather than rejected. Validate here or a typo looks like
 // it applied.
@@ -527,7 +582,6 @@ function claudeAcceptsNameFlag(probe) {
   if (!probe) claudeSupportsNameFlag = supported;
   return supported;
 }
-const modelOptions = isClaudeProvider ? claudeModelOptions : codexModelOptions;
 const bridges = new Map();
 const bridgeStartedAt = Date.now();
 const phoneBridgeId = appIdSlug(process.env.PHONE_BRIDGE_ID, `${path.basename(workdir)}-${uiPort}`);
@@ -650,6 +704,7 @@ function bridgeInfoPayload() {
     providers: ["codex", "claude"],
     model,
     modelsByProvider: providerModels,
+    modelChoices: { codex: codexModelChoices({ configured: modelForProvider("codex") }), claude: claudeModelOptions },
     approvalPolicy: "on-request",
     sandboxMode: "workspace-write",
     color: phoneBridgeColor || null,
@@ -701,11 +756,25 @@ function workdirEnvKeyForProvider(provider) {
 }
 
 function defaultModelForProvider(provider) {
-  return provider === "claude" ? "sonnet" : "gpt-5.4";
+  return provider === "claude" ? "sonnet" : "gpt-5.6-sol";
 }
 
 function modelOptionsForProvider(provider) {
-  return provider === "claude" ? claudeModelOptions : codexModelOptions;
+  return provider === "claude" ? claudeModelOptions : codexModelChoices();
+}
+
+// Asked after the app-server comes up and whenever the phone lists models, so
+// the cache follows the account rather than a release of this bridge. Never
+// starts a server just to ask: a Claude bridge that has not needed Codex keeps
+// the last answer on disk instead.
+async function refreshCodexModelList() {
+  if (!appServerClient.ready && !(await isCodexReady())) return codexModelCache.models;
+  try {
+    const result = await appServerRequest("model/list", { limit: 80, includeHidden: false });
+    return rememberCodexModels(result?.data);
+  } catch {
+    return codexModelCache.models;
+  }
 }
 
 function modelForProvider(provider) {
@@ -1248,11 +1317,12 @@ function localSettingsPayload(overrides = {}) {
     },
     options: {
       providers: ["codex", "claude"],
-      models: modelOptions,
+      models: modelOptionsForProvider(agentProvider),
       modelsByProvider: {
-        codex: codexModelOptions,
+        codex: codexModelChoices({ configured: modelForProvider("codex") }),
         claude: claudeModelOptions,
       },
+      codexModelsUpdatedAt: codexModelCache.updatedAt,
       defaultModels: {
         codex: modelFromEnv(envValues, "codex", defaultModelForProvider("codex")),
         claude: modelFromEnv(envValues, "claude", defaultModelForProvider("claude")),
@@ -1659,6 +1729,10 @@ async function ensureCodexServerRunning() {
     }
     startCodexServer();
     await waitForReady();
+    // The first thing a fresh app-server is asked is which models this account
+    // has today, so a model that arrived since the last run is on the list
+    // before anyone opens the menu.
+    refreshCodexModelList().catch(() => {});
     return true;
   })().finally(() => {
     codexStartPromise = null;
@@ -5198,6 +5272,7 @@ async function main() {
         provider: agentProvider,
         providers: ["codex", "claude"],
         model,
+        modelChoices: { codex: codexModelChoices({ configured: modelForProvider("codex") }), claude: claudeModelOptions },
         workdir,
         app: { id: phoneAppId, name: phoneAppName, shortName: phoneAppShortName },
         codexUrl,
@@ -5298,6 +5373,7 @@ async function main() {
       }
       try {
         const result = await appServerRequest("model/list", { limit: 80, includeHidden: false });
+        rememberCodexModels(result?.data);
         sendJson(res, 200, result);
       } catch (error) {
         sendJson(res, 500, { error: error.message });
@@ -5427,6 +5503,9 @@ async function main() {
     if (url.pathname === "/api/local-settings") {
       if (!requireToken(url, phoneToken, res)) return;
       if (req.method === "GET") {
+        // Cheap when the app-server is up, a no-op when it is not, so the sheet
+        // opens on today's list without ever starting Codex to draw it.
+        await refreshCodexModelList();
         sendJson(res, 200, localSettingsPayload());
         return;
       }
@@ -5838,7 +5917,12 @@ module.exports = {
   ClaudeBridge,
   appIdentityForProvider,
   approvalMcpConfig,
+  codexModelChoices,
+  codexModelIdsFromList,
   localSettingsPayload,
+  readCodexModelCache,
+  refreshCodexModelList,
+  rememberCodexModels,
   requestedAppProvider,
   serveIndex,
   shouldStartCodexServer,

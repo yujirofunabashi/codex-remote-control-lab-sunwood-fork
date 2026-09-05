@@ -19,3 +19,4 @@ CLAUDE.md
 .phone-fleet.local.json
 .phone-rate-limits*.json
 .uploads/
+.phone-codex-models.json
