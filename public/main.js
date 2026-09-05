@@ -965,9 +965,13 @@ function getBridgeState(bridgeId = activeBridgeId) {
       lastError: "",
       currentWorkspace: { repoName: "", workspaceLocation: "", gitBranch: "" },
       workspaceFollowsSelectedThread: false,
-      activeProvider: "codex",
-      threadProvider: "",
-      threadProviderExplicit: false,
+      // A Mac the app has not opened yet still has the provider it was last
+      // used with, remembered on this phone. Seeding from it means the sidebar
+      // lists that Mac's Codex chats from the first refresh, instead of showing
+      // its Claude chats until the connection is switched over to it.
+      activeProvider: normalizeProviderName(bridgeViewState[id]?.provider) || "codex",
+      threadProvider: normalizeProviderName(bridgeViewState[id]?.provider) || "",
+      threadProviderExplicit: Boolean(normalizeProviderName(bridgeViewState[id]?.provider)),
     });
   }
   return bridgeStates.get(id);
@@ -1260,6 +1264,11 @@ try {
   activeBridgeId = params.get("bridge") || homeBridgeId;
 }
 if (!bridgeById(activeBridgeId)) activeBridgeId = homeBridgeId;
+// The provider in the launch URL belongs to the icon that was tapped, so it
+// seeds the Mac that icon opens and nothing else. Carrying it into every switch
+// made the drawer answer as the icon's provider on every Mac at once, which is
+// the opposite of the point: each Mac keeps its own choice.
+const launchProviderBridgeId = initialProviderParam ? activeBridgeId : "";
 token = effectiveBridgeToken(activeBridge()) || token;
 getBridgeState(activeBridgeId).selectedThread = selectedThread;
 // Usually joins the attempt ensureHomeBridge() already started, and covers the
@@ -1975,13 +1984,23 @@ function providerLabel(provider) {
   return provider === "claude" ? "Claude" : "Codex";
 }
 
-// A bridge serves exactly one provider. A per-thread choice left over from an
-// earlier session — stored per bridge, and sticky once explicit — otherwise
-// keeps asking for the provider this bridge cannot serve, and the connection
-// never settles. The bridge's own answer wins over the stored one.
-function adoptBridgeProvider(provider) {
+// A bridge used to serve exactly one provider, so its own answer had to win: a
+// stored choice it could not serve kept asking for the impossible and the
+// connection never settled. A bridge now serves both, chosen per chat, and its
+// startup provider is only where a Mac begins. So an explicit choice — the
+// icon's provider, the settings switch, or the one remembered for this Mac —
+// survives, and the bridge's answer wins only where it is the one provider that
+// bridge lists. Without this, every switch between Macs snapped both of them
+// back to whichever provider they had started with.
+function adoptBridgeProvider(provider, servedProviders = []) {
   const next = normalizeProviderName(provider);
   if (!next) return;
+  const served = (Array.isArray(servedProviders) ? servedProviders : []).map(normalizeProviderName).filter(Boolean);
+  const current = currentThreadProvider();
+  if (threadProviderExplicit && current && (!served.length || served.includes(current))) {
+    setActiveProvider(current);
+    return;
+  }
   if (threadProvider && threadProvider !== next) {
     threadProvider = next;
     threadProviderExplicit = false;
@@ -1992,7 +2011,7 @@ function adoptBridgeProvider(provider) {
 async function syncProviderFromBridge() {
   try {
     const info = await apiGet("/api/info");
-    adoptBridgeProvider(info?.provider);
+    adoptBridgeProvider(info?.provider, info?.providers);
   } catch {
     // Falls back to whatever the thread list reports once it loads.
   }
@@ -5334,9 +5353,10 @@ function applyActiveBridgeState(bridgeId) {
   const view = bridgeViewState[bridgeId] || {};
   threadCache = Array.isArray(state.threadCache) ? state.threadCache : [];
   selectedThread = state.selectedThread || view.selectedThread || "";
-  activeProvider = normalizeProviderName(initialProviderParam || state.activeProvider || state.info?.provider || view.provider || "codex") || "codex";
-  threadProvider = normalizeProviderName(initialProviderParam || state.threadProvider || view.provider || activeProvider) || activeProvider;
-  threadProviderExplicit = Boolean(initialProviderParam || state.threadProviderExplicit || view.provider);
+  const launchProvider = bridgeId === launchProviderBridgeId ? initialProviderParam : "";
+  activeProvider = normalizeProviderName(launchProvider || state.activeProvider || view.provider || state.info?.provider || "codex") || "codex";
+  threadProvider = normalizeProviderName(launchProvider || state.threadProvider || view.provider || activeProvider) || activeProvider;
+  threadProviderExplicit = Boolean(launchProvider || state.threadProviderExplicit || view.provider);
   pendingApproval = state.pendingApproval || null;
   artifactItems = Array.isArray(state.artifactItems) ? state.artifactItems : [];
   Object.assign(currentWorkspace, state.currentWorkspace || {});
@@ -6379,7 +6399,7 @@ async function switchToNamedBridge(bridgeId) {
   const state = getBridgeState(bridgeId);
   await setActiveBridge(bridgeId, { silent: true, reconnect: false });
   const provider = normalizeProviderName(state.activeProvider || state.info?.provider);
-  if (provider) adoptBridgeProvider(provider);
+  if (provider) adoptBridgeProvider(provider, state.info?.providers);
   showToast(`${shortMachineName(bridgeById(bridgeId) || {}, state)} の接続に切り替えました。`);
   return true;
 }

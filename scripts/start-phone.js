@@ -690,10 +690,6 @@ function workdirEnvKeyForProvider(provider) {
   return provider === "claude" ? "CLAUDE_WORKDIR" : "CODEX_WORKDIR";
 }
 
-function historySyncEnvKeyForProvider(provider) {
-  return provider === "claude" ? "CLAUDE_HISTORY_SYNC" : "CODEX_HISTORY_SYNC";
-}
-
 function defaultModelForProvider(provider) {
   return provider === "claude" ? "sonnet" : "gpt-5.4";
 }
@@ -1187,8 +1183,10 @@ function workspaceOptions() {
   return options;
 }
 
-function localSettingsPayload() {
-  const envValues = parseEnvValues(envPath);
+function localSettingsPayload(overrides = {}) {
+  // The env values are injectable so this can be exercised without a bridge on
+  // a port and a real .env on disk.
+  const envValues = overrides.envValues || parseEnvValues(envPath);
   const fleetSettings = readFleetConfigBridgeSettings(fleetConfigPath, {
     port: uiPort,
     bridgeId: process.env.PHONE_FLEET_BRIDGE_ID || process.env.PHONE_BRIDGE_ID || phoneBridgeId,
@@ -1203,17 +1201,22 @@ function localSettingsPayload() {
   const providerPinned = settingPinned("PHONE_AGENT_PROVIDER", ["AGENT_PROVIDER", "PHONE_AGENT_PROVIDER_DEFAULT"]);
   const settingsProvider = providerPinned ? agentProvider : savedProvider;
   const modelPinned = settingPinned("PHONE_MODEL", [modelEnvKeyForProvider(settingsProvider), ...(settingsProvider === "codex" ? ["CODEX_MODEL"] : [])]);
-  const historyPinned = historySyncEnvKeyForProvider(settingsProvider) ? settingPinned(historySyncEnvKeyForProvider(settingsProvider)) : false;
+  // History sync belongs to Codex, and its stored value is the same whichever
+  // provider the sheet happens to be showing. Reporting it as off while the
+  // sheet showed Claude made the checkbox draw unchecked, and switching the
+  // sheet to Codex and saving then wrote that unchecked box back over the
+  // stored value - a setting turned on by hand came back off after one save.
+  const historyPinned = settingPinned("CODEX_HISTORY_SYNC");
   const portPinned = hasLaunchEnv("PHONE_UI_PORT");
   const hostPinned = hasLaunchEnv("PHONE_UI_HOST");
-  const savedHistorySyncEnabled = settingsProvider === "codex" ? historySyncEnabledFromEnv(envValues) : false;
+  const savedHistorySyncEnabled = historySyncEnabledFromEnv(envValues);
   const savedPort = Number(envValues.PHONE_UI_PORT || uiPort);
   const savedHost = envValues.PHONE_UI_HOST || uiHost;
   const savedModel = fleetSettings.model || modelFromEnv(envValues, settingsProvider, settingsProvider === agentProvider ? model : defaultModelForProvider(settingsProvider));
   const savedWorkdir = fleetSettings.workdir || workdirFromEnv(envValues, settingsProvider, workdir);
   const settingsModel = modelPinned && settingsProvider === agentProvider ? model : savedModel;
   const settingsWorkdir = savedWorkdir;
-  const settingsHistorySyncEnabled = historyPinned && settingsProvider === agentProvider ? historySyncEnabledForProvider(settingsProvider) : savedHistorySyncEnabled;
+  const settingsHistorySyncEnabled = historyPinned ? historySyncEnabled : savedHistorySyncEnabled;
   const settingsPort = portPinned ? uiPort : savedPort;
   const settingsHost = hostPinned ? uiHost : savedHost;
   return {
@@ -1249,7 +1252,7 @@ function localSettingsPayload() {
     restartRequired:
       (!modelPinned && settingsProvider === agentProvider && savedModel !== model) ||
       (settingsProvider === agentProvider && savedWorkdir !== workdir) ||
-      (!historyPinned && settingsProvider === agentProvider && savedHistorySyncEnabled !== historySyncEnabled),
+      (!historyPinned && savedHistorySyncEnabled !== historySyncEnabled),
     networkRestartRequired: (!portPinned && savedPort !== uiPort) || (!hostPinned && savedHost !== uiHost),
   };
 }
@@ -5816,6 +5819,7 @@ module.exports = {
   ClaudeBridge,
   appIdentityForProvider,
   approvalMcpConfig,
+  localSettingsPayload,
   requestedAppProvider,
   serveIndex,
   shouldStartCodexServer,
