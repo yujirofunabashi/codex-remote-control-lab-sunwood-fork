@@ -7981,7 +7981,14 @@ function canReconnect() {
   return Boolean(token && document.visibilityState !== "hidden");
 }
 
+// A Home Screen app has storage of its own, so an icon added from a URL without
+// the key starts with nothing to connect with - and the old wording sent the
+// owner to the Mac to restart a bridge that was running perfectly. On the pages
+// an icon is made from, say what actually went wrong and what fixes it.
 function tokenMissingMessage() {
+  if (preserveEntryUrl) {
+    return "接続キーがありません。ホーム画面に追加する URL には接続キーが必要です。Safari で接続キー付きの URL を一度開いてから、このページを開き直して追加してください。下の欄に接続キーを入力しても構いません。";
+  }
   return "token がありません。PC 側で `npm run phone` を再実行し、新しい URL を開いてください。";
 }
 
