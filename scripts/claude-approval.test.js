@@ -8,7 +8,7 @@ const { spawn } = require("child_process");
 
 process.env.PHONE_AGENT_PROVIDER = "claude";
 
-const { ClaudeBridge, approvalMcpConfig, claudePermissionMode } = require("./start-phone");
+const { ClaudeBridge, SharedBridge, approvalMcpConfig, claudePermissionMode } = require("./start-phone");
 
 const approvalMcpScript = path.join(__dirname, "claude-approval-mcp.js");
 
@@ -296,17 +296,116 @@ test("declining in the browser blocks the tool call", async () => {
   }
 });
 
-test("an approval with no browser attached is denied rather than left hanging", async () => {
+// The phone is usually not connected when a question is asked - the app is in
+// the background and iOS has dropped the socket - and the notification is how
+// the person finds out. Declining on the spot in that case threw the question
+// away before anyone could see it: no card, no notification, and the turn
+// carried on as if a decision had been made.
+test("a question asked while no phone is connected is held and announced, not declined", async () => {
+  const bridge = new ClaudeBridge(null, "bridge-away");
+  bridge.operatorReachable = () => true;
+  const announced = [];
+  bridge.announceApproval = (request, timeoutMs) => announced.push({ request, timeoutMs });
+  bridge.activeTurnId = "claude-turn:away";
+  try {
+    const socketPath = await bridge.ensureApprovalServer();
+    const pending = connectAndAsk(socketPath, { toolName: "AskUserQuestion", input: { questions: [{ question: "どちら？" }] } });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    assert.equal(announced.length, 1, "the person is told");
+    assert.ok(announced[0].timeoutMs > 0, "and told how long the question waits");
+    const run = bridge.runPayload();
+    assert.equal(run.state, "approval");
+    assert.equal(run.pendingApproval?.id, announced[0].request.id, "the phone that opens later is handed the card");
+
+    bridge.approval(announced[0].request, "accept", { "どちら？": "A" });
+    assert.deepEqual(await pending, { decision: "accept", answers: { "どちら？": "A" } });
+  } finally {
+    bridge.closeApprovalServer();
+  }
+});
+
+test("with no phone connected and no way to notify anyone, an approval is declined rather than left hanging", async () => {
   const bridge = new ClaudeBridge(null, "bridge-empty");
+  bridge.operatorReachable = () => false;
+  bridge.announceApproval = () => assert.fail("nothing to announce to");
   try {
     const socketPath = await bridge.ensureApprovalServer();
     const reply = await connectAndAsk(socketPath, { toolName: "Bash", input: { command: "echo hi" } });
 
     assert.equal(reply.decision, "decline");
-    assert.match(reply.message, /ブラウザ/);
+    assert.match(reply.message, /端末も通知先も/);
   } finally {
     bridge.closeApprovalServer();
   }
+});
+
+test("an unanswered question expires into a decline, and the expiry is announced", async () => {
+  const bridge = new ClaudeBridge(null, "bridge-expire");
+  bridge.clients.add(fakeClient());
+  bridge.approvalTimeoutMs = 60;
+  const announced = [];
+  bridge.announceApproval = (request) => announced.push(["asked", request.id]);
+  bridge.announceApprovalExpired = (request, timeoutMs) => announced.push(["expired", request.id, timeoutMs]);
+  try {
+    const socketPath = await bridge.ensureApprovalServer();
+    const reply = await connectAndAsk(socketPath, { toolName: "AskUserQuestion", input: { questions: [{ question: "A?" }] } });
+
+    assert.equal(reply.decision, "decline");
+    assert.match(reply.message, /タイムアウト/);
+    assert.equal(announced.length, 2);
+    assert.equal(announced[0][0], "asked");
+    assert.deepEqual(announced[1], ["expired", announced[0][1], 60]);
+    assert.equal(bridge.pendingApproval, null, "the expired question is not handed back");
+  } finally {
+    bridge.closeApprovalServer();
+  }
+});
+
+test("a stream update while a question is open does not drop the held card", async () => {
+  const bridge = new ClaudeBridge(null, "bridge-hold-through-stream");
+  const client = fakeClient();
+  bridge.clients.add(client);
+  bridge.activeTurnId = "claude-turn:streaming";
+  bridge.announceApproval = () => {};
+  try {
+    const socketPath = await bridge.ensureApprovalServer();
+    const pending = connectAndAsk(socketPath, { toolName: "Bash", input: { command: "npm test" } });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const [approval] = client.messagesOfType("approval");
+
+    bridge.setBridgeRunState("streaming", "回答生成中", bridge.activeTurnId);
+    assert.equal(bridge.pendingApproval?.id, approval.request.id, "still held: the asker is still waiting");
+    assert.equal(bridge.runPayload().state, "approval");
+
+    bridge.approval(approval.request, "accept");
+    assert.deepEqual(await pending, { decision: "accept" });
+    bridge.setBridgeRunState("streaming", "回答生成中", bridge.activeTurnId);
+    assert.equal(bridge.pendingApproval, null, "answered: nothing left to hold");
+  } finally {
+    bridge.closeApprovalServer();
+  }
+});
+
+test("a Codex approval outlives a stream update and is handed to a reconnecting phone", () => {
+  // Codex waits on the answer for as long as the turn runs. The bridge used to
+  // drop its copy on the next stream update and report the run as 処理中, so a
+  // phone that reconnected threw away the card and Codex waited on nobody.
+  const proto = SharedBridge.prototype;
+  const bridge = { pendingApproval: null, activeTurnId: "turn-1", workdir: process.cwd(), runState: null, streamingStarted: false, emit() {} };
+  bridge.pendingApproval = { id: 7, method: "item/commandExecution/requestApproval", params: { command: ["ls"] } };
+  proto.setBridgeRunState.call(bridge, "approval", "承認待ち", "turn-1");
+  proto.setBridgeRunState.call(bridge, "streaming", "回答生成中", "turn-1");
+  assert.equal(bridge.pendingApproval?.id, 7);
+
+  const run = proto.runPayload.call(bridge);
+  assert.equal(run.state, "approval");
+  assert.equal(run.label, "承認待ち");
+  assert.equal(run.pendingApproval?.id, 7);
+
+  proto.setBridgeRunState.call(bridge, "done", "完了しました", "turn-1");
+  assert.equal(bridge.pendingApproval, null, "the turn ended: nothing left to answer");
+  assert.notEqual(proto.runPayload.call({ ...bridge, activeTurnId: null }).state, "approval");
 });
 
 test("mcp server translates an accept into the allow payload Claude Code expects", async () => {

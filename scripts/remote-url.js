@@ -137,14 +137,24 @@ function proxyPort(target) {
   }
 }
 
+// Where `tailscale` lives depends on how it was installed: a Homebrew or
+// standalone CLI is on PATH, the App Store build only ships its binary inside
+// the app bundle. The bridge asks this from under launchd, where PATH is short,
+// so the bundle is tried too. A daemon that does not answer must not hold the
+// bridge's startup, hence the timeout.
+const tailscaleBinaries = ["tailscale", "/Applications/Tailscale.app/Contents/MacOS/Tailscale"];
+
 function tailscaleServeStatus() {
-  const result = spawnSync("tailscale", ["serve", "status", "--json"], { encoding: "utf8" });
-  if (result.status !== 0 || !result.stdout) return null;
-  try {
-    return JSON.parse(result.stdout);
-  } catch {
-    return null;
+  for (const binary of tailscaleBinaries) {
+    const result = spawnSync(binary, ["serve", "status", "--json"], { encoding: "utf8", timeout: 3000 });
+    if (result.error || result.status !== 0 || !result.stdout) continue;
+    try {
+      return JSON.parse(result.stdout);
+    } catch {
+      return null;
+    }
   }
+  return null;
 }
 
 function maskUrl(url) {
@@ -250,4 +260,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { buildUrl, candidateAddresses, isMeshAddress, maskUrl, servedHttpsEndpoint };
+module.exports = { buildUrl, candidateAddresses, isMeshAddress, maskUrl, servedHttpsEndpoint, tailscaleServeStatus };

@@ -18,8 +18,8 @@ const {
 const { debugLog, debugLogPath, debugTimer, isDebugEnabled, redactSensitiveText } = require("./debug-log");
 const { isHistorySyncEnabled, runHistorySync } = require("./history-sync");
 const {
+  approvalDetail,
   bridgeUrls,
-  eventTypeLabel,
   notificationTargets,
   notifyBridgeUrls,
   notifyEvent,
@@ -28,6 +28,7 @@ const {
   stripTokenFromUrl,
   tokenNeedsUrlEncoding,
 } = require("./phone-notify");
+const { servedHttpsEndpoint, tailscaleServeStatus } = require("./remote-url");
 const { defaultCodexAppServerPort, settingEnvKeysForSlot, slotEnvKey, slotSettingValue } = require("./phone-slot-settings");
 const { slashCommandCatalog } = require("./slash-commands");
 const { findLiveBridge, readThreadSnapshot } = require("./thread-read");
@@ -1372,7 +1373,25 @@ function lanAddresses() {
     .map((entry) => entry.address);
 }
 
+// The address the phone was installed from, when `tailscale serve` publishes
+// this bridge over HTTPS. A notification that links to the raw LAN or tailnet
+// address opens a different origin, where the app's saved token does not exist,
+// and the person tapping it is asked for a token they never see. Learned once,
+// when the bridge starts listening.
+let servedBridgeBaseUrl = "";
+
+function servedBridgeUrl(port) {
+  try {
+    const served = servedHttpsEndpoint(tailscaleServeStatus(), port);
+    if (!served) return "";
+    return new URL(`https://${served.host}${Number(served.port) === 443 ? "" : `:${served.port}`}/`).toString();
+  } catch {
+    return "";
+  }
+}
+
 function preferredBridgeUrl(urls = notificationBridgeUrls) {
+  if (servedBridgeBaseUrl) return servedBridgeBaseUrl;
   return urls.find((item) => {
     try {
       return new URL(item).hostname.startsWith("100.");
@@ -1399,25 +1418,6 @@ function bridgeUrlForThread(threadId, provider = agentProvider, { includeToken =
   }
 }
 
-function bridgeUrlsForThread(threadId, provider = agentProvider, { includeToken = false } = {}) {
-  return notificationBridgeUrls
-    .map((base) => {
-      try {
-        const url = new URL(base);
-        if (!includeToken) {
-          url.searchParams.delete("token");
-          url.searchParams.delete("key");
-        }
-        if (threadId) url.searchParams.set("thread", threadId);
-        url.searchParams.set("provider", normalizeProvider(provider));
-        return url.toString();
-      } catch {
-        return includeToken ? base : stripTokenFromUrl(base);
-      }
-    })
-    .filter(Boolean);
-}
-
 function logNotifyResults(context, results) {
   if (!results.length) return;
   for (const result of results) {
@@ -1426,17 +1426,45 @@ function logNotifyResults(context, results) {
   }
 }
 
-function notifyRunEvent(status, { provider = agentProvider, threadId, turnId, message, model: eventModel = modelForProvider(provider), workdir: eventWorkdir = workdir } = {}) {
+// The latest text of one kind in a bridge's history. With a `turnId`, only an
+// entry that turn wrote counts: a completion notice that quoted the previous
+// turn's answer, because this one said nothing, would be quoting the wrong
+// thing with full confidence.
+function latestHistoryText(bridge, type, turnId = "") {
+  const entry = [...(bridge?.history || [])]
+    .reverse()
+    .find((item) => item?.type === type && item.text && (!turnId || !item.outputGroup || item.outputGroup === turnId));
+  return redactSensitiveText(entry?.text || "");
+}
+
+// A notification is composed in phone-notify.js from facts, not from prose
+// written here: which Mac, which folder, what was asked, what was answered,
+// what went wrong. The bridge hands those over and nothing else, so every
+// event reads the same way and the wording lives in one place.
+function notifyRunEvent(status, {
+  bridge = null,
+  provider = bridge?.provider || agentProvider,
+  threadId = bridge?.threadId || "",
+  turnId,
+  message,
+  prompt,
+  reply,
+  model: eventModel = modelForProvider(provider),
+  workdir: eventWorkdir = bridge?.workdir || workdir,
+} = {}) {
   notifyTaskEvent({
     status,
     provider: normalizeProvider(provider),
+    machine: phoneMachineLabel,
+    color: phoneBridgeColor,
     threadId,
     turnId,
     model: eventModel,
     workdir: eventWorkdir,
     message,
+    prompt: prompt ?? latestHistoryText(bridge, "user"),
+    reply: reply ?? latestHistoryText(bridge, "assistant", turnId),
     url: bridgeUrlForThread(threadId, provider),
-    urls: bridgeUrlsForThread(threadId, provider),
   }, {
     force: status === "completed" || status === "interrupted",
   })
@@ -1445,13 +1473,22 @@ function notifyRunEvent(status, { provider = agentProvider, threadId, turnId, me
 }
 
 function notifyBridgeEvent(type, payload = {}) {
-  const provider = normalizeProvider(payload.provider || agentProvider);
-  const threadId = payload.threadId || "";
-  const projectName = payload.projectName || path.basename(workdir);
+  const bridge = payload.bridge || null;
+  const provider = normalizeProvider(payload.provider || bridge?.provider || agentProvider);
+  const threadId = payload.threadId || bridge?.threadId || "";
+  const projectName = payload.projectName || path.basename(bridge?.workdir || workdir);
   const event = {
     type,
-    title: payload.title || `${eventTypeLabel(type)}: ${projectName}`,
+    provider,
+    machine: phoneMachineLabel,
+    color: phoneBridgeColor,
+    title: payload.title || "",
     message: payload.message || "",
+    detail: payload.detail || "",
+    prompt: payload.prompt ?? latestHistoryText(bridge, "user"),
+    questionCount: payload.questionCount || 0,
+    minutes: payload.minutes || 0,
+    deadlineMinutes: payload.deadlineMinutes || 0,
     threadId,
     threadTitle: payload.threadTitle || "",
     projectName,
@@ -1465,7 +1502,7 @@ function notifyBridgeEvent(type, payload = {}) {
       ...payload.extra,
     },
   };
-  notifyEvent(event)
+  notifyEvent(event, { force: Boolean(payload.force) })
     .then((results) => logNotifyResults(`event ${type}`, results))
     .catch((error) => console.warn(`[notify] event ${type} error: ${error.message}`));
 }
@@ -1507,12 +1544,10 @@ function scheduleLongRunningNotification(bridge, turnId) {
   bridge.longRunningTimer = setTimeout(() => {
     if (!bridge.activeTurnId && !bridge.activeProcess) return;
     notifyBridgeEvent("long_running", {
-      provider: bridge.provider || agentProvider,
-      threadId: bridge.threadId,
+      bridge,
       turnId,
       severity: "warning",
-      title: "処理が長時間続いています",
-      message: `${path.basename(workdir)} の処理が長時間続いています。`,
+      minutes: Math.round(longRunningNotifyMs / 60_000),
     });
   }, longRunningNotifyMs);
   bridge.longRunningTimer.unref?.();
@@ -2936,6 +2971,20 @@ class SharedBridge {
   }
 
   runPayload() {
+    // The open request outranks the turn waiting on it, the way ClaudeBridge
+    // reports it: without this, a phone that reconnected mid-approval was told
+    // the run was 処理中, threw away the card it still had, and Codex waited on
+    // an answer nobody could give.
+    if (this.pendingApproval) {
+      return {
+        state: "approval",
+        label: "承認待ち",
+        turnId: this.activeTurnId,
+        pendingApproval: this.pendingApproval,
+        updatedAt: Date.now(),
+        ...currentWorkspaceMeta(this.workdir),
+      };
+    }
     if (this.activeTurnId) {
       if (this.runState?.state === "interrupting") return { ...this.runState, ...currentWorkspaceMeta(this.workdir) };
       return {
@@ -2955,7 +3004,11 @@ class SharedBridge {
   setBridgeRunState(state, label, turnId = this.activeTurnId || null) {
     const next = { state, label, turnId, updatedAt: Date.now(), ...currentWorkspaceMeta(this.workdir) };
     const previous = this.runState || {};
-    if (state !== "approval") this.pendingApproval = null;
+    // Codex waits for the answer for as long as the turn runs, so the held
+    // request outlives a stream update and is only dropped when the turn is
+    // no longer running.
+    const turnStillRunning = state === "running" || state === "streaming" || state === "interrupting";
+    if (state !== "approval" && !turnStillRunning) this.pendingApproval = null;
     this.runState = next;
     lastBridgeEventAt = Date.now();
     if (previous.state !== state || previous.label !== label || previous.turnId !== turnId) {
@@ -3237,23 +3290,24 @@ class SharedBridge {
           completedTurnId,
         );
         this.emit("turn", { status: "completed", turnId: completedTurnId, run: this.runPayload() });
-        if (question) {
+        // One message per finished turn. A turn that ended on a question is
+        // announced as the question, which is the part the reader has to act
+        // on; a second "finished" message under it said the same thing twice.
+        if (!wasInterrupted && question) {
           notifyBridgeEvent("question_required", {
-            provider: this.provider,
-            threadId: this.threadId,
+            bridge: this,
             turnId: completedTurnId,
             severity: "warning",
-            title: "返信待ち",
-            message: question,
+            detail: question,
+            force: true,
+          });
+        } else {
+          notifyRunEvent(wasInterrupted ? "interrupted" : "completed", {
+            bridge: this,
+            model: this.model,
+            turnId: completedTurnId,
           });
         }
-        notifyRunEvent(wasInterrupted ? "interrupted" : "completed", {
-          provider: this.provider,
-          model: this.model,
-          threadId: this.threadId,
-          turnId: completedTurnId,
-          workdir: this.workdir,
-        });
         this.syncHistory("turn completed");
         this.startNextQueuedTurn();
         this.scheduleIdleDispose();
@@ -3264,21 +3318,17 @@ class SharedBridge {
         this.pendingApproval = msg;
         this.setBridgeRunState("approval", "承認待ち", this.activeTurnId);
         this.emit("approval", { request: msg });
+        const approval = approvalDetail(msg);
+        // With no phone connected, the notification is the only way the
+        // question reaches anyone, so it goes out whether or not event
+        // notifications are switched on.
         notifyBridgeEvent("approval_required", {
-          provider: this.provider,
-          threadId: this.threadId,
+          bridge: this,
           turnId: this.activeTurnId,
           severity: "warning",
-          title: "承認待ち",
-          message: msg.method,
-        });
-        notifyRunEvent("approval", {
-          provider: this.provider,
-          model: this.model,
-          threadId: this.threadId,
-          turnId: this.activeTurnId,
-          message: msg.method,
-          workdir: this.workdir,
+          detail: approval.text,
+          questionCount: approval.questionCount || 0,
+          force: !this.clients.size,
         });
         return;
       }
@@ -3295,12 +3345,10 @@ class SharedBridge {
         this.setBridgeRunState("error", "エラー", this.activeTurnId);
         this.emit("error", { text: error.text });
         notifyRunEvent("failed", {
-          provider: this.provider,
+          bridge: this,
           model: this.model,
-          threadId: this.threadId,
           turnId: this.activeTurnId,
           message: error.text,
-          workdir: this.workdir,
         });
         return;
       }
@@ -3314,27 +3362,26 @@ class SharedBridge {
       clearLongRunningNotification(this);
       this.emit("error", { text: error.message });
       if (this.activeTurnId) this.setBridgeRunState("error", "接続エラー", this.activeTurnId);
-      notifyBridgeEvent("connection_lost", {
-        provider: this.provider,
-        threadId: this.threadId,
-        turnId: this.activeTurnId,
-        severity: "error",
-        title: "Codex app-serverとの接続が切れました",
-        message: error.message,
-      });
+      // A connection lost mid-turn is one event for the reader - the work
+      // failed, and this is why - not a "connection lost" message followed by a
+      // "failed" message about the same moment.
+      if (this.activeTurnId) {
+        notifyRunEvent("failed", {
+          bridge: this,
+          model: this.model,
+          turnId: this.activeTurnId,
+          message: `Codexとの接続が切れました（${error.message}）`,
+        });
+      } else {
+        notifyBridgeEvent("connection_lost", {
+          bridge: this,
+          severity: "error",
+          detail: error.message,
+        });
+      }
       if (shouldStartCodexServer && isCodexConnectionFailure(error)) {
         ensureCodexServerRunning().catch((restartError) => {
           this.emit("error", { text: `Codex app-serverを再起動できませんでした: ${restartError.message}` });
-        });
-      }
-      if (this.activeTurnId) {
-        notifyRunEvent("failed", {
-          provider: this.provider,
-          model: this.model,
-          threadId: this.threadId,
-          turnId: this.activeTurnId,
-          message: error.message,
-          workdir: this.workdir,
         });
       }
     });
@@ -3345,12 +3392,10 @@ class SharedBridge {
       this.emit("status", { text: "Codex接続が閉じました" });
       if (this.activeTurnId) this.setBridgeRunState("error", "接続が閉じました", this.activeTurnId);
       notifyBridgeEvent("connection_lost", {
-        provider: this.provider,
-        threadId: this.threadId,
+        bridge: this,
         turnId: this.activeTurnId,
         severity: "warning",
-        title: "Codex app-serverとの接続が閉じました",
-        message: "Codex app-serverとの接続が閉じました。",
+        detail: "Codex側が接続を閉じました。",
       });
       if (shouldStartCodexServer) {
         ensureCodexServerRunning().catch((error) => {
@@ -3578,7 +3623,14 @@ function skillDescriptionsFromDisk() {
 
 const approvalMcpScript = path.join(root, "scripts", "claude-approval-mcp.js");
 const approvalMcpServerName = "phone_approval";
-const approvalTimeoutMs = Number(process.env.PHONE_APPROVAL_TIMEOUT_MS || 5 * 60 * 1000);
+// How long an open approval or question waits for an answer before it is
+// declined. The person it is for is usually not looking at the phone when it is
+// asked - that is what the notification is for - and five minutes was shorter
+// than the walk back to the phone: the card had already been declined and the
+// turn had carried on without an answer by the time the app was opened. Claude
+// Code aborts a stdio MCP tool call that stays silent for 30 minutes, so the
+// wait has to end before that.
+const approvalTimeoutMs = Number(process.env.PHONE_APPROVAL_TIMEOUT_MS || 20 * 60 * 1000);
 const approvalSocketPaths = new Set();
 
 function claudePermissionMode(options = {}) {
@@ -3906,7 +3958,11 @@ class ClaudeBridge {
   setBridgeRunState(state, label, turnId = this.activeTurnId || null) {
     const next = { state, label, turnId, updatedAt: Date.now(), ...this.workspaceMeta() };
     const previous = this.runState || {};
-    if (state !== "approval") this.pendingApproval = null;
+    // A question that is still waiting for its answer is kept through every
+    // other state change. Dropping the held copy on a stream update left the
+    // asker waiting on a card no reconnecting phone would be handed.
+    const stillAsked = Boolean(this.pendingApproval && this.pendingApprovals?.has(this.pendingApproval.id));
+    if (state !== "approval" && !stillAsked) this.pendingApproval = null;
     this.runState = next;
     lastBridgeEventAt = Date.now();
     if (previous.state !== state || previous.label !== label || previous.turnId !== turnId) {
@@ -4458,46 +4514,30 @@ class ClaudeBridge {
         const message = "Claudeからの出力が止まったため、この処理を終了しました。もう一度送信してください。";
         this.setBridgeRunState("error", "応答なし", turnId);
         this.emit("error", { text: message });
-        notifyRunEvent("failed", {
-          provider: this.provider,
-          model: this.model,
-          threadId: this.threadId,
-          turnId,
-          message,
-        });
+        notifyRunEvent("failed", { bridge: this, model: this.model, turnId, message });
       } else if (code === 0 && !wasInterrupted) {
         if (assistantText.trim()) this.appendHistory({ type: "assistant", text: assistantText, outputGroup: turnId });
         const question = latestAssistantQuestion(this);
         this.setBridgeRunState(question ? "question" : "done", question ? "返信待ち" : "完了しました", turnId);
         this.emit("turn", { status: "completed", turnId, run: this.runPayload() });
+        // One message per finished turn: the question when there is one, the
+        // answer otherwise. See the Codex turn/completed handler.
         if (question) {
-          notifyBridgeEvent("question_required", {
-            provider: this.provider,
-            threadId: this.threadId,
-            turnId,
-            severity: "warning",
-            title: "返信待ち",
-            message: question,
-          });
+          notifyBridgeEvent("question_required", { bridge: this, turnId, severity: "warning", detail: question, force: true });
+        } else {
+          notifyRunEvent("completed", { bridge: this, model: this.model, turnId, reply: assistantText });
         }
-        notifyRunEvent("completed", { provider: this.provider, model: this.model, threadId: this.threadId, turnId });
       } else if (wasInterrupted) {
         if (assistantText.trim()) this.appendHistory({ type: "assistant", text: assistantText, outputGroup: turnId });
         this.setBridgeRunState("interrupted", "中断しました", turnId);
         this.emit("turn", { status: "completed", turnId, run: this.runPayload() });
-        notifyRunEvent("interrupted", { provider: this.provider, model: this.model, threadId: this.threadId, turnId });
+        notifyRunEvent("interrupted", { bridge: this, model: this.model, turnId, reply: assistantText });
       } else {
         const reason = signal ? `signal=${signal}` : `code=${code}`;
         const message = `Claude process exited (${reason})${stderrBuffer.trim() ? `: ${stderrBuffer.trim().slice(-1000)}` : ""}`;
         this.setBridgeRunState("error", "エラー", turnId);
         this.emit("error", { text: message });
-        notifyRunEvent("failed", {
-          provider: this.provider,
-          model: this.model,
-          threadId: this.threadId,
-          turnId,
-          message,
-        });
+        notifyRunEvent("failed", { bridge: this, model: this.model, turnId, message });
       }
       this.startNextQueuedTurn();
       this.scheduleIdleDispose();
@@ -4606,10 +4646,15 @@ class ClaudeBridge {
       if (!socket.destroyed) socket.end(`${JSON.stringify({ decision, message, answers: chosen || undefined })}\n`);
     };
 
+    const timeoutMs = this.approvalTimeoutMs ?? approvalTimeoutMs;
     const timer = setTimeout(() => {
       settle("decline", "承認がタイムアウトしました。");
       this.emit("status", { text: "承認がタイムアウトしたため拒否しました。" });
-    }, approvalTimeoutMs);
+      // The card is gone by the time the app is opened; without this the
+      // person who was told to come and answer finds nothing, and the turn
+      // carrying on without them looks like a decision nobody made.
+      this.announceApprovalExpired(request, timeoutMs);
+    }, timeoutMs);
 
     // The asker hung up. Claude Code kills the prompt tool's child when the turn
     // that asked ends without an answer, so this is the ordinary end of an
@@ -4625,10 +4670,19 @@ class ClaudeBridge {
 
     this.pendingApprovals.set(id, settle);
 
-    if (!this.clients.size) {
-      settle("decline", "接続中のブラウザがないため拒否しました。");
-      this.emit("status", { text: "承認を求められましたが、接続中の端末がありません。" });
+    // No phone connected is the ordinary case for a question, not the
+    // exceptional one: the app is in the background, the socket is gone, and
+    // the notification is how the person finds out. So the question is held and
+    // announced, and the phone that opens gets the card from `ready`. Only when
+    // there is no notification channel either - nobody to tell, nobody to wait
+    // for - is it declined on the spot rather than left to hang.
+    if (!this.clients.size && !this.operatorReachable()) {
+      settle("decline", "接続中の端末も通知先もないため拒否しました。");
+      this.emit("status", { text: "承認を求められましたが、接続中の端末も通知先もありません。" });
       return;
+    }
+    if (!this.clients.size) {
+      this.emit("status", { text: "承認を求められました。接続中の端末がないため、通知を送って答えを待っています。" });
     }
 
     // Held, not just broadcast. A phone that reloads or drops its socket while
@@ -4647,14 +4701,41 @@ class ClaudeBridge {
       runState: this.runState?.state || null,
       pendingApprovalId: this.pendingApproval?.id || null,
     });
-    const questions = askUserQuestions(request.params);
+    this.announceApproval(request, timeoutMs);
+  }
+
+  // Whether a question asked while no phone is connected can still reach the
+  // person: true when a notification channel is configured.
+  operatorReachable() {
+    return notificationTargets(process.env).length > 0;
+  }
+
+  announceApproval(request, timeoutMs = approvalTimeoutMs) {
+    const approval = approvalDetail(request);
     notifyBridgeEvent("approval_required", {
-      provider: this.provider,
-      threadId: this.threadId,
+      bridge: this,
       turnId: this.activeTurnId,
       severity: "warning",
-      title: questions.length ? "質問待ち" : "承認待ち",
-      message: questions.length ? `${questions.length}件の質問に回答してください` : `${request.params.toolName} の承認待ちです`,
+      detail: approval.text,
+      questionCount: approval.questionCount || 0,
+      deadlineMinutes: Math.max(1, Math.round(timeoutMs / 60_000)),
+      // With no phone connected the notification is the only way the question
+      // reaches anyone, so it goes out whether or not event notifications are
+      // switched on.
+      force: !this.clients.size,
+    });
+  }
+
+  announceApprovalExpired(request, timeoutMs = approvalTimeoutMs) {
+    const approval = approvalDetail(request);
+    notifyBridgeEvent("approval_expired", {
+      bridge: this,
+      turnId: this.activeTurnId,
+      severity: "warning",
+      detail: approval.text,
+      questionCount: approval.questionCount || 0,
+      deadlineMinutes: Math.max(1, Math.round(timeoutMs / 60_000)),
+      force: true,
     });
   }
 
@@ -4886,7 +4967,9 @@ function tokenFreeLanUrls() {
 }
 
 function startupNotificationUrls() {
-  return startupTokenUrlsEnabled() ? notificationBridgeUrls : tokenFreeLanUrls();
+  if (startupTokenUrlsEnabled()) return notificationBridgeUrls;
+  // The published HTTPS address first: it is the one the installed app uses.
+  return [...new Set([servedBridgeBaseUrl, ...tokenFreeLanUrls()].filter(Boolean))];
 }
 
 function enabledNotificationProviders(env = process.env) {
@@ -5875,6 +5958,7 @@ async function main() {
     const advertisedAddresses = uiHost === "0.0.0.0" ? lanAddresses() : [uiHost];
     const urls = bridgeUrls(advertisedAddresses, uiPort, phoneToken);
     notificationBridgeUrls = urls;
+    servedBridgeBaseUrl = servedBridgeUrl(uiPort);
     console.log("");
     console.log("Codex shared browser bridge is ready.");
     for (const url of urls) console.log(`  ${maskTokenInUrl(url)}`);
@@ -5902,15 +5986,11 @@ async function main() {
     if (isDebugEnabled()) console.log(`Debug log: ${debugLogPath()} (PHONE_DEBUG is on)`);
     console.log("Press Ctrl+C to stop.");
 
-    notifyBridgeUrls(startupNotificationUrls()).then((results) => {
+    if (servedBridgeBaseUrl) console.log(`Published: ${servedBridgeBaseUrl} (tailscale serve, HTTPS; notification links use it)`);
+    // One startup message. The `bridge_started` event that used to follow it
+    // told the same channel the same thing a second time.
+    notifyBridgeUrls(startupNotificationUrls(), { machine: phoneMachineLabel, project: path.basename(workdir), color: phoneBridgeColor }).then((results) => {
       logNotifyResults("startup", results);
-    });
-    notifyBridgeEvent("bridge_started", {
-      severity: "info",
-      title: "スマホブリッジを起動しました",
-      message: `${phoneBridgeLabel} が ${tokenFreeLanUrls()[0] || `http://localhost:${uiPort}/`} で待機しています。`,
-      projectName: path.basename(workdir),
-      url: tokenFreeLanUrls()[0] || "",
     });
   });
 
@@ -5931,6 +6011,7 @@ if (require.main === module) {
 
 module.exports = {
   ClaudeBridge,
+  SharedBridge,
   appIdentityForProvider,
   approvalMcpConfig,
   bridgeIsUntouched,

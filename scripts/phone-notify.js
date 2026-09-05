@@ -81,6 +81,18 @@ function notificationEventsEnabled(env = process.env) {
   return /^(1|true|yes|on)$/i.test(String(envValue(env, "PHONE_NOTIFY_EVENTS") || ""));
 }
 
+// How much of the answer a completion notification quotes. The quote is what
+// lets the reader tell from the notification alone what finished, without
+// opening the app; `0` leaves it out for a channel that should not carry it.
+const defaultExcerptChars = 200;
+
+function notificationExcerptChars(env = process.env) {
+  const raw = envValue(env, "PHONE_NOTIFY_EXCERPT_CHARS");
+  if (raw === undefined || raw === "") return defaultExcerptChars;
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= 0 ? Math.floor(value) : defaultExcerptChars;
+}
+
 // The startup message lands in a chat channel, and a tokenized URL there is the
 // key to the whole fleet rather than to one Mac: a bridge serves the registry
 // backup, so one authenticated request reads the backed-up tokens of every
@@ -113,13 +125,84 @@ function redactNotificationText(value) {
     .replace(/\b(token:\s*)[A-Za-z0-9._~+/=-]{12,}/gi, "$1[redacted]");
 }
 
+// Which Mac a message is about has to be visible before the message is read:
+// two Macs post to the same channel, and "Claude finished" from one of them
+// looks exactly like the other. Each Mac gets the colour its Home Screen icon
+// carries in the phone UI - mini amber, Air blue - and any other name a fixed
+// colour of its own. `PHONE_BRIDGE_COLOR` overrides the guess.
+const machineAccentColors = { mini: "#F59E0B", air: "#2563EB" };
+const accentPalette = ["#FF5D22", "#7C3AED", "#0F766E", "#DB2777", "#CA8A04", "#0891B2"];
+const neutralAccentColor = "#6B7280";
+
+function sanitizeHexColor(value) {
+  const text = String(value || "").trim();
+  return /^#[0-9a-f]{6}$/i.test(text) ? text.toUpperCase() : "";
+}
+
+function machineColor(machine, override = "") {
+  const forced = sanitizeHexColor(override);
+  if (forced) return forced;
+  const key = String(machine || "").trim().toLowerCase();
+  if (!key) return neutralAccentColor;
+  if (/(?:^|[^a-z])mini(?:[^a-z]|$)|mac.?mini/.test(key)) return machineAccentColors.mini;
+  if (/(?:^|[^a-z])air(?:[^a-z]|$)|macbook.?air/.test(key)) return machineAccentColors.air;
+  let hash = 0;
+  for (const char of key) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  return accentPalette[hash % accentPalette.length];
+}
+
+function colorInteger(hex) {
+  return Number.parseInt((sanitizeHexColor(hex) || neutralAccentColor).slice(1), 16);
+}
+
+// A quote for a notification: one line, markdown scaffolding dropped, cut to
+// `max` characters. An answer is written for a screen that scrolls; the
+// notification banner it is quoted into does not.
+function notificationExcerpt(value, max = defaultExcerptChars) {
+  const limit = Number(max);
+  if (!Number.isFinite(limit) || limit <= 0) return "";
+  const text = String(value || "")
+    .replace(/```[^\n]*\n?/g, " ")
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^\s*(?:[#>*\-+]+|\d+[.)])\s+/, "").trim())
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (text.length <= limit) return text;
+  return `${text.slice(0, Math.max(1, limit - 1)).trimEnd()}…`;
+}
+
+// The first line of what the person asked. It is what the phone's chat list
+// shows as the chat's name, so a notification that opens with it is recognised
+// the way the chat itself is.
+const promptExcerptChars = 80;
+
 // A notification is read by a person, on a phone, and this one is read in
 // Japanese - the same language the UI it links to is written in. Only the
 // identifiers stay as they are: a thread id, a turn id, a model name and the
 // event type are looked up and pasted, not read.
-function notificationMessage(urls) {
-  const visibleUrls = urls.length ? urls : ["LAN内のURLを検出できませんでした。Mac側のコンソールを確認してください。"];
-  return ["スマホブリッジを起動しました。", "", ...visibleUrls, "", "同じWi-Fi / LAN上のスマホから、上のURLを開いてください。"].join("\n");
+function startupNotificationParts(urls, { machine = "", project = "", color = "" } = {}) {
+  const headline = machine ? `🟢 ${machine} のスマホブリッジが起動しました` : "🟢 スマホブリッジが起動しました";
+  const lines = [];
+  if (project) lines.push(`フォルダ: ${project}`);
+  lines.push("");
+  if (urls.length) {
+    lines.push("ホーム画面のアプリから、いつも通り開けます。アプリがまだない場合は下のURLを開いてください。", "", ...urls);
+  } else {
+    lines.push("接続用のURLを見つけられませんでした。Mac側の画面を確認してください。");
+  }
+  return {
+    headline,
+    body: lines.join("\n").replace(/^\n+/, ""),
+    author: ["スマホブリッジ", machine].filter(Boolean).join(" "),
+    color: machineColor(machine, color),
+  };
+}
+
+function notificationMessage(urls, options = {}) {
+  const parts = startupNotificationParts(urls, options);
+  return `${parts.headline}\n${parts.body}`;
 }
 
 const providerLabels = { codex: "Codex", claude: "Claude" };
@@ -129,50 +212,275 @@ function providerLabel(provider) {
   return providerLabels[key] || provider || "Codex";
 }
 
-function taskStatusLabel(status) {
-  if (status === "completed") return "ターン完了";
-  if (status === "failed") return "失敗";
-  if (status === "approval") return "承認待ち";
-  if (status === "interrupted") return "中断";
-  return String(status || "更新");
-}
-
+// Plain words for each kind of event. The raw type used to be printed beside
+// its label, for a search in the channel to match on; the owner read it as
+// noise, and a search matches the Japanese heading just as well.
 const eventTypeLabels = {
-  bridge_started: "ブリッジ起動",
-  turn_completed: "ターン完了",
+  bridge_started: "起動",
+  turn_completed: "作業終了",
   approval_required: "承認待ち",
-  question_required: "返信待ち",
+  approval_expired: "承認の時間切れ",
+  question_required: "質問待ち",
   test_failed: "失敗",
-  connection_lost: "接続切断",
+  connection_lost: "接続切れ",
   history_sync_failed: "履歴同期の失敗",
-  long_running: "長時間実行",
+  long_running: "長時間の処理",
 };
 
 function eventTypeLabel(type) {
   return eventTypeLabels[String(type || "")] || String(type || "").replace(/_/g, " ");
 }
 
-const severityLabels = { info: "情報", warning: "注意", error: "エラー" };
+// A path in a notification only has to say which file; the folders above the
+// project are the same in every message and stop the eye.
+function shortPath(value) {
+  const text = String(value || "").trim();
+  const parts = text.split(/[\\/]/).filter(Boolean);
+  if (parts.length <= 3) return text;
+  return `…/${parts.slice(-2).join("/")}`;
+}
 
-// The host's own clock. An ISO timestamp in UTC is not a time anyone reads at a
-// glance, and the person reading this is standing in the timezone the work ran
-// in.
-function localTimeLabel(value) {
-  const at = new Date(value);
-  if (Number.isNaN(at.getTime())) return String(value || "");
-  return at.toLocaleString("ja-JP", { hour12: false });
+function commandText(value) {
+  if (Array.isArray(value)) return value.map((part) => String(part)).join(" ").trim();
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function changedPaths(params = {}, input = {}) {
+  const found = [];
+  const push = (value) => {
+    if (typeof value === "string" && value.trim()) found.push(shortPath(value));
+  };
+  const changes = params.changes ?? params.fileChanges ?? input.changes;
+  if (Array.isArray(changes)) changes.forEach((change) => push(typeof change === "string" ? change : change?.path || change?.file));
+  else if (changes && typeof changes === "object") Object.keys(changes).forEach(push);
+  [params.path, params.filePath, input.file_path, input.path, input.notebook_path].forEach(push);
+  return [...new Set(found)];
+}
+
+// What an approval request is asking for, said the way the phone's approval
+// card says it: a command, a file change, a question, or the tool by name. Both
+// providers arrive here - Codex as a JSON-RPC method with params, Claude as a
+// tool name with its input - and neither is something to paste into a message.
+function approvalDetail(request = {}) {
+  const method = String(request.method || "");
+  const params = request.params && typeof request.params === "object" ? request.params : {};
+  const input = params.input && typeof params.input === "object" ? params.input : {};
+  const questions = Array.isArray(input.questions)
+    ? input.questions.filter((question) => typeof question?.question === "string" && question.question.trim())
+    : [];
+  if (questions.length) {
+    return { kind: "question", questionCount: questions.length, text: questions.map((question) => question.question.trim()).join(" / ") };
+  }
+  const command = commandText(params.command ?? params.cmd ?? input.command);
+  if (command || /commandExecution/i.test(method) || /^bash$/i.test(String(params.toolName || ""))) {
+    const description = commandText(params.description ?? input.description);
+    return { kind: "command", text: `コマンドの実行: ${command || description || "(内容を取得できませんでした)"}` };
+  }
+  const paths = changedPaths(params, input);
+  if (paths.length || /fileChange|applyPatch/i.test(method)) {
+    return { kind: "file", text: `ファイルの変更: ${paths.join(", ") || "(対象を取得できませんでした)"}` };
+  }
+  const tool = String(params.toolName || method || "確認").trim();
+  const summary = commandText(input.description ?? input.url ?? input.pattern ?? input.query ?? "");
+  return { kind: "tool", text: summary ? `${tool}: ${summary}` : tool };
+}
+
+function normalizeEvent(event = {}) {
+  const type = String(event.type || event.status || "bridge_started");
+  const severity = eventSeverity({ ...event, type });
+  const createdAt = event.createdAt || new Date().toISOString();
+  const extra = event.extra && typeof event.extra === "object" ? event.extra : {};
+  const excerptChars = Number.isFinite(Number(event.excerptChars)) ? Number(event.excerptChars) : defaultExcerptChars;
+  return {
+    type,
+    status: String(event.status || extra.status || ""),
+    provider: String(event.provider || extra.provider || ""),
+    machine: redactNotificationText(event.machine || extra.machine || ""),
+    title: redactNotificationText(event.title || ""),
+    message: redactNotificationText(event.message || ""),
+    detail: redactNotificationText(event.detail || ""),
+    prompt: redactNotificationText(notificationExcerpt(event.prompt || event.threadTitle || "", promptExcerptChars)),
+    reply: redactNotificationText(notificationExcerpt(event.reply || "", excerptChars)),
+    questionCount: Number(event.questionCount) || 0,
+    minutes: Number(event.minutes) || 0,
+    deadlineMinutes: Number(event.deadlineMinutes) || 0,
+    threadId: event.threadId || "",
+    threadTitle: redactNotificationText(event.threadTitle || ""),
+    projectName: redactNotificationText(event.projectName || ""),
+    severity,
+    createdAt,
+    url: stripTokenFromUrl(event.url || ""),
+    color: machineColor(event.machine || extra.machine || "", event.color || extra.color || ""),
+    extra,
+  };
+}
+
+// "mini の Claude": the Mac first, because two Macs post to one channel and
+// the Mac is what tells their messages apart.
+function actorLabel(normalized) {
+  const who = providerLabel(normalized.provider);
+  return normalized.machine ? `${normalized.machine} の ${who}` : who;
+}
+
+// The name the message is posted under, where the channel supports one: the
+// same "Claude mini" / "Codex Air" the Home Screen icons are called.
+function notificationAuthor(normalized) {
+  const machine = normalized.machine || "";
+  if (normalized.type === "bridge_started" || normalized.type === "history_sync_failed") {
+    return ["スマホブリッジ", machine].filter(Boolean).join(" ");
+  }
+  return [providerLabel(normalized.provider), machine].filter(Boolean).join(" ");
+}
+
+// The first line is the whole notification on a locked phone, so it says who
+// did what, in words, before anything else.
+function headline(normalized) {
+  const who = actorLabel(normalized);
+  const machinePrefix = normalized.machine ? `${normalized.machine} の` : "";
+  switch (normalized.type) {
+    case "turn_completed":
+      return normalized.status === "interrupted" ? `⏹ ${who} の作業を途中で止めました` : `✅ ${who} の作業が終わりました`;
+    case "approval_required":
+      return normalized.questionCount ? `❓ ${who} から質問があります` : `🔔 ${who} が承認を待っています`;
+    case "approval_expired":
+      return normalized.questionCount ? `⌛ ${who} の質問は時間切れになりました` : `⌛ ${who} の承認待ちは時間切れになりました`;
+    case "question_required":
+      return `❓ ${who} から質問があります`;
+    case "test_failed":
+      return `❌ ${who} の作業が失敗しました`;
+    case "connection_lost":
+      return `⚠️ ${who} との接続が切れました`;
+    case "history_sync_failed":
+      return `⚠️ ${machinePrefix}チャット履歴の同期に失敗しました`;
+    case "long_running":
+      return `⏳ ${who} の作業が${normalized.minutes ? `${normalized.minutes}分以上` : "長時間"}続いています`;
+    case "bridge_started":
+      return `🟢 ${machinePrefix}スマホブリッジが起動しました`;
+    default:
+      return normalized.title || eventTypeLabel(normalized.type);
+  }
+}
+
+// What the message has to say beyond its headline, and what the reader can do
+// about it. `detail` is the one piece the caller supplies in prose: an error, a
+// command, a question. Everything else is derived, so two call sites cannot
+// describe the same thing in two ways.
+function bodyLines(normalized) {
+  const detail = normalized.detail || normalized.message;
+  const lines = [];
+  switch (normalized.type) {
+    case "turn_completed":
+      if (normalized.reply) lines.push(`${normalized.status === "interrupted" ? "途中までの返答" : "返答"}: ${normalized.reply}`);
+      if (normalized.status === "interrupted") lines.push("", "続きが必要なら、アプリからもう一度送ってください。");
+      break;
+    case "approval_required":
+      if (normalized.questionCount) {
+        if (detail) lines.push(`質問: ${detail}`);
+        lines.push("", "アプリを開いて答えてください。答えるまで作業は止まっています。");
+      } else {
+        if (detail) lines.push(`内容: ${detail}`);
+        lines.push("", "アプリを開いて「承認」か「拒否」を選んでください。選ぶまで作業は止まっています。");
+      }
+      // The wait has an end, and the reader should know where it is: a card
+      // that has vanished by the time the app is opened otherwise looks like a
+      // decision nobody made.
+      if (normalized.deadlineMinutes) lines.push(`${normalized.deadlineMinutes}分以内に答えがないときは「拒否」として作業を続けます。`);
+      break;
+    case "approval_expired":
+      if (detail) lines.push(`${normalized.questionCount ? "質問" : "内容"}: ${detail}`);
+      lines.push(
+        "",
+        `${normalized.deadlineMinutes ? `${normalized.deadlineMinutes}分たっても` : ""}答えがなかったため、「拒否」として作業を続けました。必要なら、アプリからもう一度指示してください。`,
+      );
+      break;
+    case "question_required":
+      if (detail) lines.push(`質問: ${detail}`);
+      lines.push("", "アプリを開いて返信してください。返信するまで作業は進みません。");
+      break;
+    case "test_failed":
+      if (detail) lines.push(`原因: ${detail}`);
+      lines.push("", "アプリで内容を確認して、必要ならもう一度送ってください。");
+      break;
+    case "connection_lost":
+      if (detail) lines.push(`詳細: ${detail}`);
+      lines.push("", "しばらく待っても直らないときは、アプリの設定にある「再起動」を押すか、Mac側を確認してください。");
+      break;
+    case "history_sync_failed":
+      if (detail) lines.push(`詳細: ${detail}`);
+      lines.push("", "作業はそのまま続けられます。ほかのMacにこのチャットの履歴が届いていない可能性があります。");
+      break;
+    case "long_running":
+      lines.push("まだ動いています。止めたい場合はアプリの「中断」を押してください。");
+      break;
+    case "bridge_started":
+      lines.push("ホーム画面のアプリから接続できます。");
+      break;
+    default:
+      if (detail) lines.push(detail);
+  }
+  return lines;
+}
+
+// The message in parts, for a channel that can show them apart: the headline
+// as the message text, the rest in a block carrying the Mac's colour, posted
+// under the Mac's name. A plain-text channel gets them joined.
+function eventNotificationParts(event = {}) {
+  const normalized = normalizeEvent(event);
+  const lines = [];
+  // The Mac is already in the headline; the folder is what the second line adds.
+  if (normalized.projectName) lines.push(`フォルダ: ${normalized.projectName}`);
+  if (normalized.prompt && normalized.type !== "bridge_started") lines.push(`依頼: ${normalized.prompt}`);
+  const body = bodyLines(normalized);
+  if (body.length) lines.push("", ...body);
+  if (normalized.url) lines.push("", `開く: ${normalized.url}`);
+  return {
+    headline: headline(normalized),
+    body: lines.join("\n").replace(/\n{3,}/g, "\n\n").replace(/^\n+/, ""),
+    author: notificationAuthor(normalized),
+    color: normalized.color,
+  };
+}
+
+function eventNotificationMessage(event = {}) {
+  const parts = eventNotificationParts(event);
+  return parts.body ? `${parts.headline}\n${parts.body}` : parts.headline;
+}
+
+const statusToType = {
+  approval: "approval_required",
+  completed: "turn_completed",
+  interrupted: "turn_completed",
+  failed: "test_failed",
+};
+
+// A run event - a turn that finished, failed, was interrupted or is waiting -
+// as the structured event the composer reads. The caller hands over what it
+// knows: the prompt, the answer, the error, the Mac, the folder.
+function runEvent(event = {}) {
+  const status = event.status || "updated";
+  return {
+    type: statusToType[status] || status,
+    status,
+    provider: event.provider,
+    machine: event.machine || "",
+    projectName: event.projectName || event.workdir?.split(/[\\/]/).filter(Boolean).pop() || "",
+    threadId: event.threadId,
+    prompt: event.prompt || "",
+    reply: event.reply || "",
+    detail: event.message || "",
+    excerptChars: event.excerptChars,
+    severity: status === "failed" ? "error" : status === "approval" ? "warning" : "info",
+    url: stripTokenFromUrl(event.url || ""),
+    extra: {
+      provider: event.provider,
+      turnId: event.turnId,
+      model: event.model,
+    },
+  };
 }
 
 function taskNotificationMessage(event = {}) {
-  const lines = [`${providerLabel(event.provider)}：${taskStatusLabel(event.status)}`, ""];
-  if (event.threadId) lines.push(`スレッド: ${event.threadId}`);
-  if (event.turnId) lines.push(`ターン: ${event.turnId}`);
-  if (event.model) lines.push(`モデル: ${event.model}`);
-  if (event.workdir) lines.push(`作業フォルダ: ${event.workdir}`);
-  if (event.message) lines.push("", redactNotificationText(event.message));
-  if (Array.isArray(event.urls) && event.urls.length) lines.push("", "リンク:", ...event.urls.map(stripTokenFromUrl));
-  else if (event.url) lines.push("", stripTokenFromUrl(event.url));
-  return redactNotificationText(lines.join("\n"));
+  return eventNotificationMessage(runEvent(event));
 }
 
 function eventSeverity(event = {}) {
@@ -191,45 +499,6 @@ function eventTags(event = {}) {
   return "white_check_mark,computer";
 }
 
-function normalizeEvent(event = {}) {
-  const type = String(event.type || event.status || "bridge_started");
-  const severity = eventSeverity({ ...event, type });
-  const title = String(event.title || eventTypeLabel(type));
-  const createdAt = event.createdAt || new Date().toISOString();
-  return {
-    type,
-    title: redactNotificationText(title),
-    message: redactNotificationText(event.message || title),
-    threadId: event.threadId || "",
-    threadTitle: redactNotificationText(event.threadTitle || ""),
-    projectName: redactNotificationText(event.projectName || ""),
-    severity,
-    createdAt,
-    url: stripTokenFromUrl(event.url || ""),
-    extra: event.extra && typeof event.extra === "object" ? event.extra : {},
-  };
-}
-
-function eventNotificationMessage(event = {}) {
-  const normalized = normalizeEvent(event);
-  const lines = [
-    normalized.title,
-    "",
-    normalized.message,
-    "",
-    // The raw type is kept alongside its label: it is what a filter or a search
-    // in the channel is written against.
-    `種別: ${eventTypeLabel(normalized.type)} (${normalized.type})`,
-    `重要度: ${severityLabels[normalized.severity] || normalized.severity}`,
-    `発生: ${localTimeLabel(normalized.createdAt)}`,
-  ];
-  if (normalized.projectName) lines.push(`プロジェクト: ${normalized.projectName}`);
-  if (normalized.threadTitle) lines.push(`スレッド名: ${normalized.threadTitle}`);
-  if (normalized.threadId) lines.push(`スレッド: ${normalized.threadId}`);
-  if (normalized.url) lines.push("", normalized.url);
-  return lines.join("\n");
-}
-
 async function fetchWithTimeout(fetchImpl, url, options, timeoutMs) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -246,14 +515,24 @@ function ntfyEndpoint(target) {
   return new URL(encodeURIComponent(target.topic), server).toString();
 }
 
-async function postNtfy(target, urls, fetchImpl, timeoutMs) {
+// An HTTP header carries bytes, not Japanese: `fetch` refuses a header value
+// with a character above Latin-1. ntfy reads RFC 2047 in its title header, so
+// a Japanese title travels encoded and arrives readable.
+function ntfyHeaderValue(value) {
+  const text = String(value || "");
+  // eslint-disable-next-line no-control-regex
+  if (/^[\x20-\x7e]*$/.test(text)) return text;
+  return `=?UTF-8?B?${Buffer.from(text, "utf8").toString("base64")}?=`;
+}
+
+async function postNtfy(target, urls, fetchImpl, timeoutMs, message) {
   return postNtfyNotification(
     target,
     {
-      title: "Codex phone bridge ready",
+      title: "スマホブリッジが起動しました",
       tags: "computer,phone",
       clickUrl: urls[0],
-      message: notificationMessage(urls),
+      message,
     },
     fetchImpl,
     timeoutMs,
@@ -262,7 +541,7 @@ async function postNtfy(target, urls, fetchImpl, timeoutMs) {
 
 async function postNtfyNotification(target, notification, fetchImpl, timeoutMs) {
   const headers = {
-    title: notification.title,
+    title: ntfyHeaderValue(notification.title),
     tags: notification.tags || "computer,phone",
   };
   if (notification.clickUrl) headers.click = notification.clickUrl;
@@ -275,14 +554,14 @@ async function postNtfyNotification(target, notification, fetchImpl, timeoutMs) 
   if (!response.ok) throw new Error(`ntfy returned HTTP ${response.status}`);
 }
 
-async function postPushover(target, urls, fetchImpl, timeoutMs) {
+async function postPushover(target, urls, fetchImpl, timeoutMs, message) {
   return postPushoverNotification(
     target,
     {
-      title: "Codex phone bridge ready",
+      title: "スマホブリッジが起動しました",
       clickUrl: urls[0],
-      clickTitle: "Open Codex phone bridge",
-      message: notificationMessage(urls),
+      clickTitle: "スマホブリッジを開く",
+      message,
     },
     fetchImpl,
     timeoutMs,
@@ -298,7 +577,7 @@ async function postPushoverNotification(target, notification, fetchImpl, timeout
   });
   if (notification.clickUrl) {
     form.set("url", notification.clickUrl);
-    form.set("url_title", notification.clickTitle || "Open phone bridge");
+    form.set("url_title", notification.clickTitle || "スマホブリッジを開く");
   }
   if (target.device) form.set("device", target.device);
   const response = await fetchWithTimeout(fetchImpl, "https://api.pushover.net/1/messages.json", {
@@ -317,23 +596,27 @@ function discordEndpoint(target) {
   return url.toString();
 }
 
-async function postDiscord(target, urls, fetchImpl, timeoutMs) {
-  return postDiscordNotification(
-    target,
-    { message: notificationMessage(urls) },
-    fetchImpl,
-    timeoutMs,
-  );
+// A Discord post is three things the channel shows apart, and all three say
+// which Mac it came from: the name it is posted under ("Claude mini"), the
+// headline as the message text (what a lock screen shows), and the rest in an
+// embed whose left edge carries that Mac's colour.
+function discordPayload(notification) {
+  const payload = {
+    content: notification.headline || notification.message,
+    allowed_mentions: { parse: [] },
+  };
+  if (notification.author) payload.username = notification.author;
+  if (notification.headline && notification.body) {
+    payload.embeds = [{ description: notification.body, color: colorInteger(notification.color) }];
+  }
+  return payload;
 }
 
 async function postDiscordNotification(target, notification, fetchImpl, timeoutMs) {
   const response = await fetchWithTimeout(fetchImpl, discordEndpoint(target), {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      content: notification.message,
-      allowed_mentions: { parse: [] },
-    }),
+    body: JSON.stringify(discordPayload(notification)),
   }, timeoutMs);
   if (!response.ok) throw new Error(`Discord returned HTTP ${response.status}`);
 }
@@ -343,13 +626,15 @@ async function notifyBridgeUrls(urls, options = {}) {
   const fetchImpl = options.fetch || fetch;
   const targets = notificationTargets(env);
   const timeoutMs = notificationTimeoutMs(env);
+  const parts = startupNotificationParts(urls, { machine: options.machine, project: options.project, color: options.color });
+  const message = `${parts.headline}\n${parts.body}`;
   const results = [];
 
   for (const target of targets) {
     try {
-      if (target.type === "ntfy") await postNtfy(target, urls, fetchImpl, timeoutMs);
-      if (target.type === "pushover") await postPushover(target, urls, fetchImpl, timeoutMs);
-      if (target.type === "discord") await postDiscord(target, urls, fetchImpl, timeoutMs);
+      if (target.type === "ntfy") await postNtfy(target, urls, fetchImpl, timeoutMs, message);
+      if (target.type === "pushover") await postPushover(target, urls, fetchImpl, timeoutMs, message);
+      if (target.type === "discord") await postDiscordNotification(target, { ...parts, message }, fetchImpl, timeoutMs);
       results.push({ type: target.type, ok: true });
     } catch (error) {
       results.push({ type: target.type, ok: false, error: error.message });
@@ -360,30 +645,8 @@ async function notifyBridgeUrls(urls, options = {}) {
 }
 
 async function notifyTaskEvent(event = {}, options = {}) {
-  const status = event.status || "updated";
-  const statusToType = {
-    approval: "approval_required",
-    completed: "turn_completed",
-    interrupted: "turn_completed",
-    failed: "test_failed",
-  };
-  return notifyEvent(
-    {
-      type: statusToType[status] || status,
-      title: `${providerLabel(event.provider)}：${taskStatusLabel(status)}`,
-      message: taskNotificationMessage({ ...event, url: stripTokenFromUrl(event.url), urls: (event.urls || []).map(stripTokenFromUrl) }),
-      threadId: event.threadId,
-      projectName: event.projectName || event.workdir?.split(/[\\/]/).filter(Boolean).pop() || "",
-      severity: status === "failed" ? "error" : status === "approval" ? "warning" : "info",
-      url: event.url,
-      extra: {
-        provider: event.provider,
-        turnId: event.turnId,
-        model: event.model,
-      },
-    },
-    options,
-  );
+  const env = options.env || process.env;
+  return notifyEvent(runEvent({ ...event, excerptChars: event.excerptChars ?? notificationExcerptChars(env) }), options);
 }
 
 const recentEventNotifications = new Map();
@@ -395,19 +658,21 @@ async function notifyEvent(event = {}, options = {}) {
   const targets = notificationTargets(env);
   const timeoutMs = notificationTimeoutMs(env);
   const dedupeMs = notificationEventDedupeMs(env);
-  const normalized = normalizeEvent(event);
+  const normalized = normalizeEvent({ ...event, excerptChars: event.excerptChars ?? notificationExcerptChars(env) });
   const dedupeKey = `${normalized.type}:${normalized.threadId || normalized.projectName || normalized.url || "global"}`;
   const now = Date.now();
   const lastSentAt = recentEventNotifications.get(dedupeKey) || 0;
   if (!options.force && dedupeMs && now - lastSentAt < dedupeMs) return [];
   recentEventNotifications.set(dedupeKey, now);
 
+  const parts = eventNotificationParts(normalized);
   const notification = {
-    title: normalized.title,
+    ...parts,
+    title: parts.headline,
     tags: eventTags(normalized),
     clickUrl: normalized.url,
-    clickTitle: "Open phone bridge",
-    message: eventNotificationMessage(normalized),
+    clickTitle: "スマホブリッジを開く",
+    message: parts.body ? `${parts.headline}\n${parts.body}` : parts.headline,
   };
   const results = [];
 
@@ -426,15 +691,22 @@ async function notifyEvent(event = {}, options = {}) {
 }
 
 module.exports = {
+  approvalDetail,
   bridgeUrls,
   tokenNeedsUrlEncoding,
+  discordPayload,
   eventNotificationMessage,
+  eventNotificationParts,
   eventTypeLabel,
+  machineColor,
   notificationEventDedupeMs,
   notificationEventsEnabled,
+  notificationExcerpt,
+  notificationExcerptChars,
   notificationMessage,
   notificationTargets,
   notificationTimeoutMs,
+  ntfyHeaderValue,
   redactNotificationText,
   startupTokenUrlsEnabled,
   notifyEvent,
