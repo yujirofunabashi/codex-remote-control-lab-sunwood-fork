@@ -5085,11 +5085,24 @@ async function healthPayload(phoneToken, requestedProvider = agentProvider) {
   };
 }
 
+// A thread that was started but never spoken to. Every connect that names no
+// thread starts one, and the bridge object then lives on for an hour after the
+// phone leaves, so each of those sat in everyone's list as 名前未設定のチャット
+// with no date - one per open of a Codex icon, one per test run. The phone
+// already draws the chat it is on as 現在のチャット, so the list has nothing to
+// gain from these; a turn in flight still counts as content.
+function bridgeIsUntouched(bridge = {}) {
+  const history = Array.isArray(bridge.history) ? bridge.history : [];
+  if (history.some((entry) => entry?.type === "user")) return false;
+  if (typeof bridge.hasActiveWork === "function" && bridge.hasActiveWork()) return false;
+  return true;
+}
+
 function localThreadList(provider = "") {
   const requestedProvider = provider ? normalizeProvider(provider) : "";
   return Array.from(bridges.values())
     .filter((bridge) => !requestedProvider || bridge.provider === requestedProvider)
-    .filter((bridge) => bridge.threadId)
+    .filter((bridge) => bridge.threadId && !bridgeIsUntouched(bridge))
     .map((bridge) => threadRecordForBridge(bridge));
 }
 
@@ -5920,6 +5933,7 @@ module.exports = {
   ClaudeBridge,
   appIdentityForProvider,
   approvalMcpConfig,
+  bridgeIsUntouched,
   codexModelChoices,
   codexModelIdsFromList,
   localSettingsPayload,

@@ -5364,10 +5364,11 @@ async function refreshBridgeState(bridgeId, { force = false } = {}) {
     state.lastEventAt = Date.now();
     const refreshed = {
       ...entry,
-      // A bridge that names itself outranks any seed the UI left behind, which
-      // is how a registry still holding one heals instead of carrying it for
-      // good. A name someone actually set is never overwritten.
-      label: uiUtils.isPlaceholderBridgeLabel(entry.label) ? info.label || entry.label : entry.label,
+      // The bridge's own name is the one set on the Mac that runs it, and it
+      // is the only place a name is set. The registry copy is a cache of it:
+      // when the Mac is renamed, every phone follows on its next poll instead
+      // of carrying the old name for good.
+      label: info.label || entry.label,
       group: entry.group || info.group || "",
       workdir: info.cwd || info.workdir || entry.workdir || "",
       port: info.uiPort || entry.port || null,
