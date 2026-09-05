@@ -161,6 +161,15 @@ const bridgeAddStatus = document.querySelector("#bridgeAddStatus");
 const threadInboxTabs = document.querySelector("#threadInboxTabs");
 const threadInboxTabButtons = document.querySelectorAll("[data-thread-filter]");
 const threadSortTabButtons = document.querySelectorAll("[data-thread-sort]");
+// The list shows one provider across every Mac, and this is where that is
+// chosen and seen. It switches the same way the settings sheet does.
+const threadProviderTabButtons = document.querySelectorAll("[data-thread-provider]");
+for (const button of threadProviderTabButtons) {
+  button.addEventListener("click", () => {
+    const provider = normalizeProviderName(button.dataset.threadProvider);
+    if (provider && provider !== currentThreadProvider()) switchThreadProvider(provider);
+  });
+}
 const approvalStrip = document.querySelector("#approvalStrip");
 const taskTemplates = document.querySelector("#taskTemplates");
 const taskTemplatesToggle = document.querySelector("#taskTemplatesToggle");
@@ -1508,7 +1517,20 @@ function threadsHiddenByInboxFilter() {
   }).length;
 }
 
+// Marks the provider the list is showing. Nothing else in the drawer said
+// which of the two it was, and a Codex list and a Claude list of the same Mac
+// read as the same screen.
+function renderThreadProviderTabs() {
+  const provider = currentThreadProvider();
+  for (const button of threadProviderTabButtons) {
+    const active = normalizeProviderName(button.dataset.threadProvider) === provider;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+  }
+}
+
 function renderThreadInboxTabs() {
+  renderThreadProviderTabs();
   for (const button of threadInboxTabButtons) {
     const active = button.dataset.threadFilter === threadInboxFilter;
     button.classList.toggle("active", active);
@@ -2044,6 +2066,7 @@ function setActiveProvider(provider) {
     threadProvider = activeProvider;
   }
   document.documentElement.dataset.provider = activeProvider;
+  renderThreadProviderTabs();
   // The chat tab used to be a hardcoded "Codex". With several bridges open at
   // once, every tab read the same regardless of which agent was behind it.
   if (chatViewLabel) chatViewLabel.textContent = providerLabel(currentThreadProvider());

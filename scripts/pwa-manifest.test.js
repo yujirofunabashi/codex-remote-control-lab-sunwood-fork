@@ -189,5 +189,8 @@ test("the install page carries the requested provider's icon, name and manifest"
     phoneToken: token,
   });
   assert.equal(plain.statusCode, 200);
-  assert.doesNotMatch(plain.body, /provider=/);
+  // The page markup names providers of its own (the list switch), so only the
+  // manifest link and the icon are checked for the parameter.
+  assert.doesNotMatch(plain.body, /site\.webmanifest\?[^"]*provider=/);
+  assert.doesNotMatch(plain.body, /<title>Codex /);
 });

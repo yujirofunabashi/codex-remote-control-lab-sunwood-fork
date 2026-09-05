@@ -71,6 +71,10 @@
         <div class="thread-section">
           <div class="thread-section-header">
             <div class="section-title">最近のチャット</div>
+            <div id="threadProviderTabs" class="thread-provider-tabs" role="tablist" aria-label="一覧に出すAI">
+              <button type="button" data-thread-provider="claude" aria-selected="false">Claude</button>
+              <button type="button" data-thread-provider="codex" aria-selected="false">Codex</button>
+            </div>
             <div id="threadInboxTabs" class="thread-inbox-tabs" role="tablist" aria-label="チャットの絞り込み">
               <button type="button" data-thread-filter="attention" aria-selected="false">要対応</button>
               <button type="button" data-thread-filter="running" aria-selected="false">実行中</button>

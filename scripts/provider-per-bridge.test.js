@@ -199,3 +199,38 @@ test("opening a row puts the phone in that row's provider, and remembers where i
   assert.equal(result.changed, false);
   assert.match(functionSource("selectThread"), /useThreadProvider\(options\.thread\?\.provider\)/);
 });
+
+// The list follows one provider, and nothing in the drawer said which: a Codex
+// list and a Claude list of the same Mac read as the same screen. The switch
+// at the top of the list is where that is chosen and seen.
+test("the drawer has a switch for which provider the list shows, and it marks the current one", () => {
+  const indexSource = fs.readFileSync(path.join(__dirname, "..", "public", "index.html"), "utf8");
+  assert.match(indexSource, /data-thread-provider="claude"/);
+  assert.match(indexSource, /data-thread-provider="codex"/);
+  assert.match(mainSource, /switchThreadProvider\(provider\)/, "tapping the switch changes the provider the same way the settings sheet does");
+  const render = new Function(`
+    let currentProvider = "codex";
+    const buttons = ["claude", "codex"].map((name) => ({
+      dataset: { threadProvider: name },
+      active: false,
+      selected: "",
+      classList: { toggle(cls, on) { if (cls === "active") this.owner.active = on; } },
+      setAttribute(name, value) { if (name === "aria-selected") this.selected = value; },
+    }));
+    for (const button of buttons) button.classList.owner = button;
+    const threadProviderTabButtons = buttons;
+    function normalizeProviderName(value) {
+      const text = String(value || "").trim().toLowerCase();
+      return text === "codex" || text === "claude" ? text : "";
+    }
+    function currentThreadProvider() { return currentProvider; }
+    ${functionSource("renderThreadProviderTabs")}
+    return function run(provider) {
+      currentProvider = provider;
+      renderThreadProviderTabs();
+      return Object.fromEntries(buttons.map((b) => [b.dataset.threadProvider, b.active + "/" + b.selected]));
+    };
+  `)();
+  assert.deepEqual(render("codex"), { claude: "false/false", codex: "true/true" });
+  assert.deepEqual(render("claude"), { claude: "true/true", codex: "false/false" });
+});

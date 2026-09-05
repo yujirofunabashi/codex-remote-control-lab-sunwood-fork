@@ -7643,3 +7643,35 @@ body[data-main-view="terminal"] .pwa-install-hint {
   font-size: 12px;
   padding: 10px;
 }
+
+/* Which AI the list is showing. The list follows one provider across every
+   Mac, so this is the mode of the whole list, and it has to be the first thing
+   the eye lands on - a plain segmented control, no colour semantics that
+   would collide with the machine chips beside the folder names. */
+.thread-provider-tabs {
+  display: flex;
+  gap: 3px;
+  margin: 0 10px 10px;
+  padding: 3px;
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--line) 60%, transparent);
+}
+
+.thread-provider-tabs button {
+  flex: 1;
+  min-height: 36px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: color-mix(in srgb, var(--text) 62%, transparent);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 760;
+  letter-spacing: 0.01em;
+}
+
+.thread-provider-tabs button.active {
+  background: var(--text);
+  color: var(--bg, #fff);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.14);
+}
