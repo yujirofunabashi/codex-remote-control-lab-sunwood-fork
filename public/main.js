@@ -5287,6 +5287,36 @@ async function fetchJsonForBridge(entry, path, options = {}) {
   return result;
 }
 
+// iOS resumes a Home Screen app without reloading its page, so a fix that has
+// shipped stays out of reach until the app is killed by hand - and nothing on
+// screen says which build is running. The home bridge names the main.js it
+// serves on every poll; when that is not the one running, the page reloads
+// itself, once per served build and never while a turn or a draft is in flight.
+const shellReloadStorageKey = "codexPhoneShellReloadFor:v1";
+
+function ownShellHref() {
+  return document.querySelector('script[src*="main.js"]')?.getAttribute("src") || "";
+}
+
+function ownShellVersion() {
+  return uiUtils.shellVersionOf ? uiUtils.shellVersionOf(ownShellHref()) : "";
+}
+
+function checkShellFreshness(info, entry) {
+  if (!entry || entry.id !== homeBridgeId || !info?.shell?.main || !uiUtils.shellUpdateDecision) return;
+  const busy = liveTurnActive || threadSwitchBusy || Boolean((promptInput?.value || "").trim()) || document.visibilityState === "hidden";
+  const decision = uiUtils.shellUpdateDecision({
+    servedMain: info.shell.main,
+    ownMain: ownShellHref(),
+    busy,
+    lastReloadFor: safeReadStorage(sessionStorage, shellReloadStorageKey, ""),
+  });
+  if (decision !== "reload") return;
+  safeWriteStorage(sessionStorage, shellReloadStorageKey, uiUtils.shellVersionOf(info.shell.main));
+  showToast("画面を新しい版に更新します。");
+  window.setTimeout(() => location.reload(), 1200);
+}
+
 async function refreshBridgeState(bridgeId, { force = false } = {}) {
   const entry = bridgeById(bridgeId);
   if (!entry) return;
@@ -5297,6 +5327,7 @@ async function refreshBridgeState(bridgeId, { force = false } = {}) {
     const info = await fetchJsonForBridge(entry, "/api/bridge/info");
     state.info = info;
     if (entry.id === activeBridgeId) adoptModelChoices(info?.modelChoices);
+    checkShellFreshness(info, entry);
     state.connected = true;
     state.lastError = "";
     state.activeProvider = info.provider || state.activeProvider || "codex";
@@ -7413,6 +7444,11 @@ function renderLocalSettings(payload) {
   const status = document.createElement("div");
   status.className = payload.restartRequired ? "settings-status warning" : "settings-status";
   status.textContent = payload.restartRequired ? "保存済み設定があります。再起動で反映します。" : "起動中の設定と一致しています。";
+  // Which build this page is: the one thing that tells a phone that never
+  // reloaded apart from one that did.
+  const shellStamp = document.createElement("div");
+  shellStamp.className = "settings-status";
+  shellStamp.textContent = `画面の版: ${ownShellVersion() || "不明"}`;
 
   const form = document.createElement("form");
   form.className = "settings-form";
@@ -7424,6 +7460,7 @@ function renderLocalSettings(payload) {
     settingGroup(machineName ? `${machineName} のパスを直接入力` : "パスを直接入力", manualRow),
     historyLabel,
     status,
+    shellStamp,
   );
 
   const actions = document.createElement("div");

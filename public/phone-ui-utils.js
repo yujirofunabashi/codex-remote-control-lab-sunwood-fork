@@ -976,6 +976,24 @@
     return splitMarkdownTableRow(header).length === alignments.length;
   }
 
+  // iOS resumes a Home Screen app without reloading its page, so a fix that has
+  // shipped stays out of reach until the app is killed by hand. The bridge names
+  // the main.js it serves; when that is not the one running, the page reloads
+  // itself - once per served build, and never while a turn or a draft is live.
+  function shellVersionOf(href) {
+    const match = /[?&]v=([^&#]+)/.exec(String(href || ""));
+    return match ? decodeURIComponent(match[1]) : "";
+  }
+
+  function shellUpdateDecision({ servedMain, ownMain, busy = false, lastReloadFor = "" } = {}) {
+    const served = shellVersionOf(servedMain);
+    const own = shellVersionOf(ownMain);
+    if (!served || !own || served === own) return "same";
+    if (lastReloadFor === served) return "skip";
+    if (busy) return "wait";
+    return "reload";
+  }
+
   function parseMarkdownTable(lines = [], index = 0) {
     if (!isMarkdownTableStart(lines, index)) return null;
     const header = splitMarkdownTableRow(lines[index]);
@@ -1067,5 +1085,7 @@
     splitMarkdownTableRow,
     isMarkdownTableStart,
     parseMarkdownTable,
+    shellUpdateDecision,
+    shellVersionOf,
   };
 });

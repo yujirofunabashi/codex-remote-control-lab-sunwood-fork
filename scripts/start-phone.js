@@ -708,6 +708,9 @@ function bridgeInfoPayload() {
     approvalPolicy: "on-request",
     sandboxMode: "workspace-write",
     color: phoneBridgeColor || null,
+    // The build this bridge serves. A page compares it with the one it is
+    // running and reloads itself when they differ.
+    shell: { main: staticAssetHref("main.js"), style: staticAssetHref("style.css") },
     app: { id: phoneAppId, name: phoneAppName, shortName: phoneAppShortName },
     capabilities: {
       threads: true,
