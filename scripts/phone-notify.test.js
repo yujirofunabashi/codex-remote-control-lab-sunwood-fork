@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 
 const {
   bridgeUrls,
+  tokenNeedsUrlEncoding,
   eventNotificationMessage,
   notificationTargets,
   notifyBridgeUrls,
@@ -370,4 +371,27 @@ test("notifyBridgeUrls reports provider HTTP failures without stopping startup",
   });
 
   assert.deepEqual(results, [{ type: "pushover", ok: false, error: "Pushover returned HTTP 401" }]);
+});
+
+// The Air bridge's token ended with a literal backslash and an `n` - a stray
+// `printf '...\n'` when the file was written. Pasted into a URL raw, that is not
+// the token any more, and a Home Screen icon added from such a link could never
+// connect while the bridge beside it reported itself perfectly healthy.
+test("a token that needs escaping still survives the URL it is pasted into", () => {
+  const token = "-xhtPkRDaE4-nf1AZAkR9qTT\\n";
+  const [url] = bridgeUrls(["192.168.1.63"], 45214, token);
+  assert.equal(new URL(url).searchParams.get("token"), token);
+  assert.doesNotMatch(new URL(url).search, /\\/);
+
+  for (const awkward of ["a b", "a&b=c", "a#b", "a%b", "a+b"]) {
+    const [built] = bridgeUrls(["10.0.0.1"], 45214, awkward);
+    assert.equal(new URL(built).searchParams.get("token"), awkward, `token ${JSON.stringify(awkward)} did not survive`);
+  }
+});
+
+test("the bridge can tell which tokens will not survive being copied by hand", () => {
+  assert.equal(tokenNeedsUrlEncoding("-xhtPkRDaE4-nf1AZAkR9qTT\\n"), true);
+  assert.equal(tokenNeedsUrlEncoding("a b"), true);
+  assert.equal(tokenNeedsUrlEncoding("ogoURPoWqL0f4sMUeVkZdmb4"), false);
+  assert.equal(tokenNeedsUrlEncoding(""), false);
 });

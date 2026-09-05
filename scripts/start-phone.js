@@ -17,7 +17,17 @@ const {
 } = require("./bridge-registry-store");
 const { debugLog, debugLogPath, debugTimer, isDebugEnabled, redactSensitiveText } = require("./debug-log");
 const { isHistorySyncEnabled, runHistorySync } = require("./history-sync");
-const { bridgeUrls, eventTypeLabel, notificationTargets, notifyBridgeUrls, notifyEvent, notifyTaskEvent, startupTokenUrlsEnabled, stripTokenFromUrl } = require("./phone-notify");
+const {
+  bridgeUrls,
+  eventTypeLabel,
+  notificationTargets,
+  notifyBridgeUrls,
+  notifyEvent,
+  notifyTaskEvent,
+  startupTokenUrlsEnabled,
+  stripTokenFromUrl,
+  tokenNeedsUrlEncoding,
+} = require("./phone-notify");
 const { defaultCodexAppServerPort, settingEnvKeysForSlot, slotEnvKey, slotSettingValue } = require("./phone-slot-settings");
 const { slashCommandCatalog } = require("./slash-commands");
 const { findLiveBridge, readThreadSnapshot } = require("./thread-read");
@@ -5785,6 +5795,15 @@ async function main() {
     console.log(`Fleet registry entry: ${JSON.stringify({ id: phoneBridgeId, label: phoneBridgeLabel, group: phoneBridgeGroup, baseUrl: `http://LAN-IP:${uiPort}`, token: "***", port: uiPort })}`);
     console.log("Open the private tokenized bridge URL from your protected startup channel to share one bridge thread.");
     console.log("The terminal output masks the local access key by default.");
+    // A token holding a backslash, a space or an `&` still works everywhere the
+    // bridge builds a URL itself, because those are encoded now. It is the
+    // hand-copied address that breaks, and it breaks silently. Say so once.
+    if (tokenNeedsUrlEncoding(phoneToken)) {
+      console.log(
+        "Note: .phone-token holds characters that must be percent-encoded in a URL. Links this bridge prints are encoded; " +
+          "a hand-written one may not be. Rewrite .phone-token with letters, digits, - and _ if you copy URLs by hand.",
+      );
+    }
     if (isDebugEnabled()) console.log(`Debug log: ${debugLogPath()} (PHONE_DEBUG is on)`);
     console.log("Press Ctrl+C to stop.");
 

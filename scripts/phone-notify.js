@@ -1,7 +1,22 @@
 const { slotSettingValue } = require("./phone-slot-settings");
 
+// The token is written by whoever made `.phone-token`, so it can hold anything
+// a keyboard or a stray `printf '...\n'` puts there. Pasted in raw, a backslash,
+// a space or an `&` ends the query early or is rewritten by the browser, and the
+// address that arrives carries a token that does not match: a Home Screen icon
+// added from it can never connect, and nothing about it looks like an encoding
+// problem. Encode it, and every token survives the trip.
 function bridgeUrls(addresses, uiPort, phoneToken) {
-  return addresses.map((address) => `http://${address}:${uiPort}/?token=${phoneToken}`);
+  const token = encodeURIComponent(phoneToken ?? "");
+  return addresses.map((address) => `http://${address}:${uiPort}/?token=${token}`);
+}
+
+// True when the raw token would not survive being pasted into a URL as-is, so
+// the bridge can say so once at startup instead of leaving the owner to find out
+// from an icon that silently never connects.
+function tokenNeedsUrlEncoding(phoneToken) {
+  const token = String(phoneToken ?? "");
+  return Boolean(token) && encodeURIComponent(token) !== token;
 }
 
 // Every other setting in a fleet is written per slot - `PHONE_WORKDIR_45214`,
@@ -412,6 +427,7 @@ async function notifyEvent(event = {}, options = {}) {
 
 module.exports = {
   bridgeUrls,
+  tokenNeedsUrlEncoding,
   eventNotificationMessage,
   eventTypeLabel,
   notificationEventDedupeMs,
