@@ -8396,6 +8396,9 @@ function connect({ preserveHistory = false, freshThread = false, workdir = "" } 
     if (!isCurrentSocket()) return;
     lastWsMessageAt = Date.now();
     const msg = JSON.parse(event.data);
+    // The bridge tags session events as well as owning the socket. Keep a
+    // tagged event from a different chat out of the current page.
+    if (msg.type !== "ready" && msg.threadId && msg.threadId !== selectedThread) return;
     if (msg.type === "slashCommands") {
       setSlashCommands(msg.slashCommands);
       return;

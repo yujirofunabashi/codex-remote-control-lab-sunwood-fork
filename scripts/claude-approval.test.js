@@ -7,6 +7,9 @@ const path = require("path");
 const { spawn } = require("child_process");
 
 process.env.PHONE_AGENT_PROVIDER = "claude";
+// Approval tests exercise notifications too. Never send them to destinations
+// inherited from this machine or loaded from the bridge's local settings.
+globalThis.fetch = async () => ({ ok: true, status: 204, text: async () => "" });
 
 const { ClaudeBridge, SharedBridge, approvalMcpConfig, claudePermissionMode } = require("./start-phone");
 

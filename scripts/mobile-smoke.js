@@ -1592,7 +1592,11 @@ async function run() {
   if (failed) process.exitCode = 1;
 }
 
-run().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+if (require.main === module) {
+  run().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}
+
+module.exports = { startServer, mockApi, mockWebSocket };

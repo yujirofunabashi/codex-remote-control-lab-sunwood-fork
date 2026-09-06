@@ -2969,6 +2969,21 @@ async function claudeThreadListPayload() {
   };
 }
 
+// An app-server connection can also receive other threads' events (including
+// subagent output). Socket ownership is not conversation ownership. Check the
+// scope before touching history, run state, approval state, or queued work.
+function codexMessageMatchesThread(message, threadId) {
+  if (!message.method) return true; // Responses are correlated by request id.
+  const params = message.params || {};
+  const ids = [params.threadId, params.thread_id, params.thread?.id, params.conversationId, params.conversation_id]
+    .filter((id) => typeof id === "string" && id.length > 0);
+  if (ids.length) return Boolean(threadId) && ids.every((id) => id === threadId);
+  // Global account notifications have no thread. Conversation notifications
+  // and server requests without an owner must never enter a session.
+  return !/^(thread\/|turn\/|item\/|codex\/event\/)|^error$/.test(message.method)
+    && !message.method.endsWith("/requestApproval");
+}
+
 class SharedBridge {
   constructor(requestedThreadId, baseBridgeKey, options = {}) {
     this.provider = "codex";
@@ -3130,7 +3145,7 @@ class SharedBridge {
   emit(type, payload = {}) {
     lastBridgeEventAt = Date.now();
     const terminalEntry = this.appendTerminal(terminalEntryForBridgeMessage(type, payload, this));
-    const body = JSON.stringify({ type, ...(terminalEntry ? { terminalEntry } : {}), ...payload });
+    const body = JSON.stringify({ type, threadId: this.threadId, ...(terminalEntry ? { terminalEntry } : {}), ...payload });
     for (const client of this.clients) {
       if (client.readyState === WebSocket.OPEN) client.send(body);
     }
@@ -3233,7 +3248,12 @@ class SharedBridge {
 
     this.upstream.on("message", (data) => {
       const msg = JSON.parse(data.toString());
-      const pendingMethod = this.pending.get(msg.id);
+      if (!codexMessageMatchesThread(msg, this.threadId || this.requestedThreadId)) {
+        debugLog("codex.event.ignored", { method: msg.method, expectedThreadId: this.threadId || this.requestedThreadId, threadId: msg.params?.threadId });
+        return;
+      }
+      // Server requests and client requests use separate id namespaces.
+      const pendingMethod = msg.method ? undefined : this.pending.get(msg.id);
 
       if (pendingMethod === "thread/start" || pendingMethod === "thread/resume") {
         this.pending.delete(msg.id);
@@ -3640,7 +3660,10 @@ class SharedBridge {
   }
 
   approval(requestMsg, decision) {
-    if (!requestMsg || !requestMsg.id || !requestMsg.method) return;
+    const pending = this.pendingApproval;
+    if (!pending || requestMsg?.id !== pending.id || requestMsg?.method !== pending.method
+      || !codexMessageMatchesThread(requestMsg, this.threadId)
+      || !codexMessageMatchesThread(pending, this.threadId)) return;
     const accept = decision === "accept";
     let result;
     if (requestMsg.method === "item/commandExecution/requestApproval") {
