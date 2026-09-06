@@ -477,7 +477,7 @@ const maxUploadBytes = uploadLimitBytes();
 // Only the fallback for when the app-server has never been asked. The list the
 // phone is shown comes from `model/list`, so a model that reaches this account
 // appears the next time Codex runs, without a release of this bridge.
-const codexModelOptions = ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4-mini"];
+const codexModelOptions = ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4-mini"];
 // Aliases rather than pinned full names: they follow the current generation, so
 // the list cannot rot into offering models that no longer exist.
 const claudeModelOptions = ["sonnet", "opus", "haiku", "fable"];
