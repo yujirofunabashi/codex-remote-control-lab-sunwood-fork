@@ -1232,7 +1232,7 @@ let selectedModelLabel = localStorage.getItem("codexPhoneModelLabel") || "5.5";
 let explicitModelByProvider = readJsonStorage(explicitModelStorageKey, {});
 const bridgeModelByProvider = {};
 migrateLegacySelectedModel();
-let selectedReasoning = localStorage.getItem("codexPhoneReasoning") || "M";
+let selectedReasoning = localStorage.getItem("codexPhoneReasoning") || "medium";
 let selectedServiceTier = localStorage.getItem(serviceTierStorageKey) || "";
 let settingsRenderSeq = 0;
 let artifactItems = [];
@@ -1871,22 +1871,40 @@ const accessModes = [
   { label: "確認モード", approvalPolicy: "on-request", sandboxMode: "workspace-write" },
   { label: "読み取り専用", approvalPolicy: "on-request", sandboxMode: "read-only" },
 ];
+// The level is kept under the provider's own name (`low` ... `ultra`) rather
+// than a four-step code of our own, because that code had to be mapped back and
+// the top step was labelled "最大" while mapping to `xhigh` -- neither provider's
+// maximum. The old codes are still read so a stored choice survives.
 const reasoningAliases = new Map([
-  ["L", "L"],
-  ["LOW", "L"],
-  ["低", "L"],
-  ["M", "M"],
-  ["MEDIUM", "M"],
-  ["中", "M"],
-  ["H", "H"],
-  ["HIGH", "H"],
-  ["高", "H"],
-  ["XH", "XH"],
-  ["XHIGH", "XH"],
-  ["EXTRA HIGH", "XH"],
-  ["EXTRA-HIGH", "XH"],
-  ["非常に高", "XH"],
+  ["L", "low"],
+  ["LOW", "low"],
+  ["低", "low"],
+  ["M", "medium"],
+  ["MEDIUM", "medium"],
+  ["中", "medium"],
+  ["H", "high"],
+  ["HIGH", "high"],
+  ["高", "high"],
+  ["XH", "xhigh"],
+  ["XHIGH", "xhigh"],
+  ["EXTRA HIGH", "xhigh"],
+  ["EXTRA-HIGH", "xhigh"],
+  ["非常に高", "xhigh"],
+  ["MAX", "max"],
+  ["ULTRA", "ultra"],
 ]);
+// Only for a bridge that has not answered yet. The levels a model really takes
+// come from `model/list` by way of the bridge, so a model with `ultra` offers it
+// without a release of this page.
+const fallbackReasoningChoices = {
+  codex: ["low", "medium", "high", "xhigh"],
+  claude: ["low", "medium", "high", "xhigh", "max"],
+};
+// Deepest last. Used to pick the closest level a model does have when the one
+// that was chosen is not on its list.
+const reasoningDepthOrder = ["low", "medium", "high", "xhigh", "max", "ultra"];
+let liveReasoningChoices = {};
+
 const serviceTierAliases = new Map([
   ["", ""],
   ["STANDARD", ""],
@@ -1918,9 +1936,40 @@ function adoptModelChoices(choices) {
   if (typeof updateModelButton === "function" && modelMenu) updateModelButton();
 }
 
+// The bridge reports the levels each model advertises, so the menu names them
+// the way the model does instead of guessing a fixed set.
+function adoptReasoningChoices(choices) {
+  if (!choices || typeof choices !== "object") return;
+  liveReasoningChoices = { ...liveReasoningChoices, ...choices };
+  if (typeof updateModelButton === "function" && modelMenu) updateModelButton();
+}
+
+function reasoningChoicesForModel(provider, model) {
+  const known = liveReasoningChoices.byModel?.[String(model || "").trim()];
+  if (Array.isArray(known) && known.length) return known;
+  const perProvider = liveReasoningChoices[provider];
+  if (Array.isArray(perProvider) && perProvider.length) return perProvider;
+  return fallbackReasoningChoices[provider] || fallbackReasoningChoices.codex;
+}
+
+// A level the model does not have would be dropped on the way through, leaving
+// the turn on the Codex config's default -- the silent miss this replaces. The
+// closest level at or below the choice is used instead, and it is what the menu
+// then shows, so the button never claims a depth the turn will not run at.
+function nearestSupportedReasoning(requested, choices) {
+  if (!choices.length) return requested;
+  if (choices.includes(requested)) return requested;
+  const wanted = reasoningDepthOrder.indexOf(requested);
+  const ranked = choices.filter((name) => reasoningDepthOrder.includes(name)).sort((a, b) => reasoningDepthOrder.indexOf(a) - reasoningDepthOrder.indexOf(b));
+  if (wanted < 0 || !ranked.length) return choices[0];
+  const below = ranked.filter((name) => reasoningDepthOrder.indexOf(name) <= wanted);
+  return below.length ? below[below.length - 1] : ranked[0];
+}
+
 function normalizeReasoning(value) {
   const key = String(value || "").trim();
-  return reasoningAliases.get(key) || reasoningAliases.get(key.toUpperCase()) || "M";
+  if (reasoningDepthOrder.includes(key.toLowerCase())) return key.toLowerCase();
+  return reasoningAliases.get(key) || reasoningAliases.get(key.toUpperCase()) || "medium";
 }
 
 function normalizeServiceTier(value) {
@@ -1993,18 +2042,14 @@ function providerSupportsReasoning() {
   return activeProvider === "codex" || activeProvider === "claude";
 }
 
-// The bridge validates this too, because `claude --effort` accepts any string
-// and silently ignores one it does not know.
-const claudeEffortByReasoning = new Map([
-  ["L", "low"],
-  ["M", "medium"],
-  ["H", "high"],
-  ["XH", "xhigh"],
-]);
-
-function claudeEffortForSubmission() {
-  if (currentThreadProvider() !== "claude") return undefined;
-  return claudeEffortByReasoning.get(normalizeReasoning(selectedReasoning));
+// Both providers take the level by name, so there is nothing left to translate.
+// The bridge validates it again, because `claude --effort` and the app-server
+// both accept an unknown value and quietly ignore it.
+function effortForSubmission() {
+  const provider = currentThreadProvider();
+  if (!provider) return undefined;
+  const choices = reasoningChoicesForModel(provider, selectedModel);
+  return nearestSupportedReasoning(normalizeReasoning(selectedReasoning), choices);
 }
 
 function providerSupportsServiceTier() {
@@ -2054,6 +2099,7 @@ async function syncProviderFromBridge() {
     const info = await apiGet("/api/info");
     adoptBridgeProvider(info?.provider, info?.providers);
     adoptModelChoices(info?.modelChoices);
+    adoptReasoningChoices(info?.reasoningChoices);
   } catch {
     // Falls back to whatever the thread list reports once it loads.
   }
@@ -2079,19 +2125,50 @@ function setActiveProvider(provider) {
 // think, and it says nothing. The menu already carried these words as tooltips;
 // now the button, the menu rows and the tooltip all use the same four.
 const reasoningDisplayLabels = new Map([
-  ["L", "軽め"],
-  ["M", "標準"],
-  ["H", "深め"],
-  ["XH", "最大"],
+  ["low", "軽め"],
+  ["medium", "標準"],
+  ["high", "深め"],
+  ["xhigh", "かなり深め"],
+  ["max", "最大"],
+  ["ultra", "最大＋自動分担"],
 ]);
 
 function reasoningDisplayLabel(value) {
-  return reasoningDisplayLabels.get(String(value || "").toUpperCase()) || String(value || "");
+  // Keyed by the provider's own lowercase name; upper-casing here is what made
+  // the menu fall through to the bare English level.
+  return reasoningDisplayLabels.get(String(value || "").trim().toLowerCase()) || String(value || "");
+}
+
+// The rows the model actually has, replacing whatever the menu held before.
+// Mirrors renderInlineModelChoices: the markup carries no fixed set any more.
+function renderReasoningChoices() {
+  const separator = modelMenu.querySelector("[data-reasoning-separator]");
+  if (!separator) return;
+  for (const row of modelMenu.querySelectorAll("[data-reasoning]")) row.remove();
+  for (const name of reasoningChoicesForModel(activeProvider, selectedModel)) {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "model-menu-row";
+    row.dataset.reasoning = name;
+    // The provider's own name beside the label, so a level is recognisable as
+    // the one named in Codex's and Claude's own settings.
+    row.append(document.createTextNode(`${reasoningDisplayLabel(name)} (${name})`));
+    separator.before(row);
+  }
 }
 
 function updateModelButton() {
   const showReasoning = providerSupportsReasoning();
-  const showServiceTier = providerSupportsServiceTier();
+  if (showReasoning) {
+    // A model swap can drop the chosen level; settle on one it has before
+    // anything is drawn or sent.
+    const settled = nearestSupportedReasoning(normalizeReasoning(selectedReasoning), reasoningChoicesForModel(activeProvider, selectedModel));
+    if (settled !== selectedReasoning) {
+      selectedReasoning = settled;
+      localStorage.setItem("codexPhoneReasoning", selectedReasoning);
+    }
+    renderReasoningChoices();
+  }  const showServiceTier = providerSupportsServiceTier();
   const serviceTierSuffix = showServiceTier && selectedServiceTier === "fast" ? " ⚡" : "";
   modelButton.textContent = showReasoning
     ? `${selectedModelLabel}・${reasoningDisplayLabel(selectedReasoning)}${serviceTierSuffix}`
@@ -2230,7 +2307,7 @@ function selectReasoning(value) {
   localStorage.setItem("codexPhoneReasoning", selectedReasoning);
   updateModelButton();
   closeModelMenu();
-  addStatus(`インテリジェンスを ${selectedReasoning} に設定しました。`);
+  addStatus(`思考の深さを ${reasoningDisplayLabel(selectedReasoning)} (${selectedReasoning}) にしました。次の送信から反映します。`);
 }
 
 function selectServiceTier(value) {
@@ -5349,7 +5426,10 @@ async function refreshBridgeState(bridgeId, { force = false } = {}) {
   try {
     const info = await fetchJsonForBridge(entry, "/api/bridge/info");
     state.info = info;
-    if (entry.id === activeBridgeId) adoptModelChoices(info?.modelChoices);
+    if (entry.id === activeBridgeId) {
+      adoptModelChoices(info?.modelChoices);
+      adoptReasoningChoices(info?.reasoningChoices);
+    }
     checkShellFreshness(info, entry);
     state.connected = true;
     state.lastError = "";
@@ -5443,6 +5523,7 @@ function applyActiveBridgeState(bridgeId) {
   // The composer's model and its menu follow the Mac being switched to: its
   // remembered model, and the models that Mac's account actually has.
   adoptModelChoices(state.info?.modelChoices);
+  adoptReasoningChoices(state.info?.reasoningChoices);
   applySelectedModel();
 }
 
@@ -8567,7 +8648,7 @@ composer.addEventListener("submit", (event) => {
         options: {
           model: selectedModel || undefined,
           serviceTier: currentThreadProvider() === "codex" ? selectedServiceTier || null : undefined,
-          effort: claudeEffortForSubmission(),
+          effort: effortForSubmission(),
           approvalPolicy: accessMode.approvalPolicy,
           sandboxMode: accessMode.sandboxMode,
         },

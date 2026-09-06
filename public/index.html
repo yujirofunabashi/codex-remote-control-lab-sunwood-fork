@@ -403,10 +403,8 @@
                 </button>
                 <div class="model-menu-separator" data-service-tier-separator></div>
                 <div class="model-menu-label">思考の深さ</div>
-                <button type="button" class="model-menu-row" data-reasoning="L">軽め</button>
-                <button type="button" class="model-menu-row" data-reasoning="M">標準<span class="checkmark">✓</span></button>
-                <button type="button" class="model-menu-row" data-reasoning="H">深め</button>
-                <button type="button" class="model-menu-row" data-reasoning="XH">最大</button>
+                <!-- Filled from the levels the selected model advertises, so the
+                     markup cannot offer a level the model does not have. -->
                 <div class="model-menu-separator" data-reasoning-separator></div>
                 <button type="button" class="model-menu-row submenu-row" data-model-choice="gpt-5.5">GPT-5.5<span class="chevron">›</span></button>
                 <button type="button" class="model-menu-row submenu-row" data-model-choice="gpt-5.4">GPT-5.4<span class="chevron">›</span></button>

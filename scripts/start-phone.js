@@ -481,6 +481,14 @@ const codexModelOptions = ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5
 // Aliases rather than pinned full names: they follow the current generation, so
 // the list cannot rot into offering models that no longer exist.
 const claudeModelOptions = ["sonnet", "opus", "haiku", "fable"];
+// Every reasoning level Codex has a name for. Used only to sanity-check a level
+// for a model whose own list has not been fetched yet; a model that advertises
+// its levels is always checked against those instead.
+const codexEffortNames = ["low", "medium", "high", "xhigh", "max", "ultra"];
+// What to offer for a Codex model the account has not described yet. Deliberately
+// the conservative set every current model shares: offering a level the model
+// does not have is what makes a menu look like it applied when it did not.
+const codexEffortOptions = ["low", "medium", "high", "xhigh"];
 
 // The last `model/list` answer, kept on disk so a bridge that has not run Codex
 // since it started still offers the models the account actually has.
@@ -496,13 +504,36 @@ function codexModelIdsFromList(list) {
   return ids;
 }
 
+// `model/list` names the levels each model actually accepts, and they differ:
+// GPT-6-Astra has `max` and `ultra`, GPT-5.6-Luna stops at `xhigh`. Keeping the
+// real list per model is what lets the phone offer the levels by their own
+// names rather than a fixed four-step guess.
+function codexEffortsFromList(list) {
+  const efforts = {};
+  for (const item of Array.isArray(list) ? list : []) {
+    if (!item || item.hidden) continue;
+    const id = String(item.id || item.model || item.slug || "").trim();
+    if (!id) continue;
+    const supported = [];
+    for (const entry of Array.isArray(item.supportedReasoningEfforts) ? item.supportedReasoningEfforts : []) {
+      const name = String(entry?.reasoningEffort || entry?.effort || entry || "").trim().toLowerCase();
+      if (name && !supported.includes(name)) supported.push(name);
+    }
+    if (supported.length) efforts[id] = supported;
+  }
+  return efforts;
+}
+
 function readCodexModelCache(cachePath = codexModelCachePath) {
   try {
     const parsed = JSON.parse(fs.readFileSync(cachePath, "utf8"));
     const models = Array.isArray(parsed?.models) ? parsed.models.map((item) => String(item || "").trim()).filter(Boolean) : [];
-    return { models, updatedAt: parsed?.updatedAt || null };
+    // A cache written before the bridge recorded levels has no `efforts`; an
+    // empty map falls back rather than failing to load the models beside it.
+    const efforts = parsed?.efforts && typeof parsed.efforts === "object" ? parsed.efforts : {};
+    return { models, efforts, updatedAt: parsed?.updatedAt || null };
   } catch {
-    return { models: [], updatedAt: null };
+    return { models: [], efforts: {}, updatedAt: null };
   }
 }
 
@@ -511,8 +542,11 @@ let codexModelCache = readCodexModelCache();
 function rememberCodexModels(list, { cachePath = codexModelCachePath } = {}) {
   const models = codexModelIdsFromList(list);
   if (!models.length) return codexModelCache.models;
-  const changed = JSON.stringify(models) !== JSON.stringify(codexModelCache.models);
-  codexModelCache = { models, updatedAt: new Date().toISOString() };
+  const efforts = codexEffortsFromList(list);
+  const changed =
+    JSON.stringify(models) !== JSON.stringify(codexModelCache.models) ||
+    JSON.stringify(efforts) !== JSON.stringify(codexModelCache.efforts || {});
+  codexModelCache = { models, efforts, updatedAt: new Date().toISOString() };
   if (changed) {
     try {
       fs.writeFileSync(cachePath, `${JSON.stringify(codexModelCache, null, 2)}\n`, { mode: 0o600 });
@@ -533,6 +567,37 @@ function codexModelChoices({ cache = codexModelCache, fallback = codexModelOptio
   }
   return choices;
 }
+// The levels a given Codex model really accepts, by its own names. The phone
+// menu is built from this, so "max" on the menu is the model's max rather than
+// a label pinned to a fixed step.
+function codexReasoningChoices({ cache = codexModelCache, model = "", fallback = codexEffortOptions } = {}) {
+  const known = cache?.efforts?.[String(model || "").trim()];
+  return Array.isArray(known) && known.length ? [...known] : [...fallback];
+}
+
+// `turn/start` takes `effort` and the app-server ignores an unknown one the same
+// way `claude --effort` does, so a level is only forwarded once it is known to
+// belong to the model. When the account has not described the model yet, any
+// name Codex has is still forwarded: dropping a correct level because the list
+// is cold is the same silent miss this validation exists to prevent.
+function codexEffortLevel(options = {}, model = "", { cache = codexModelCache } = {}) {
+  const requested = String(options.effort || "").trim().toLowerCase();
+  if (!requested) return "";
+  const known = cache?.efforts?.[String(model || "").trim()];
+  if (Array.isArray(known) && known.length) return known.includes(requested) ? requested : "";
+  return codexEffortNames.includes(requested) ? requested : "";
+}
+
+// What the phone needs to draw the menu: the real levels per model, plus a
+// per-provider fallback for a model no list has described.
+function reasoningChoicePayload({ cache = codexModelCache } = {}) {
+  return {
+    byModel: { ...(cache?.efforts || {}) },
+    codex: [...codexEffortOptions],
+    claude: [...claudeEffortLevels],
+  };
+}
+
 // `claude --effort` accepts any string without complaining, so an unknown value
 // is silently ignored rather than rejected. Validate here or a typo looks like
 // it applied.
@@ -706,6 +771,7 @@ function bridgeInfoPayload() {
     model,
     modelsByProvider: providerModels,
     modelChoices: { codex: codexModelChoices({ configured: modelForProvider("codex") }), claude: claudeModelOptions },
+    reasoningChoices: reasoningChoicePayload(),
     approvalPolicy: "on-request",
     sandboxMode: "workspace-write",
     color: phoneBridgeColor || null,
@@ -3548,6 +3614,11 @@ class SharedBridge {
       input,
     };
     params.model = options.model || this.model;
+    // Overrides the reasoning effort for this turn and the ones after it. Left
+    // out, the thread keeps whatever `model_reasoning_effort` in the Codex
+    // config says, which is what made the phone's depth menu do nothing.
+    const effort = codexEffortLevel(options, params.model);
+    if (effort) params.effort = effort;
     if (Object.prototype.hasOwnProperty.call(options, "serviceTier")) params.serviceTier = normalizeServiceTier(options.serviceTier);
     if (options.approvalPolicy) params.approvalPolicy = options.approvalPolicy;
     if (options.sandboxMode) params.sandboxPolicy = sandboxPolicyForMode(options.sandboxMode);
@@ -5372,6 +5443,7 @@ async function main() {
         providers: ["codex", "claude"],
         model,
         modelChoices: { codex: codexModelChoices({ configured: modelForProvider("codex") }), claude: claudeModelOptions },
+    reasoningChoices: reasoningChoicePayload(),
         workdir,
         app: { id: phoneAppId, name: phoneAppName, shortName: phoneAppShortName },
         codexUrl,
@@ -6015,8 +6087,12 @@ module.exports = {
   appIdentityForProvider,
   approvalMcpConfig,
   bridgeIsUntouched,
+  codexEffortLevel,
+  codexEffortsFromList,
   codexModelChoices,
   codexModelIdsFromList,
+  codexReasoningChoices,
+  reasoningChoicePayload,
   localSettingsPayload,
   readCodexModelCache,
   refreshCodexModelList,
