@@ -151,8 +151,10 @@ async function mockApi(page, origin) {
       return route.fulfill({ json: { ok: true, ...registryBackup } });
     }
     if (url.pathname === "/api/threads") {
-      const listed = (artifactBridge ? threads : staleThreadList).filter((thread) => !hiddenProjects.includes(thread.cwd));
-      return route.fulfill({ json: { data: listed, hiddenProjects: [...hiddenProjects] } });
+      const provider = url.searchParams.get("provider") || "codex";
+      const listed = (artifactBridge ? threads : staleThreadList).filter((thread) =>
+        !hiddenProjects.includes(thread.cwd) && (thread.provider || "codex") === provider);
+      return route.fulfill({ json: { provider, activeProvider: provider, data: listed, hiddenProjects: [...hiddenProjects] } });
     }
     if (url.pathname === "/api/workspaces/hidden") {
       const body = JSON.parse(route.request().postData() || "{}");
@@ -238,13 +240,15 @@ async function mockWebSocket(page) {
         // id of the chat that was on screen would put the session back in that
         // chat's folder, which is the case worth exercising here.
         const fresh = target.searchParams.get("fresh") === "1";
-        const requestedThreadId = target.searchParams.get("thread") || (fresh ? payload.freshThreadId : payload.threadId);
+        const provider = target.searchParams.get("provider") || "codex";
+        const requestedThreadId = target.searchParams.get("thread") || (fresh ? payload.freshThreadId : provider === "claude" ? "thread-drawer" : payload.threadId);
         const requestedThread = payload.threadsById[requestedThreadId] || (fresh ? {} : payload.threadsById[payload.threadId]) || {};
         const requestedWorkdir = target.searchParams.get("workdir") || requestedThread.cwd || payload.workdir;
         const repoName = requestedWorkdir.split(/[\\/]/).filter(Boolean).pop() || payload.repoName;
         const threadTitle = requestedThread.name || requestedThread.displayTitle || payload.threadTitle || "Mobile terminal compact polish";
         const readyPayload = {
           ...payload,
+          provider,
           threadId: requestedThreadId,
           workdir: requestedWorkdir,
           repoName,
@@ -256,7 +260,7 @@ async function mockWebSocket(page) {
             displayTitle: threadTitle,
             preview: threadTitle,
             cwd: requestedWorkdir,
-            provider: "codex",
+            provider,
             updatedAt: Date.now(),
           },
         };
@@ -691,7 +695,10 @@ async function run() {
     check("restoring puts the project back and clears the section", afterRestore?.hiddenRows === 0, JSON.stringify(afterRestore));
     // Picking a session back up on the PC needs both the id and the folder it
     // belongs to, so the row hands over the whole command rather than the id.
-    const resumeCopy = await page.evaluate(() => {
+    const codexResumeButtons = await page.locator(".thread-resume-copy").count();
+    await page.locator('[data-thread-provider="claude"]').click();
+    await page.locator(".thread-item", { hasText: "Drawer and composer tuning" }).waitFor();
+    const resumeCopy = await page.evaluate((codexButtons) => {
       const rowFor = (title) =>
         Array.from(document.querySelectorAll(".thread-item")).find((item) => item.querySelector(".thread-title")?.textContent?.includes(title));
       const claudeRow = rowFor("Drawer and composer tuning");
@@ -699,9 +706,9 @@ async function run() {
         command: claudeRow?.querySelector(".thread-resume-copy")?.title || "",
         label: claudeRow?.querySelector(".thread-resume-copy")?.getAttribute("aria-label") || "",
         // Codex sessions are not resumed with this command, so they get no button.
-        codexButtons: rowFor("Artifact preview polish")?.querySelectorAll(".thread-resume-copy").length ?? -1,
+        codexButtons,
       };
-    });
+    }, codexResumeButtons);
     check(
       "a Claude row offers the command that reopens it on the PC",
       /^cd \S*drawer-workspace && claude --resume thread-drawer$/.test(resumeCopy.command) &&
@@ -753,6 +760,8 @@ async function run() {
       fs.mkdirSync(shotsDir, { recursive: true });
       await page.screenshot({ path: path.join(shotsDir, "sidebar.png") });
     }
+    await page.locator('[data-thread-provider="codex"]').click();
+    await page.locator(".thread-item", { hasText: "Codex drawer tuning" }).waitFor();
     await page.locator(".project-group", { hasText: "drawer-workspace" }).locator(".project-new-thread").click();
     await page.waitForFunction(() => window.__mockWebSocketUrls?.some((url) => url.includes("fresh=1") && url.includes("drawer-workspace")));
     const crossRepoCreate = await page.evaluate((expectedWorkdir) => {
@@ -770,10 +779,10 @@ async function run() {
     );
     await page.locator("#mobileThreads").click();
     await page.waitForTimeout(120);
-    await page.locator(".thread-item", { hasText: "Drawer and composer tuning" }).locator(".thread-select").click();
-    await page.waitForFunction(() => window.__mockWebSocketUrls?.some((url) => url.includes("thread-drawer")));
+    await page.locator(".thread-item", { hasText: "Codex drawer tuning" }).locator(".thread-select").click();
+    await page.waitForFunction(() => window.__mockWebSocketUrls?.some((url) => url.includes("thread-drawer-codex")));
     const unregisteredRepoNavigation = await page.evaluate((expectedWorkdir) => {
-      const target = [...(window.__mockWebSocketUrls || [])].reverse().find((url) => url.includes("thread-drawer")) || "";
+      const target = [...(window.__mockWebSocketUrls || [])].reverse().find((url) => url.includes("thread-drawer-codex")) || "";
       const parsed = new URL(target);
       return {
         thread: parsed.searchParams.get("thread"),
@@ -786,7 +795,7 @@ async function run() {
     }, drawerRepo);
     check(
       "cross-repo existing thread without a matching bridge still carries the target workdir",
-      unregisteredRepoNavigation.thread === "thread-drawer" &&
+      unregisteredRepoNavigation.thread === "thread-drawer-codex" &&
         unregisteredRepoNavigation.workdir === drawerRepo &&
         unregisteredRepoNavigation.workspaceRepo === "drawer-workspace" &&
         unregisteredRepoNavigation.bridgePill === "drawer-workspace" &&
