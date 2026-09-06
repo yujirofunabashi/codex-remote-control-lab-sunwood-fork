@@ -38,6 +38,9 @@ const threads = [
   // One Claude thread: only Claude sessions are resumed with `claude --resume`,
   // so the copy-command button belongs to them alone.
   { id: "thread-drawer", name: "Drawer and composer tuning", cwd: drawerRepo, updatedAt: Date.now() - 86_400_000, provider: "claude" },
+  // The project-hiding check runs in the Codex list. It cannot rely on a
+  // Claude-only folder appearing there now that provider lists are separate.
+  { id: "thread-drawer-codex", name: "Codex drawer tuning", cwd: drawerRepo, updatedAt: Date.now() - 86_400_000, provider: "codex" },
   // Enough in one project to pass the collapsed cap of 6, so the show-more
   // control has something to reveal.
   ...Array.from({ length: 8 }, (_, index) => ({
