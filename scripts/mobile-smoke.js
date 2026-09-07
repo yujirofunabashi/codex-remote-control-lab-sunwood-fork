@@ -35,8 +35,7 @@ const activeThread = { id: "thread-mobile-compact", name: "Mobile terminal compa
 const threads = [
   activeThread,
   { id: "thread-artifacts", name: "Artifact preview polish", cwd: artifactRepo, updatedAt: Date.now() - 3600_000 },
-  // One Claude thread: only Claude sessions are resumed with `claude --resume`,
-  // so the copy-command button belongs to them alone.
+  // Keep both providers represented: each offers its own resume command.
   { id: "thread-drawer", name: "Drawer and composer tuning", cwd: drawerRepo, updatedAt: Date.now() - 86_400_000, provider: "claude" },
   // The project-hiding check runs in the Codex list. It cannot rely on a
   // Claude-only folder appearing there now that provider lists are separate.
@@ -705,15 +704,16 @@ async function run() {
       return {
         command: claudeRow?.querySelector(".thread-resume-copy")?.title || "",
         label: claudeRow?.querySelector(".thread-resume-copy")?.getAttribute("aria-label") || "",
-        // Codex sessions are not resumed with this command, so they get no button.
         codexButtons,
       };
     }, codexResumeButtons);
     check(
-      "a Claude row offers the command that reopens it on the PC",
-      /^cd \S*drawer-workspace && claude --resume thread-drawer$/.test(resumeCopy.command) &&
+      "both providers offer commands that reopen their session on the owning Mac",
+      resumeCopy.command.includes(`cd -- '${drawerRepo}'`) &&
+        resumeCopy.command.includes("claude --resume 'thread-drawer'") &&
+        resumeCopy.command.includes("ssh -t ") &&
         resumeCopy.label.includes("コピー") &&
-        resumeCopy.codexButtons === 0,
+        resumeCopy.codexButtons > 0,
       JSON.stringify(resumeCopy),
     );
     // The row is a grid, so a column the button does not fit into silently

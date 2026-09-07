@@ -151,15 +151,13 @@ The sidebar now reads every workdir under `~/.claude/projects`, in one of two or
 
 The choice is remembered per device.
 
-The `>_` at the end of each row copies the command that reopens that session on the PC:
+The `>_` at the end of each Codex or Claude row copies a command that can be pasted into either Mac's terminal. It resumes the exact session in its original working directory **on the Mac that owns it**, without transferring any transcript.
 
-```bash
-cd /Users/you/Prj/example && claude --resume 2bec35bc-1324-4b49-8a83-d550e9a9ba07
-```
+On the owning Mac it starts locally; on the other Mac it connects through SSH. The mini must already have an `air` SSH alias targeting the Air's session owner, and the Air must have a `mini` alias targeting the mini's session owner. Other host types use their hostname as the SSH destination. The generated command checks the hostname again after connecting and stops on a mismatch. Connection failures never fall back to starting an AI on the wrong Mac.
 
-The `cd` is part of it because `claude --resume` without an id only offers sessions belonging to the directory it is started from. Paste it into a terminal and the conversation carries on where the phone left it.
+The inner command is `codex resume <session-id>` or `claude --resume <session-id>`; the copied command also includes host selection, changing directory, and the SSH hop when needed. Remote execution uses `zsh -lic` to load the owner's normal CLI environment. The button is withheld until the owning hostname, absolute working directory and valid session ID are known. Paste into a real Mac terminal, not the phone's single-command terminal runner.
 
-The bridge is served over HTTP, so `navigator.clipboard` is unavailable in some browsers; it falls back to `execCommand`, and then to showing the command in a field you can select by hand. Codex sessions are not resumed with this command, so the button belongs to Claude rows only.
+The bridge is served over HTTP, so `navigator.clipboard` is unavailable in some browsers; it falls back to `execCommand`, and then to showing the command in a field you can select by hand.
 
 A session opened from another workdir **runs in the directory it started in**. Otherwise the continuation would be filed under a different project and the original would look abandoned. Nothing is moved and nothing accumulates: bridges are keyed per session, each takes its directory once at construction, and the configured workdir is untouched — a new chat still starts there.
 

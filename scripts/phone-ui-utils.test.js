@@ -629,33 +629,29 @@ test("thread inbox status derivation prioritizes actionable work", () => {
 });
 
 test("the copy button hands over a command that works as pasted", () => {
-  // `claude --resume` without an id only offers sessions belonging to the
-  // directory it is started from, so the cd is part of the command.
-  assert.equal(
-    resumeCommandForThread({ id: "2bec35bc-1324-4b49-8a83-d550e9a9ba07", cwd: "/Users/you/Prj/example", provider: "claude" }),
-    "cd /Users/you/Prj/example && claude --resume 2bec35bc-1324-4b49-8a83-d550e9a9ba07",
-  );
+  for (const provider of ["claude", "codex"]) {
+    const command = resumeCommandForThread(
+      { id: "2bec35bc-1324-4b49-8a83-d550e9a9ba07", cwd: "/Users/you/Prj/example", provider },
+      { hostName: "Example-Mac-mini.local" },
+    );
+    assert.ok(command.includes("cd -- '/Users/you/Prj/example'"));
+    assert.ok(command.includes(`${provider} ${provider === "codex" ? "resume" : "--resume"} '2bec35bc-1324-4b49-8a83-d550e9a9ba07'`));
+    assert.ok(command.includes("ssh -t 'mini'"));
+  }
 });
 
-test("a folder with no recorded path still yields a usable resume", () => {
-  assert.equal(resumeCommandForThread({ id: "abc", provider: "claude" }), "claude --resume abc");
-  assert.equal(resumeCommandForThread({ id: "abc", cwd: "/Users/you/Prj/example/" }), "cd /Users/you/Prj/example && claude --resume abc");
+test("a folder with no recorded path cannot safely resume from another Mac", () => {
+  assert.equal(resumeCommandForThread({ id: "abc", provider: "claude" }, { hostName: "Example-Mac-mini.local" }), "");
 });
 
 test("a path that would break the command line is quoted", () => {
-  assert.equal(
-    resumeCommandForThread({ id: "abc", cwd: "/Users/you/My Project" }),
-    "cd '/Users/you/My Project' && claude --resume abc",
-  );
-  assert.equal(
-    resumeCommandForThread({ id: "abc", cwd: "/Users/you/it's mine" }),
-    `cd '/Users/you/it'\\''s mine' && claude --resume abc`,
-  );
+  const options = { hostName: "Example-MacBook-Air.local" };
+  assert.ok(resumeCommandForThread({ id: "abc", provider: "claude", cwd: "/Users/you/My Project" }, options).includes("cd -- '/Users/you/My Project'"));
+  assert.ok(resumeCommandForThread({ id: "abc", provider: "claude", cwd: "/Users/you/it's mine" }, options).includes(`cd -- '/Users/you/it'\\''s mine'`));
 });
 
 test("no command is offered where none would work", () => {
-  // A thread with no answer yet carries a placeholder id, and Codex threads are
-  // not resumed with this command at all.
+  // Old main.js supplies no ownership; mixed cached assets must fail closed.
   assert.equal(resumeCommandForThread({ id: "claude:6f9e", cwd: "/Users/you/Prj/example" }), "");
   assert.equal(resumeCommandForThread({ id: "thread-1", provider: "codex", cwd: "/Users/you/Prj/example" }), "");
   assert.equal(resumeCommandForThread({}), "");

@@ -2327,7 +2327,13 @@ function selectModel(model) {
 }
 
 function resumeCommandForThread(thread) {
-  if (uiUtils.resumeCommandForThread) return uiUtils.resumeCommandForThread(thread);
+  // An older cached helper ignores ownership and returns local-only commands.
+  if (uiUtils.portableResumeVersion === 1 && uiUtils.resumeCommandForThread) {
+    // Resolve the row's owner, not the currently selected bridge or the phone's
+    // origin. Display labels may be renamed and are not routing information.
+    const owner = getBridgeState(thread.bridgeId || activeBridgeId);
+    return uiUtils.resumeCommandForThread(thread, { hostName: owner.info?.hostName || "" });
+  }
   return "";
 }
 
@@ -4338,7 +4344,7 @@ function createThreadListItem(thread, options = {}) {
     copyButton.type = "button";
     copyButton.className = "thread-resume-copy";
     copyButton.title = resumeCommand;
-    copyButton.setAttribute("aria-label", `${displayTitle} を PC で開くコマンドをコピー`);
+    copyButton.setAttribute("aria-label", `${displayTitle} をどちらの Mac からでも再開するコマンドをコピー`);
     const glyph = document.createElement("span");
     glyph.className = "resume-copy-glyph";
     glyph.setAttribute("aria-hidden", "true");
@@ -4349,7 +4355,7 @@ function createThreadListItem(thread, options = {}) {
       event.stopPropagation();
       try {
         await copyTextToClipboard(resumeCommand);
-        showToast("ターミナル用コマンドをコピーしました。");
+        showToast("再開コマンドをコピーしました。Air・mini どちらの Mac のターミナルでも使えます。");
       } catch (error) {
         // Without a clipboard there is still something useful to do: show the
         // command so it can be read off the screen.

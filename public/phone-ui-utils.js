@@ -286,23 +286,28 @@
     return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(value || "").trim());
   }
 
-  // The command that picks a session back up in a terminal. `claude --resume`
-  // without an id only offers sessions belonging to the directory it is started
-  // from, so the cd is part of the command rather than an afterthought.
-  function resumeCommandForThread(thread = {}) {
+  // The command always resumes on the owner, never on whichever Mac happened
+  // to receive the paste. Air/mini use the operator's existing SSH aliases;
+  // other hosts use their hostname and require ordinary SSH configuration.
+  function resumeCommandForThread(thread = {}, { hostName = "" } = {}) {
     const provider = String(thread.provider || "").trim().toLowerCase();
-    if (provider && provider !== "claude") return "";
+    if (!["codex", "claude"].includes(provider)) return "";
     const id = String(thread.id || "").trim();
-    // A thread that has not been answered yet carries a placeholder id, and no
-    // session exists behind it to resume.
-    if (!id || id.startsWith("claude:")) return "";
-    const resume = `claude --resume ${id}`;
-    const cwd = String(thread.cwd || "").trim().replace(/\/+$/, "");
-    if (!cwd) return resume;
-    // Quote only when it would otherwise break, so the common case stays
-    // readable in a toast and on a terminal line.
-    const target = /^[A-Za-z0-9._\-/~]+$/.test(cwd) ? cwd : `'${cwd.replace(/'/g, `'\\''`)}'`;
-    return `cd ${target} && ${resume}`;
+    const cwd = String(thread.cwd || "").trim().replace(/\/+$/, "") || (thread.cwd === "/" ? "/" : "");
+    const host = String(hostName || "").trim();
+    // Missing ownership, placeholder IDs and relative folders must not turn
+    // into a plausible command that accidentally starts another conversation.
+    if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(id) || !cwd.startsWith("/") || !/^[A-Za-z0-9][A-Za-z0-9.-]*$/.test(host)) return "";
+    const quote = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`;
+    const machine = machineLabelFromHost(host).toLowerCase();
+    const destination = ["air", "mini"].includes(machine) ? machine : host;
+    const resume = `${provider} ${provider === "codex" ? "resume" : "--resume"} ${quote(id)}`;
+    const local = `cd -- ${quote(cwd)} && exec ${resume}`;
+    // Check again after SSH: a stale alias must fail, not resume a session on
+    // the wrong host. A login/interactive shell loads the owner's CLI PATH.
+    const guard = `[ "$(hostname)" = ${quote(host)} ] || { printf '%s\\n' 'Resume stopped: unexpected host.' >&2; exit 1; }`;
+    const remote = `zsh -lic ${quote(`${guard}; ${local}`)}`;
+    return `if [ "$(hostname)" = ${quote(host)} ]; then (${local}); else ssh -t ${quote(destination)} ${quote(remote)}; fi`;
   }
 
   function threadDisplayTitle(thread = {}, options = {}) {
@@ -1044,6 +1049,7 @@
     sameWorkspaceThreadRecord,
     isOpaqueThreadId,
     resumeCommandForThread,
+    portableResumeVersion: 1,
     threadDisplayTitle,
     timestampValueMs,
     threadTimestamp,
