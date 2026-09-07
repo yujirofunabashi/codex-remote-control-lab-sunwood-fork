@@ -19,6 +19,75 @@
   const terminalKinds = new Set(["status", "command", "file", "approval", "user", "assistant", "error", "lifecycle"]);
   const terminalHistoryLimit = 300;
 
+  // Scope a conversation by Mac and provider, not by the currently open tab.
+  function sessionActivityKey(item = {}) {
+    return JSON.stringify([item.machineKey || item.bridgeId, item.provider, item.threadId]);
+  }
+
+  function sessionActivityStatus(run = {}, pendingApproval = null) {
+    const request = pendingApproval || run.pendingApproval;
+    if (request?.params?.toolName === "AskUserQuestion" || /requestUserInput$/.test(request?.method || "")) return "question";
+    if (request || run.state === "approval") return "approval";
+    if (["running", "streaming", "syncing", "interrupting"].includes(run.state)) return "running";
+    if (["done", "completed"].includes(run.state)) return "done";
+    if (["question", "question_required"].includes(run.state)) return "question";
+    if (["error", "test_failed"].includes(run.state)) return "error";
+    if (run.state === "interrupted") return "interrupted";
+    if (["disconnected", "offline"].includes(run.state)) return "offline";
+    return "idle";
+  }
+
+  function reconcileSessionActivity(previous = [], observations = [], options = {}) {
+    const knownBridges = options.bridgeIds && new Set(options.bridgeIds);
+    const records = new Map(previous.filter((item) => item?.key && (!knownBridges || knownBridges.has(item.bridgeId))).map((item) => [item.key, { ...item }]));
+    const sources = new Map();
+    for (const observation of observations) {
+      const key = sessionActivityKey(observation);
+      const other = sources.get(key);
+      const online = sessionActivityStatus(observation.run, observation.pendingApproval) !== "offline";
+      const otherOnline = other && sessionActivityStatus(other.run, other.pendingApproval) !== "offline";
+      if (!other || (online && !otherOnline) || (online === otherOnline && timestampValueMs(observation.run?.updatedAt) > timestampValueMs(other.run?.updatedAt))) sources.set(key, observation);
+    }
+    for (const observation of sources.values()) {
+      if (!observation.threadId || !["codex", "claude"].includes(observation.provider)) continue;
+      const key = sessionActivityKey(observation);
+      const old = records.get(key) || Array.from(records.values()).find((item) => item.bridgeId === observation.bridgeId && item.provider === observation.provider && item.threadId === observation.threadId);
+      if (old && old.key !== key) records.delete(old.key);
+      const status = sessionActivityStatus(observation.run, observation.pendingApproval);
+      if (!old && status === "idle") continue;
+      const group = JSON.stringify([observation.machineKey || observation.bridgeId, observation.provider]);
+      const ordinal = old?.ordinal || 1 + Math.max(0, ...Array.from(records.values()).filter((item) => item.group === group).map((item) => item.ordinal || 0));
+      const completion = status === "done"
+        ? String(observation.run?.turnId || observation.run?.updatedAt || (old?.status === "done" && old.completion) || options.now || Date.now())
+        : old?.completion || "";
+      const next = {
+        key, group, ordinal,
+        bridgeId: observation.bridgeId,
+        machineKey: observation.machineKey,
+        machineLabel: observation.machineLabel,
+        threadId: observation.threadId,
+        provider: observation.provider,
+        title: observation.title || old?.title || "名前未設定のチャット",
+        workdir: observation.workdir || old?.workdir || "",
+        status, completion,
+        acknowledged: status === "running" ? "" : old?.acknowledged || "",
+      };
+      // An idle reconnect or an expired watcher is not evidence that the
+      // owner has read the completed answer.
+      if (status === "idle" && old?.status === "done" && old.acknowledged !== old.completion) next.status = "done";
+      records.set(key, next);
+    }
+    return Array.from(records.values());
+  }
+
+  function visibleSessionActivity(records = []) {
+    return records.filter((item) => item.status !== "idle" && !(item.status === "done" && item.acknowledged === item.completion));
+  }
+
+  function acknowledgeSessionActivity(records = [], key = "") {
+    return records.map((item) => item.key === key && item.status === "done" ? { ...item, acknowledged: item.completion } : item);
+  }
+
   function safeJsonParse(value, fallback, options = {}) {
     if (value === undefined || value === null || value === "") return fallback;
     try {
@@ -1143,6 +1212,11 @@
     shouldConfirmDangerousKey,
     keyIntentText,
     deriveThreadStatus,
+    sessionActivityKey,
+    sessionActivityStatus,
+    reconcileSessionActivity,
+    visibleSessionActivity,
+    acknowledgeSessionActivity,
     sortThreadsForInbox,
     limitThreadList,
     prioritizeSelectedThread,

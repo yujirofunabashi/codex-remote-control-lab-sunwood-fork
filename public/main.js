@@ -1,4 +1,19 @@
 const uiUtils = window.CodexPhoneUiUtils || {};
+const sessionActivityStrip = document.querySelector("#sessionActivityStrip");
+const sessionActivityItems = document.querySelector("#sessionActivityItems");
+const sessionActivityCount = document.querySelector("#sessionActivityCount");
+const sessionActivityDialog = document.querySelector("#sessionActivityDialog");
+const sessionActivityList = document.querySelector("#sessionActivityList");
+const sessionActivityStorageKey = "codexPhoneSessionActivity:v1";
+let sessionActivityRecords = (() => {
+  try {
+    const value = JSON.parse(safeReadStorage(localStorage, sessionActivityStorageKey, "[]"));
+    return Array.isArray(value) ? value.filter((item) => item && typeof item.key === "string" && typeof item.threadId === "string" && ["codex", "claude"].includes(item.provider) && Number.isInteger(item.ordinal) && item.ordinal > 0 && ["running", "done", "question", "approval", "error", "offline", "interrupted", "idle"].includes(item.status)) : [];
+  } catch { return []; }
+})();
+let sessionActivitySaved = JSON.stringify(sessionActivityRecords);
+let sessionActivityViewRequest = null;
+const sessionActivityLabels = { running: "処理中", done: "完了・未確認", question: "返信待ち", approval: "許可待ち", error: "エラー", offline: "接続・状態を確認", interrupted: "中断" };
 const log = document.querySelector("#log");
 const logShell = document.querySelector("#logShell");
 const chatLatestButton = document.querySelector("#chatLatestButton");
@@ -518,7 +533,8 @@ function trackHeaderBlockEnd() {
   if (!titlebar) return;
   const strip = document.querySelector(".workspace-strip");
   const update = () => {
-    const anchor = strip && strip.getBoundingClientRect().height > 0 ? strip : titlebar;
+    const anchor = sessionActivityStrip && !sessionActivityStrip.hidden && sessionActivityStrip.getBoundingClientRect().height > 0
+      ? sessionActivityStrip : strip && strip.getBoundingClientRect().height > 0 ? strip : titlebar;
     const bottom = Math.round(anchor.getBoundingClientRect().bottom);
     if (bottom > 0) document.documentElement.style.setProperty("--app-header-block-end", `${bottom}px`);
   };
@@ -526,6 +542,7 @@ function trackHeaderBlockEnd() {
     const observer = new ResizeObserver(update);
     observer.observe(titlebar);
     if (strip) observer.observe(strip);
+    if (sessionActivityStrip) observer.observe(sessionActivityStrip);
   }
   window.addEventListener("resize", update);
   update();
@@ -970,6 +987,9 @@ function getBridgeState(bridgeId = activeBridgeId) {
       runState: "connecting",
       info: null,
       status: null,
+      sessionRuns: new Map(),
+      sessionTitles: new Map(),
+      statusRequestedAt: 0,
       threadCache: [],
       hiddenProjects: [],
       selectedThread: "",
@@ -1838,12 +1858,27 @@ function setRunState(state, label) {
   const bridgeState = getBridgeState(activeBridgeId);
   bridgeState.runState = state;
   bridgeState.lastEventAt = Date.now();
+  if (selectedThread && ["running", "streaming", "approval", "question", "syncing", "interrupting", "done", "interrupted"].includes(state)) {
+    const key = `${currentThreadProvider()}:${selectedThread}`;
+    const previous = bridgeState.sessionRuns.get(key);
+    bridgeState.sessionRuns.set(key, {
+      threadId: selectedThread, provider: currentThreadProvider(),
+      workdir: selectedThreadWorkdir("") || currentWorkspaceWorkdir(), observedAt: Date.now(),
+      run: { ...previous?.run, state, updatedAt: previous?.run?.state === state ? previous.run.updatedAt : Date.now(), pendingApproval: state === "approval" ? pendingApproval || previous?.run?.pendingApproval : null },
+    });
+  }
   renderFleet();
   renderThreadList();
   refreshReviewCenterIfOpen();
 }
 
 function applyServerRunState(run = {}) {
+  if (selectedThread) {
+    getBridgeState().sessionRuns.set(`${currentThreadProvider()}:${selectedThread}`, {
+      threadId: selectedThread, provider: currentThreadProvider(), run: { ...run },
+      workdir: selectedThreadWorkdir("") || currentWorkspaceWorkdir(), observedAt: Date.now(),
+    });
+  }
   const state = run.state || "ready";
   if (terminalRunStates.has(state)) interruptRequestPending = false;
   if (state !== "approval" && pendingApproval) {
@@ -5483,7 +5518,164 @@ function renderBridgeFleetSheet() {
   }
   renderGlobalApprovalInbox();
   renderGlobalRunningMonitor();
+  renderSessionActivity();
 }
+
+function sessionActivityObservations() {
+  const observations = [];
+  for (const entry of bridgeRegistry.bridges || []) {
+    const state = getBridgeState(entry.id);
+    const runs = new Map();
+    for (const run of state.status?.bridges || []) {
+      if (run.threadId) runs.set(`${run.provider}:${run.threadId}`, run);
+    }
+    // A response to an earlier poll must not undo a newer socket event.
+    for (const [key, run] of state.sessionRuns) {
+      if (run.observedAt >= state.statusRequestedAt) runs.set(key, run);
+    }
+    const seen = new Set();
+    for (const [key, run] of runs) {
+      const thread = state.sessionTitles.get(key) || (entry.id === activeBridgeId ? threadCache : state.threadCache).find((item) => item.id === run.threadId && item.provider === run.provider);
+      const observation = {
+        ...run, bridgeId: entry.id, machineKey: bridgeMachineKey(entry, state), machineLabel: shortMachineName(entry, state),
+        title: thread ? titleForThread(thread) : "", workdir: run.workdir || thread?.cwd || "",
+      };
+      if (!state.connected && state.lastError) {
+        // Keep the last known completed answer, but do not invent progress
+        // (or a task failure) when only the connection has failed.
+        if (uiUtils.sessionActivityStatus(run.run, run.pendingApproval) !== "done") {
+          observation.run = { state: "offline" };
+          observation.pendingApproval = null;
+        }
+      }
+      seen.add(uiUtils.sessionActivityKey(observation));
+      observations.push(observation);
+    }
+    for (const item of sessionActivityRecords) {
+      if (item.bridgeId === entry.id && !seen.has(item.key) && item.status === "running" && (state.status || state.lastError)) {
+        observations.push({ ...item, run: { state: "offline" } });
+      }
+    }
+  }
+  return observations;
+}
+
+function currentSessionActivityKey() {
+  return uiUtils.sessionActivityKey({ bridgeId: activeBridgeId, machineKey: bridgeMachineKey(activeBridge() || {}, getBridgeState()), provider: currentThreadProvider(), threadId: selectedThread });
+}
+
+function saveSessionActivity() {
+  const serialized = JSON.stringify(sessionActivityRecords);
+  if (serialized !== sessionActivitySaved) {
+    safeWriteStorage(localStorage, sessionActivityStorageKey, serialized);
+    sessionActivitySaved = serialized;
+  }
+}
+
+function acknowledgeCurrentSessionActivity() {
+  sessionActivityRecords = uiUtils.acknowledgeSessionActivity(sessionActivityRecords, currentSessionActivityKey());
+  saveSessionActivity();
+  renderSessionActivity();
+}
+
+async function openSessionActivity(item) {
+  if (threadSwitchBusy) return;
+  sessionActivityDialog.close();
+  setMainView("chat");
+  if (item.key === currentSessionActivityKey() && connectionReady && item.status !== "offline") {
+    scrollChatToBottom();
+    if (pendingApproval && ["approval", "question"].includes(item.status)) revealPendingApproval();
+    acknowledgeCurrentSessionActivity();
+    return;
+  }
+  try {
+    await selectThread(item.threadId, { bridgeId: item.bridgeId, workdir: item.workdir, thread: { id: item.threadId, provider: item.provider, cwd: item.workdir, displayTitle: item.title } });
+    // A different conversation is acknowledged only after its ready/history
+    // response, never just because the user attempted to open an offline Mac.
+  } catch (error) {
+    showToast("会話を開けませんでした。接続先を確認してください。");
+  }
+}
+
+function renderSessionActivityButtons(container, items, expanded = false) {
+  const existing = new Map(Array.from(container.children).map((button) => [button.dataset.sessionKey, button]));
+  const currentKey = currentSessionActivityKey();
+  for (const item of items) {
+    let button = existing.get(item.key);
+    if (!button) {
+      button = document.createElement("button");
+      button.type = "button";
+      button.className = expanded ? "session-activity-row" : "session-activity-chip";
+      button.dataset.sessionKey = item.key;
+      const capsule = document.createElement("span");
+      capsule.className = "session-activity-capsule";
+      // Static markup only; session titles never enter innerHTML.
+      capsule.innerHTML = '<svg class="session-activity-outline" aria-hidden="true"><rect pathLength="100" /></svg><span class="session-activity-name"></span><span class="session-activity-symbol" aria-hidden="true"></span>';
+      button.append(capsule);
+      if (expanded) {
+        const detail = document.createElement("span");
+        detail.className = "session-activity-detail";
+        button.append(detail);
+      }
+      button.addEventListener("click", () => {
+        const current = sessionActivityRecords.find((record) => record.key === button.dataset.sessionKey);
+        if (current) openSessionActivity(current);
+      });
+      container.append(button);
+    }
+    existing.delete(item.key);
+    const ordinal = item.ordinal <= 20 ? String.fromCodePoint(0x245f + item.ordinal) : String(item.ordinal);
+    const name = `${item.provider === "claude" ? "Claude" : "Codex"} ${item.machineLabel}${ordinal}`;
+    const label = `${name}：${sessionActivityLabels[item.status]}。${item.title}`;
+    button.dataset.state = item.status;
+    button.setAttribute("aria-current", item.key === currentKey ? "true" : "false");
+    button.setAttribute("aria-label", label);
+    button.title = label;
+    button.querySelector(".session-activity-name").textContent = name;
+    button.querySelector(".session-activity-symbol").textContent = ({ done: "✓", question: "?", approval: "?", error: "!", offline: "!", interrupted: "−" })[item.status] || "";
+    if (expanded) button.querySelector(".session-activity-detail").textContent = `${sessionActivityLabels[item.status]} · ${item.title}`;
+  }
+  for (const button of existing.values()) {
+    if (button === document.activeElement) sessionActivityCount.focus({ preventScroll: true });
+    button.remove();
+  }
+}
+
+function renderSessionActivity() {
+  if (!sessionActivityStrip) return;
+  sessionActivityRecords = uiUtils.reconcileSessionActivity(sessionActivityRecords, sessionActivityObservations(), { bridgeIds: (bridgeRegistry.bridges || []).map((entry) => entry.id) });
+  saveSessionActivity();
+  const items = uiUtils.visibleSessionActivity(sessionActivityRecords);
+  const count = items.filter((item) => item.status === "running").length;
+  sessionActivityStrip.hidden = items.length === 0;
+  sessionActivityCount.textContent = `処理中 ${count}`;
+  sessionActivityCount.setAttribute("aria-label", `処理中 ${count}件。未確認・要対応を含む ${items.length}件の一覧を開く`);
+  renderSessionActivityButtons(sessionActivityItems, items);
+  if (sessionActivityDialog.open) {
+    renderSessionActivityButtons(sessionActivityList, items, true);
+    if (!items.length) sessionActivityDialog.close();
+  }
+}
+
+sessionActivityCount?.addEventListener("click", async () => {
+  renderSessionActivityButtons(sessionActivityList, uiUtils.visibleSessionActivity(sessionActivityRecords), true);
+  sessionActivityDialog.showModal();
+  // Titles for the other provider are loaded only when the full list is
+  // requested; they must never replace the sidebar's provider-specific cache.
+  const requests = new Map();
+  for (const item of uiUtils.visibleSessionActivity(sessionActivityRecords)) requests.set(`${item.bridgeId}:${item.provider}`, item);
+  await Promise.all(Array.from(requests.values()).map(async (item) => {
+    const entry = bridgeById(item.bridgeId);
+    if (!entry) return;
+    try {
+      const result = await fetchJsonForBridge(entry, `/api/threads?provider=${encodeURIComponent(item.provider)}`);
+      for (const thread of result.data || []) getBridgeState(entry.id).sessionTitles.set(`${thread.provider || item.provider}:${thread.id}`, thread);
+    } catch { /* Keep the last known titles and connection status. */ }
+  }));
+  renderSessionActivity();
+});
+document.querySelector("#closeSessionActivity")?.addEventListener("click", () => sessionActivityDialog.close());
+sessionActivityDialog?.addEventListener("click", (event) => { if (event.target === sessionActivityDialog) sessionActivityDialog.close(); });
 
 function renderGlobalApprovalInbox() {
   if (!globalApprovalInbox) return;
@@ -5657,8 +5849,10 @@ async function refreshBridgeState(bridgeId, { force = false } = {}) {
     state.lastError = "";
     state.activeProvider = info.provider || state.activeProvider || "codex";
     const provider = state.activeProvider || "codex";
+    const statusRequestedAt = Date.now();
     const status = await fetchJsonForBridge(entry, `/api/status?provider=${encodeURIComponent(provider)}`);
     state.status = status;
+    state.statusRequestedAt = statusRequestedAt;
     if (bridgeId === activeBridgeId) {
       setWorkspaceMeta(polledWorkspaceMeta(info, status));
     }
@@ -6785,6 +6979,7 @@ async function selectThread(threadId, options = {}) {
   setSidebarVisible(false);
   closeThreadSwitcher();
   restoreScrollPositions();
+  sessionActivityViewRequest = { bridgeId: activeBridgeId, provider: currentThreadProvider(), threadId: selectedThread };
   connect({ freshThread: options.fresh === true, workdir });
   if (selectedThread) refreshSelectedThread();
   window.setTimeout(() => {
@@ -8688,6 +8883,10 @@ function connect({ preserveHistory = false, freshThread = false, workdir = "" } 
       syncReadyThread(msg.threadId);
       applyServerRunState(msg.run || { state: "ready" });
       renderHistoryIfChanged(msg.history || []);
+      if (sessionActivityViewRequest?.bridgeId === bridgeId && sessionActivityViewRequest.provider === currentThreadProvider() && sessionActivityViewRequest.threadId === selectedThread) {
+        if (document.visibilityState === "visible" && mainViewMode === "chat") acknowledgeCurrentSessionActivity();
+        sessionActivityViewRequest = null;
+      }
       handleTerminalMessage(msg);
       // The workspace strip directly below already names the folder, and it does
       // it with the home directory collapsed. Repeating the absolute path here
