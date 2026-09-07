@@ -14,6 +14,7 @@ let sessionActivityRecords = (() => {
 let sessionActivitySaved = JSON.stringify(sessionActivityRecords);
 let sessionActivityViewRequest = null;
 const sessionActivityLabels = { running: "処理中", done: "完了・未確認", question: "返信待ち", approval: "許可待ち", error: "エラー", offline: "接続・状態を確認", interrupted: "中断" };
+const sessionActivityOrder = ["question", "approval", "error", "offline", "done", "interrupted", "running"];
 const log = document.querySelector("#log");
 const logShell = document.querySelector("#logShell");
 const chatLatestButton = document.querySelector("#chatLatestButton");
@@ -5614,7 +5615,9 @@ async function openSessionActivity(item) {
 function renderSessionActivityButtons(container, items, expanded = false) {
   const existing = new Map(Array.from(container.children).map((button) => [button.dataset.sessionKey, button]));
   const currentKey = currentSessionActivityKey();
-  for (const item of items) {
+  // Keep the horizontal shortcuts stable; the full list puts attention first.
+  const ordered = expanded ? [...items].sort((a, b) => sessionActivityOrder.indexOf(a.status) - sessionActivityOrder.indexOf(b.status)) : items;
+  for (const [index, item] of ordered.entries()) {
     let button = existing.get(item.key);
     if (!button) {
       button = document.createElement("button");
@@ -5648,6 +5651,8 @@ function renderSessionActivityButtons(container, items, expanded = false) {
     button.querySelector(".session-activity-name").textContent = name;
     button.querySelector(".session-activity-symbol").textContent = ({ done: "✓", question: "?", approval: "?", error: "!", offline: "!", interrupted: "−" })[item.status] || "";
     if (expanded) button.querySelector(".session-activity-detail").textContent = `${sessionActivityLabels[item.status]} · ${item.title}`;
+    const position = container.children[index];
+    if (position !== button) container.insertBefore(button, position || null);
   }
   for (const button of existing.values()) {
     if (button === document.activeElement) sessionActivityCount.focus({ preventScroll: true });
@@ -5655,15 +5660,34 @@ function renderSessionActivityButtons(container, items, expanded = false) {
   }
 }
 
+function renderSessionActivitySummary(items) {
+  const totals = [];
+  const descriptions = [];
+  for (const status of sessionActivityOrder) {
+    const count = items.filter((item) => item.status === status).length;
+    if (!count) continue;
+    const total = document.createElement("span");
+    total.className = "session-activity-total";
+    total.dataset.state = status;
+    const label = ({ done: "未確認完了", offline: "接続確認" })[status] || sessionActivityLabels[status];
+    total.textContent = `${label} ${count}`;
+    totals.push(total);
+    descriptions.push(`${sessionActivityLabels[status]} ${count}件`);
+  }
+  const label = `${descriptions.join("、")}。全${items.length}件の一覧を開く`;
+  // Polling unchanged counts must not repeatedly announce the live summary.
+  if (sessionActivityCount.getAttribute("aria-label") === label) return;
+  sessionActivityCount.replaceChildren(...totals);
+  sessionActivityCount.setAttribute("aria-label", label);
+}
+
 function renderSessionActivity() {
   if (!sessionActivityStrip) return;
   sessionActivityRecords = uiUtils.reconcileSessionActivity(sessionActivityRecords, sessionActivityObservations(), { bridgeIds: (bridgeRegistry.bridges || []).map((entry) => entry.id) });
   saveSessionActivity();
   const items = uiUtils.visibleSessionActivity(sessionActivityRecords);
-  const count = items.filter((item) => item.status === "running").length;
   sessionActivityStrip.hidden = items.length === 0;
-  sessionActivityCount.textContent = `処理中 ${count}`;
-  sessionActivityCount.setAttribute("aria-label", `処理中 ${count}件。未確認・要対応を含む ${items.length}件の一覧を開く`);
+  renderSessionActivitySummary(items);
   renderSessionActivityButtons(sessionActivityItems, items);
   if (sessionActivityDialog.open) {
     renderSessionActivityButtons(sessionActivityList, items, true);

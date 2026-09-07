@@ -92,7 +92,10 @@ async function main() {
       console.error(JSON.stringify({ pageErrors: errors, strip: await page.locator("#sessionActivityStrip").count(), chips: await page.locator(".session-activity-chip").count() }));
       throw error;
     }
-    assert.equal(await page.locator("#sessionActivityCount").textContent(), "処理中 1");
+    const summary = () => page.locator(".session-activity-total").allTextContents();
+    const summaryCount = (status) => page.locator(`.session-activity-total[data-state="${status}"]`);
+    assert.deepEqual(await summary(), ["返信待ち 1", "許可待ち 1", "エラー 1", "未確認完了 1", "処理中 1"]);
+    assert.match(await page.locator("#sessionActivityCount").getAttribute("aria-label"), /完了・未確認 1件/);
     const byKey = (machine, provider, threadId) => page.locator(`.session-activity-chip[data-session-key='${JSON.stringify([machine.toLowerCase(), provider, threadId])}']`);
     const metrics = await page.evaluate(() => {
       const strip = document.querySelector("#sessionActivityStrip").getBoundingClientRect();
@@ -103,7 +106,7 @@ async function main() {
       items.scrollLeft = 35;
       return { height: strip.height, bottom: strip.bottom, contentTop: content.top, overflowing: items.scrollWidth > items.clientWidth, svgWidth: rect.getBBox().width, animation: getComputedStyle(rect).animationName, tapHeight: rect.closest("button").getBoundingClientRect().height };
     });
-    assert.equal(metrics.height, 48);
+    assert.ok(metrics.height >= 92 && metrics.height <= 140);
     assert.equal(metrics.bottom, metrics.contentTop);
     assert.ok(metrics.overflowing && metrics.svgWidth > 40 && metrics.tapHeight >= 44);
     assert.equal(metrics.animation, "session-border-orbit");
@@ -116,31 +119,61 @@ async function main() {
     await page.locator("#sessionActivityCount").click();
     await page.waitForFunction(() => document.querySelector("#sessionActivityList").textContent.includes("mini の質問"));
     assert.match(await page.locator("#sessionActivityList").textContent(), /許可待ち/);
+    const listStates = () => page.locator(".session-activity-row").evaluateAll((rows) => rows.map((row) => row.dataset.state));
+    assert.deepEqual(await listStates(), ["question", "approval", "error", "done", "running"]);
+    // Reorder existing rows when a task needs attention while the list is open.
+    state.mini[0].run = { state: "error", updatedAt: 150 };
+    await page.evaluate(() => refreshFleet({ force: true }));
+    assert.deepEqual(await listStates(), ["question", "approval", "error", "error", "done"]);
+    assert.equal(await summaryCount("error").textContent(), "エラー 2");
+    assert.equal(await summaryCount("running").count(), 0);
+    state.mini[0].run = { state: "running", updatedAt: 175 };
+    await page.evaluate(() => refreshFleet({ force: true }));
+    assert.deepEqual(await listStates(), ["question", "approval", "error", "done", "running"]);
     await page.locator("#closeSessionActivity").click();
+    // Every status total stays inside the viewport even when conversations
+    // overflow horizontally. This is the original missed-attention scenario.
+    for (const width of [320, 390, 520, 1024]) {
+      await page.setViewportSize({ width, height: 844 });
+      await page.locator("#sessionActivityItems").evaluate((element) => { element.scrollLeft = element.scrollWidth; });
+      assert.ok(await page.locator(".session-activity-total").evaluateAll((totals) => totals.every((total) => {
+        const rect = total.getBoundingClientRect();
+        const content = document.querySelector(".content-grid").getBoundingClientRect();
+        return rect.left >= 0 && rect.right <= innerWidth && rect.bottom <= content.top;
+      })), `all state totals visible at ${width}px`);
+      assert.ok(await page.locator("#sessionActivityCount").evaluate((button) => button.getBoundingClientRect().height >= 44));
+    }
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.evaluate(() => setSidebarVisible(false));
     if (process.argv.includes("--shots")) {
       fs.mkdirSync(path.join(root, "output/playwright"), { recursive: true });
       await page.locator("#sessionActivityItems").evaluate((element) => { element.scrollLeft = 0; });
       await page.screenshot({ path: path.join(root, "output/playwright/session-status-strip-mobile.png") });
+      await page.locator("#sessionActivityStrip").screenshot({ path: path.join(root, "output/playwright/session-status-summary.png") });
     }
     await page.emulateMedia({ reducedMotion: "reduce" });
     assert.equal(await page.locator('.session-activity-chip[data-state="running"] rect').evaluate((rect) => getComputedStyle(rect).animationName), "none");
     await page.emulateMedia({ reducedMotion: "no-preference" });
     await byKey("mini", "codex", "finished").click();
     await page.waitForFunction(() => selectedThread === "finished" && connectionReady && !document.querySelector('.session-activity-chip[data-state="done"]'));
-    assert.equal(await page.locator("#sessionActivityCount").textContent(), "処理中 1");
+    assert.equal(await summaryCount("running").textContent(), "処理中 1");
+    assert.equal(await summaryCount("done").count(), 0);
     await page.waitForFunction(() => !threadSwitchBusy);
     state.mini[1].run = { state: "running", updatedAt: 200 };
     await page.evaluate((run) => window.__socket.emit({ type: "runState", threadId: "finished", ...run }), state.mini[1].run);
-    assert.equal(await page.locator("#sessionActivityCount").textContent(), "処理中 2");
+    assert.equal(await summaryCount("running").textContent(), "処理中 2");
     // Exercise classifier output, not only hand-written UI states. An old
     // erroneous question must clear from both the strip and the composer.
     state.mini[1].run = { ...idleRunStateFromHistory([{ type: "assistant", text: "続行しますか？", outputGroup: "reply-turn" }]), updatedAt: 250 };
     await page.evaluate((run) => window.__socket.emit({ type: "runState", threadId: "finished", ...run }), state.mini[1].run);
     assert.equal(await byKey("mini", "codex", "finished").getAttribute("data-state"), "question");
+    assert.equal(await summaryCount("question").textContent(), "返信待ち 2");
     assert.equal(await page.locator("#runStateLabel").textContent(), "返信待ち");
     state.mini[1].run = { ...idleRunStateFromHistory([{ type: "assistant", text: "実装が完了しました。質問・許可待ちは?、エラーは!で表示します。", outputGroup: "reply-turn" }]), updatedAt: 300 };
     await page.evaluate((run) => window.__socket.emit({ type: "runState", threadId: "finished", ...run }), state.mini[1].run);
     assert.equal(await byKey("mini", "codex", "finished").getAttribute("data-state"), "done");
+    assert.equal(await summaryCount("done").textContent(), "未確認完了 1");
+    assert.equal(await summaryCount("question").textContent(), "返信待ち 1");
     assert.equal(await page.locator("#runStateLabel").textContent(), "前回完了・送信できます");
     await page.evaluate((run) => window.__socket.emit({ type: "ready", provider: "codex", threadId: "finished", workdir: "/fixture/mini/project", history: [], run }), state.mini[1].run);
     assert.equal(await byKey("mini", "codex", "finished").getAttribute("data-state"), "done", "background reconnect must not acknowledge completion");
@@ -162,7 +195,9 @@ async function main() {
     state.airOffline = true;
     await page.evaluate(() => refreshFleet({ force: true }));
     assert.equal(await byKey("air", "codex", "shared").getAttribute("data-state"), "offline");
-    assert.equal(await page.locator("#sessionActivityCount").textContent(), "処理中 1");
+    assert.equal(await summaryCount("running").textContent(), "処理中 1");
+    assert.equal(await summaryCount("offline").textContent(), "接続確認 2");
+    assert.equal(await summaryCount("error").count(), 0);
     await page.evaluate(() => applyTheme("cyberpunk"));
     assert.ok(await page.locator(".content-grid").evaluate((element) => element.getBoundingClientRect().height > 250));
     for (const width of [320, 520, 1024]) {
@@ -172,14 +207,14 @@ async function main() {
         const content = document.querySelector(".content-grid").getBoundingClientRect();
         return { rowHeight: strip.height, fits: strip.left >= 0 && strip.right <= innerWidth, aligned: strip.bottom === content.top };
       });
-      assert.ok(layout.rowHeight === 48 && layout.fits && layout.aligned, `layout at ${width}px`);
+      assert.ok(layout.rowHeight >= 92 && layout.rowHeight <= 140 && layout.fits && layout.aligned, `layout at ${width}px`);
     }
     state.airOffline = false;
     for (const machine of ["mini", "air"]) for (const item of state[machine]) item.run = { state: "ready", updatedAt: 500 };
     await page.evaluate(() => refreshFleet({ force: true }));
     assert.equal(await page.locator("#sessionActivityStrip").isVisible(), false);
     assert.deepEqual(errors, []);
-    console.log("Session strip verified: identity, 48px layout, orbit, reduced motion, stable scroll, full titles, question classification/correction, completion acknowledgement, provider/Mac navigation, offline safety and empty state.");
+    console.log("Session strip verified: visible mixed-state counts at 320–1024px, attention-first list updates, identity, orbit, reduced motion, stable scroll, full titles, question classification/correction, completion acknowledgement, provider/Mac navigation, offline safety and empty state.");
   } finally {
     await browser?.close();
     await new Promise((resolve) => server.close(resolve));

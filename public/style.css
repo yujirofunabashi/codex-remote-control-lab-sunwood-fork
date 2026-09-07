@@ -2235,9 +2235,8 @@ p {
 .session-activity-strip {
   grid-row: 4;
   display: flex;
-  align-items: center;
+  flex-direction: column;
   min-width: 0;
-  height: 48px;
   padding: 0 8px;
   border-bottom: 1px solid var(--line);
   background: var(--bg);
@@ -2246,13 +2245,31 @@ p {
 .session-activity-strip[hidden] { display: none; }
 
 .session-activity-count {
-  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  align-content: center;
+  gap: 4px 6px;
   min-height: 44px;
-  padding: 0 8px 0 2px;
+  flex-shrink: 0;
+  width: 100%;
+  padding: 6px 2px;
   border: 0;
   background: transparent;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 11.5px;
+  text-align: left;
+}
+
+.session-activity-total {
+  --session-color: var(--state-running);
+  padding: 4px 6px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--session-color) 9%, var(--card));
+  color: var(--session-color);
+  font-weight: 650;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
@@ -2261,6 +2278,7 @@ p {
   align-items: center;
   gap: 6px;
   min-width: 0;
+  flex-shrink: 0;
   height: 48px;
   overflow-x: auto;
   overscroll-behavior-x: contain;
@@ -2340,12 +2358,14 @@ p {
 }
 
 .session-activity-symbol:empty { display: none; }
-.session-activity-chip[data-state="done"], .session-activity-row[data-state="done"] { --session-color: var(--state-ready); }
+.session-activity-chip[data-state="done"], .session-activity-row[data-state="done"], .session-activity-total[data-state="done"] { --session-color: var(--state-ready); }
 .session-activity-chip[data-state="question"], .session-activity-chip[data-state="approval"],
-.session-activity-row[data-state="question"], .session-activity-row[data-state="approval"] { --session-color: var(--state-approval); }
-.session-activity-chip[data-state="error"], .session-activity-row[data-state="error"] { --session-color: var(--error); }
+.session-activity-row[data-state="question"], .session-activity-row[data-state="approval"],
+.session-activity-total[data-state="question"], .session-activity-total[data-state="approval"] { --session-color: var(--state-approval); }
+.session-activity-chip[data-state="error"], .session-activity-row[data-state="error"], .session-activity-total[data-state="error"] { --session-color: var(--error); }
 .session-activity-chip[data-state="offline"], .session-activity-chip[data-state="interrupted"],
-.session-activity-row[data-state="offline"], .session-activity-row[data-state="interrupted"] { --session-color: var(--muted); }
+.session-activity-row[data-state="offline"], .session-activity-row[data-state="interrupted"],
+.session-activity-total[data-state="offline"], .session-activity-total[data-state="interrupted"] { --session-color: var(--muted); }
 .session-activity-chip[aria-current="true"] > .session-activity-capsule,
 .session-activity-row[aria-current="true"] > .session-activity-capsule { outline: 1px solid var(--text); outline-offset: 2px; }
 .session-activity-chip:focus-visible, .session-activity-count:focus-visible, .session-activity-row:focus-visible { outline: 2px solid var(--text); outline-offset: -2px; border-radius: 6px; }
