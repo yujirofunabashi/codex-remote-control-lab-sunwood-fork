@@ -117,6 +117,10 @@ const contextAgentCwd = document.querySelector("#contextAgentCwd");
 const contextBridgeCwd = document.querySelector("#contextBridgeCwd");
 const contextFreshness = document.querySelector("#contextFreshness");
 const sidebarProjectName = document.querySelector("#sidebarProjectName");
+const threadSidebar = document.querySelector("#threadSidebar");
+const sidebarConnectionsToggle = document.querySelector("#sidebarConnectionsToggle");
+const sidebarProjectBridge = document.querySelector("#sidebarProjectBridge");
+const bridgeBuildNotice = document.querySelector("#bridgeBuildNotice");
 const sendButton = document.querySelector("#send");
 const sendLabel = document.querySelector("#sendLabel");
 const interruptButton = document.querySelector("#interruptRun");
@@ -139,10 +143,12 @@ const quickActions = document.querySelector("#quickActions");
 const toastStack = document.querySelector("#toastStack");
 const bridgePill = document.querySelector("#bridgePill");
 const bridgePillLabel = document.querySelector("#bridgePillLabel");
-const bridgePillMeta = document.querySelector("#bridgePillMeta");
+const bridgePillAgent = document.querySelector("#bridgePillAgent");
+const bridgePillMetaText = document.querySelector("#bridgePillMetaText");
 const fleetDashboardButton = document.querySelector("#fleetDashboardButton");
 const fleetCurrentLabel = document.querySelector("#fleetCurrentLabel");
 const fleetCurrentMeta = document.querySelector("#fleetCurrentMeta");
+const fleetCurrentBuild = document.querySelector("#fleetCurrentBuild");
 const fleetCurrentBadges = document.querySelector("#fleetCurrentBadges");
 const bridgeFleetList = document.querySelector("#bridgeFleetList");
 const bridgeFleetSheet = document.querySelector("#bridgeFleetSheet");
@@ -965,6 +971,7 @@ function getBridgeState(bridgeId = activeBridgeId) {
       info: null,
       status: null,
       threadCache: [],
+      hiddenProjects: [],
       selectedThread: "",
       pendingApproval: null,
       artifactItems: [],
@@ -1091,6 +1098,7 @@ const bridgeViewStateStorageKey = "codexPhoneBridgeViewState:v1";
 const threadInboxFilterStorageKey = "codexPhoneThreadInboxFilter:v1";
 const threadSortModeStorageKey = "codexPhoneThreadSortMode:v1";
 const expandedProjectsStorageKey = "codexPhoneExpandedProjects:v1";
+const collapsedProjectsStorageKey = "codexPhoneCollapsedProjects:v1";
 const threadWorkdirStorageKey = "codexPhoneThreadWorkdirs:v1";
 // How many chats keep a remembered folder. Only the chats that have not been
 // sent to yet need one, and they stop needing it the moment they have a
@@ -1157,6 +1165,10 @@ let threadSortMode = localStorage.getItem(threadSortModeStorageKey) === "recent"
 // device rather than following the bridge like the hidden list does.
 // readJsonStorage is objectOnly, which would reject this array outright.
 let expandedProjects = new Set(readStringListStorage(expandedProjectsStorageKey));
+// Which projects are folded away to their heading. Kept apart from
+// expandedProjects on purpose: that one is about the 6-row cap inside a
+// project, this one is about whether the project is showing at all.
+let collapsedProjects = new Set(readStringListStorage(collapsedProjectsStorageKey));
 let quickActionState = uiUtils.safeJsonParse
   ? uiUtils.safeJsonParse(localStorage.getItem(quickActionsStorageKey), {}, { objectOnly: true })
   : {};
@@ -1705,6 +1717,7 @@ function currentThreadIndexInfo() {
 }
 
 function updateHeaderStatus() {
+  renderBridgePillAgent();
   if (!threadPositionPill || !threadPositionText || !threadStateText) return;
   const info = currentThreadIndexInfo();
   threadPositionText.textContent = info.label;
@@ -1905,7 +1918,6 @@ const fallbackReasoningChoices = {
 // that was chosen is not on its list.
 const reasoningDepthOrder = ["low", "medium", "high", "xhigh", "max", "ultra"];
 const reasoningChoicesByBridge = new Map();
-
 const serviceTierAliases = new Map([
   ["", ""],
   ["STANDARD", ""],
@@ -2079,6 +2091,17 @@ function providerLabel(provider) {
   return provider === "claude" ? "Claude" : "Codex";
 }
 
+// Which agent this chat is talking to, on the chip that is always on screen.
+// The thread list and the chat tab both name it, and neither is in view while a
+// reply is being read - so the header said which Mac and which folder the work
+// was in, and never who was doing it, on two Macs that each run both.
+function renderBridgePillAgent() {
+  if (!bridgePillAgent) return;
+  const label = providerLabel(currentThreadProvider());
+  bridgePillAgent.textContent = label;
+  if (bridgePill) bridgePill.setAttribute("aria-label", `接続先を切り替え（${label}）`);
+}
+
 // A bridge used to serve exactly one provider, so its own answer had to win: a
 // stored choice it could not serve kept asking for the impossible and the
 // connection never settled. A bridge now serves both, chosen per chat, and its
@@ -2127,6 +2150,7 @@ function setActiveProvider(provider) {
   // The chat tab used to be a hardcoded "Codex". With several bridges open at
   // once, every tab read the same regardless of which agent was behind it.
   if (chatViewLabel) chatViewLabel.textContent = providerLabel(currentThreadProvider());
+  renderBridgePillAgent();
   // Codex and Claude do not share model names, so the composer follows the
   // provider back to whichever model was last chosen for it.
   applySelectedModel();
@@ -2176,7 +2200,8 @@ function updateModelButton() {
   const effectiveReasoning = effortForSubmission();
   if (showReasoning) {
     renderReasoningChoices();
-  }  const showServiceTier = providerSupportsServiceTier();
+  }
+  const showServiceTier = providerSupportsServiceTier();
   const serviceTierSuffix = showServiceTier && selectedServiceTier === "fast" ? " ⚡" : "";
   modelButton.textContent = showReasoning
     ? `${selectedModelLabel}・${reasoningDisplayLabel(effectiveReasoning)}${serviceTierSuffix}`
@@ -4441,6 +4466,44 @@ function setProjectExpanded(project, expanded) {
   renderThreadList();
 }
 
+// A Mac with work in six folders spent the whole list on headings for the five
+// the owner is not in. Folding one leaves its heading and nothing else, so the
+// projects being worked on today sit next to each other instead of pages apart.
+function setProjectCollapsed(project, collapsed) {
+  if (collapsed) collapsedProjects.add(project);
+  else collapsedProjects.delete(project);
+  localStorage.setItem(collapsedProjectsStorageKey, JSON.stringify(Array.from(collapsedProjects)));
+  renderThreadList();
+}
+
+// Folded, the heading is all that is left of the project, so it has to answer
+// what the rows underneath would have: how many there are, and whether any of
+// them is waiting on someone.
+function projectFoldedSummary(threads) {
+  const summary = document.createElement("span");
+  summary.className = "project-folded-summary";
+  const states = threads.map((thread) => deriveThreadStatus(thread).group);
+  const attention = states.filter((group) => group === "attention").length;
+  const running = states.filter((group) => group === "running").length;
+  const badge = (text, tone) => {
+    const element = document.createElement("span");
+    element.className = `thread-status-badge thread-status-badge-${tone}`;
+    element.textContent = text;
+    return element;
+  };
+  if (attention) summary.appendChild(badge(`要対応 ${attention}`, "approval"));
+  if (running) summary.appendChild(badge(`実行中 ${running}`, "running"));
+  // Under the 要対応 or 実行中 filter every row in the group is one of those, so
+  // the plain total would repeat the badge beside it word for word.
+  if (attention + running < threads.length) {
+    const count = document.createElement("span");
+    count.className = "project-folded-count";
+    count.textContent = `${threads.length}件`;
+    summary.appendChild(count);
+  }
+  return summary;
+}
+
 // "もっと表示する" was a bare <div> with no handler from the day it was added, so
 // the rows past the cap were unreachable and the label was decoration. Both
 // directions now, because expanding with no way back is its own trap.
@@ -4499,6 +4562,7 @@ async function setProjectHidden(workdir, hidden, project = "", bridgeId = active
     const result = await apiPost("/api/workspaces/hidden", { path: workdir, hidden }, { bridgeId });
     if (bridgeId === activeBridgeId) hiddenProjects = Array.isArray(result.hiddenProjects) ? result.hiddenProjects : hiddenProjects;
     const state = getBridgeState(bridgeId);
+    state.hiddenProjects = Array.isArray(result.hiddenProjects) ? result.hiddenProjects : state.hiddenProjects;
     state.threadsLoadedAt = 0;
     renderThreadList();
     // Hiding drops the project's threads from what the bridge sends, so putting
@@ -4621,11 +4685,12 @@ function renderThreadList() {
   for (const [groupKey, groupRecord] of groups) {
     const threads = groupRecord.threads;
     const project = groupRecord.label;
+    const folded = collapsedProjects.has(groupKey);
     const group = document.createElement("section");
-    group.className = "project-group";
+    group.className = folded ? "project-group collapsed" : "project-group";
 
     const heading = document.createElement("div");
-    heading.className = "project-heading";
+    heading.className = "project-heading has-collapse";
     const folder = document.createElement("span");
     folder.className = "project-folder";
     const name = document.createElement("span");
@@ -4644,7 +4709,25 @@ function renderThreadList() {
       applyMachineAccent(machine, groupRecord.machineLabel, groupRecord.machineKey);
       titleRow.appendChild(machine);
     }
-    heading.append(folder, titleRow);
+    // The heading's own row actions stay their own buttons beside it, so the
+    // fold cannot swallow them and no button ends up nested inside another.
+    const foldButton = document.createElement("button");
+    foldButton.type = "button";
+    foldButton.className = "project-collapse";
+    foldButton.setAttribute("aria-expanded", String(!folded));
+    foldButton.title = folded ? `${project} を開く` : `${project} を畳む`;
+    foldButton.setAttribute("aria-label", foldButton.title);
+    foldButton.append(folder, titleRow);
+    if (folded) foldButton.appendChild(projectFoldedSummary(threads));
+    const chevron = document.createElement("span");
+    chevron.className = "project-chevron";
+    chevron.setAttribute("aria-hidden", "true");
+    foldButton.appendChild(chevron);
+    foldButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      setProjectCollapsed(groupKey, !folded);
+    });
+    heading.append(foldButton);
     const projectWorkdir = projectWorkdirForThreads(threads);
     if (projectWorkdir) {
       const createButton = document.createElement("button");
@@ -4680,12 +4763,18 @@ function renderThreadList() {
     }
     group.appendChild(heading);
 
-    const visibleThreads = limitedVisibleThreads(threads, projectVisibleLimit(groupKey, threads.length));
+    // The open chat is the one row folding must never take away: losing sight of
+    // where you are is not tidying up.
+    const visibleThreads = folded
+      ? threads.filter((thread) => thread.id === selectedThread && isActiveBridgeThread(thread))
+      : limitedVisibleThreads(threads, projectVisibleLimit(groupKey, threads.length));
     for (const thread of visibleThreads) {
       group.appendChild(createThreadListItem(thread, { groupWorkdir: projectWorkdir }));
     }
 
-    if (threads.length > collapsedProjectRows) {
+    if (folded) {
+      // The heading already says how many rows are folded away.
+    } else if (threads.length > collapsedProjectRows) {
       appendThreadListToggle(group, groupKey, visibleThreads.length, threads.length);
     } else if (!visibleThreads.length) {
       const empty = document.createElement("div");
@@ -5159,6 +5248,88 @@ function approvalSummaryText(request = {}) {
   return command ? `${method}: ${String(command).slice(0, 120)}` : method;
 }
 
+// Which Macs are registered, adding one, automations and plugins are all
+// occasional work, while the chat list under them is why the drawer gets
+// opened at all - and on a phone that block took roughly 40% of the drawer
+// before a single chat row appeared. So the project header doubles as its
+// disclosure: shut by default where the room is tight, open where it is not,
+// and remembered from the first time it is touched.
+const sidebarConnectionsStorageKey = "codexPhoneSidebarConnections:v1";
+
+function storedSidebarConnectionsOpen() {
+  try {
+    const stored = localStorage.getItem(sidebarConnectionsStorageKey);
+    if (stored === "open") return true;
+    if (stored === "collapsed") return false;
+  } catch {
+    // No stored preference to read; the width-based default stands.
+  }
+  return null;
+}
+
+let sidebarConnectionsOpen = storedSidebarConnectionsOpen() ?? !isMobileViewport();
+
+function renderSidebarProjectBridge() {
+  if (!sidebarProjectBridge) return;
+  if (sidebarConnectionsOpen) {
+    // The card directly below the header already says all of this.
+    sidebarProjectBridge.replaceChildren();
+    sidebarProjectBridge.hidden = true;
+    sidebarProjectBridge.removeAttribute("title");
+    return;
+  }
+  // Which Mac, not which connection: the project name beside it already carries
+  // the workspace, and a bridge named after its repo would only say that twice.
+  const active = activeBridge();
+  const label = shortMachineName(active, getBridgeState(activeBridgeId)) || bridgeDisplayLabel(active, "接続先");
+  const name = document.createElement("span");
+  name.className = "sidebar-project-bridge-name";
+  name.textContent = label;
+  const parts = [name];
+  // Shutting the block must not shut off the fleet's "someone is waiting on
+  // you" signal, so the same counts ride along with the machine name.
+  const entries = bridgeRegistry.bridges || [];
+  const approvals = collectPendingApprovals().length;
+  const running = entries.filter((entry) => ["running", "streaming", "syncing", "interrupting"].includes(bridgeStateLabel(entry))).length;
+  if (running) parts.push(fleetBadge(String(running), "running"));
+  if (approvals) parts.push(fleetBadge(String(approvals), "approval"));
+  sidebarProjectBridge.replaceChildren(...parts);
+  sidebarProjectBridge.hidden = false;
+  sidebarProjectBridge.title = `接続先 ${label}`;
+}
+
+function applySidebarConnections() {
+  threadSidebar?.classList.toggle("connections-collapsed", !sidebarConnectionsOpen);
+  sidebarConnectionsToggle?.setAttribute("aria-expanded", sidebarConnectionsOpen ? "true" : "false");
+  sidebarConnectionsToggle?.setAttribute("title", sidebarConnectionsOpen ? "接続先とツールを隠す" : "接続先とツールを表示");
+  renderSidebarProjectBridge();
+}
+
+function setSidebarConnectionsOpen(open) {
+  sidebarConnectionsOpen = Boolean(open);
+  try {
+    localStorage.setItem(sidebarConnectionsStorageKey, sidebarConnectionsOpen ? "open" : "collapsed");
+  } catch {
+    // Remembering the choice is best effort; the drawer still obeys it now.
+  }
+  applySidebarConnections();
+}
+
+function buildLabelForState(state) {
+  return uiUtils.bridgeBuildLabel?.(state?.connected ? state.info?.build : null) || "アプリの版を確認できません";
+}
+
+function renderBuildNotice(entries) {
+  if (!bridgeBuildNotice) return;
+  const peers = entries.map((entry) => {
+    const state = getBridgeState(entry.id);
+    return { label: shortMachineName(entry, state) || bridgeDisplayLabel(entry), connected: state.connected, build: state.info?.build };
+  });
+  const message = uiUtils.bridgeBuildNotice ? uiUtils.bridgeBuildNotice(peers) : "アプリの版を確認できません。画面を開き直してください。";
+  bridgeBuildNotice.textContent = message;
+  bridgeBuildNotice.hidden = !message;
+}
+
 function renderFleet() {
   const entries = bridgeRegistry.bridges || [];
   const active = activeBridge();
@@ -5170,9 +5341,11 @@ function renderFleet() {
     bridgePill.style.setProperty("--bridge-color", activeColor);
   }
   if (bridgePillLabel) bridgePillLabel.textContent = bridgeWorkspaceLabel(active, activeState, "接続先");
-  if (bridgePillMeta) bridgePillMeta.textContent = bridgeHeaderMetaText(active || { id: activeBridgeId }, activeState);
+  if (bridgePillMetaText) bridgePillMetaText.textContent = bridgeHeaderMetaText(active || { id: activeBridgeId }, activeState);
+  renderBridgePillAgent();
   if (fleetCurrentLabel) fleetCurrentLabel.textContent = bridgeDisplayLabel(active, "現在の接続先");
-  if (fleetCurrentMeta) fleetCurrentMeta.textContent = bridgeConnectionMetaText(active || { id: activeBridgeId }, activeState);
+  if (fleetCurrentMeta) fleetCurrentMeta.textContent = `作業場所: ${bridgeConnectionMetaText(active || { id: activeBridgeId }, activeState)}`;
+  if (fleetCurrentBuild) fleetCurrentBuild.textContent = buildLabelForState(activeState);
   if (fleetCurrentBadges) {
     fleetCurrentBadges.replaceChildren();
     const approvals = collectPendingApprovals().length;
@@ -5207,8 +5380,11 @@ function renderFleet() {
       const title = document.createElement("strong");
       title.textContent = bridgeWorkspaceLabel(entry, state, entry.id);
       const small = document.createElement("small");
-      small.textContent = bridgeMetaText(entry, state);
-      main.append(title, small);
+      small.textContent = `作業場所: ${bridgeMetaText(entry, state)}`;
+      const build = document.createElement("small");
+      build.className = "bridge-build-label";
+      build.textContent = buildLabelForState(state);
+      main.append(title, small, build);
       const badges = document.createElement("span");
       badges.className = "bridge-row-badges";
       const stateName = bridgeStateLabel(entry, state);
@@ -5221,6 +5397,8 @@ function renderFleet() {
     }
   }
 
+  renderSidebarProjectBridge();
+  renderBuildNotice(entries);
   renderBridgeFleetSheet();
   renderGlobalApprovalBanner();
 }
@@ -5256,7 +5434,10 @@ function renderBridgeFleetSheet() {
       // the one that decides whose copy of the UI you are looking at - a change
       // made on any other machine cannot show up here until you open that one.
       const servesThisPage = entry.id === homeBridgeId ? " / この画面の配信元" : "";
-      metaLine.textContent = `${bridgeMetaText(entry, state)} / ${entry.kind || "lan"}${entry.note ? ` / ${entry.note}` : ""}${servesThisPage}`;
+      metaLine.textContent = `作業場所: ${bridgeMetaText(entry, state)} / ${entry.kind || "lan"}${entry.note ? ` / ${entry.note}` : ""}${servesThisPage}`;
+      const buildLine = document.createElement("small");
+      buildLine.className = "bridge-build-label";
+      buildLine.textContent = buildLabelForState(state);
       const actions = document.createElement("div");
       actions.className = "bridge-card-actions";
       const switchButton = document.createElement("button");
@@ -5296,7 +5477,7 @@ function renderBridgeFleetSheet() {
         : `${bridgeDisplayLabel(entry, entry.id)} をこの端末から削除`;
       removeButton.addEventListener("click", () => removeBridge(entry.id));
       actions.append(switchButton, reconnectButton, openButton, copyButton, removeButton);
-      card.append(header, metaLine, actions);
+      card.append(header, metaLine, buildLine, actions);
       bridgeFleetSheetList.appendChild(card);
     }
   }
@@ -5423,6 +5604,12 @@ async function fetchJsonForBridge(entry, path, options = {}) {
 // serves on every poll; when that is not the one running, the page reloads
 // itself, once per served build and never while a turn or a draft is in flight.
 const shellReloadStorageKey = "codexPhoneShellReloadFor:v1";
+let shellReloadTimer = null;
+
+function shellReloadBusy() {
+  return liveTurnActive || threadSwitchBusy || pendingFiles.length > 0 || addButton?.disabled
+    || !promptModal?.classList.contains("hidden") || Boolean((promptInput?.value || "").trim()) || document.visibilityState === "hidden";
+}
 
 function ownShellHref() {
   return document.querySelector('script[src*="main.js"]')?.getAttribute("src") || "";
@@ -5433,18 +5620,23 @@ function ownShellVersion() {
 }
 
 function checkShellFreshness(info, entry) {
-  if (!entry || entry.id !== homeBridgeId || !info?.shell?.main || !uiUtils.shellUpdateDecision) return;
-  const busy = liveTurnActive || threadSwitchBusy || Boolean((promptInput?.value || "").trim()) || document.visibilityState === "hidden";
+  if (!entry || entry.id !== homeBridgeId || !info?.shell?.main || !uiUtils.shellUpdateDecision || shellReloadTimer !== null) return;
   const decision = uiUtils.shellUpdateDecision({
     servedMain: info.shell.main,
     ownMain: ownShellHref(),
-    busy,
+    busy: shellReloadBusy(),
     lastReloadFor: safeReadStorage(sessionStorage, shellReloadStorageKey, ""),
   });
   if (decision !== "reload") return;
-  safeWriteStorage(sessionStorage, shellReloadStorageKey, uiUtils.shellVersionOf(info.shell.main));
   showToast("画面を新しい版に更新します。");
-  window.setTimeout(() => location.reload(), 1200);
+  shellReloadTimer = window.setTimeout(() => {
+    shellReloadTimer = null;
+    // A draft or upload may have started during the notice. Do not mark the
+    // build reloaded until it actually is; the next idle poll can try again.
+    if (shellReloadBusy()) return;
+    safeWriteStorage(sessionStorage, shellReloadStorageKey, uiUtils.shellVersionOf(info.shell.main));
+    location.reload();
+  }, 1200);
 }
 
 async function refreshBridgeState(bridgeId, { force = false } = {}) {
@@ -5523,6 +5715,7 @@ function captureActiveBridgeState() {
   const state = getBridgeState(activeBridgeId);
   state.threadCache = threadCache;
   state.selectedThread = selectedThread;
+  state.hiddenProjects = hiddenProjects;
   state.pendingApproval = pendingApproval;
   state.artifactItems = artifactItems;
   state.currentWorkspace = { ...currentWorkspace };
@@ -5538,6 +5731,7 @@ function applyActiveBridgeState(bridgeId) {
   const state = getBridgeState(bridgeId);
   const view = bridgeViewState[bridgeId] || {};
   threadCache = Array.isArray(state.threadCache) ? state.threadCache : [];
+  hiddenProjects = Array.isArray(state.hiddenProjects) ? state.hiddenProjects : [];
   selectedThread = state.selectedThread || view.selectedThread || "";
   const launchProvider = bridgeId === launchProviderBridgeId ? initialProviderParam : "";
   activeProvider = normalizeProviderName(launchProvider || state.activeProvider || view.provider || state.info?.provider || "codex") || "codex";
@@ -6300,6 +6494,7 @@ async function loadThreads({ background = false, provider = "" } = {}) {
     threadCache = nextThreads;
     hiddenProjects = Array.isArray(result.hiddenProjects) ? result.hiddenProjects : [];
     const state = getBridgeState(activeBridgeId);
+    state.hiddenProjects = hiddenProjects;
     state.threadCache = threadCache;
     // The list is only this bridge's answer once it has actually arrived, which
     // is what the sidebar checks before trusting the rows it is about to draw.
@@ -6386,6 +6581,7 @@ async function loadFleetThreads({ force = false } = {}) {
         const resultProvider = normalizeProviderName(result.provider || result.activeProvider || provider) || "codex";
         state.threadCache = (result.data || []).map((thread) => normalizeThreadRecord(thread, resultProvider));
         state.threadCacheProvider = resultProvider;
+        state.hiddenProjects = Array.isArray(result.hiddenProjects) ? result.hiddenProjects : [];
         state.threadsLoadedAt = Date.now();
         state.threadsError = "";
         changed = true;
@@ -6418,8 +6614,12 @@ function fleetThreadRecords() {
     const threads = entry.id === activeBridgeId ? threadCache : Array.isArray(state.threadCache) ? state.threadCache : [];
     const machineLabel = shortMachineName(entry, state);
     const machineKey = bridgeMachineKey(entry, state);
+    const hidden = new Set(entry.id === activeBridgeId ? hiddenProjects : state.hiddenProjects || []);
     for (const thread of threads) {
       if (!thread?.id) continue;
+      // Locally remembered chats must not undo an explicit hide. Keep their
+      // history cached; the separate current-chat row remains reachable.
+      if (hidden.has(workspaceKeyForThread(thread))) continue;
       if ((normalizeProviderName(thread.provider) || provider) !== provider) continue;
       // Two bridges on one Mac read the same transcripts, so the same session
       // can arrive twice. It is one session either way.
@@ -8753,10 +8953,23 @@ declineButton.addEventListener("click", () => {
 prevThreadButton.addEventListener("click", () => selectAdjacentThread(-1));
 nextThreadButton.addEventListener("click", () => selectAdjacentThread(1));
 searchButton.addEventListener("click", () => {
-  threadSearch.classList.toggle("hidden");
+  const open = threadSearch.classList.toggle("hidden") === false;
+  searchButton.setAttribute("aria-expanded", open ? "true" : "false");
   threadSearch.focus();
   renderThreadList();
   setSidebarVisible(true);
+});
+sidebarConnectionsToggle?.addEventListener("click", () => {
+  setSidebarConnectionsOpen(!sidebarConnectionsOpen);
+});
+// Turning an iPad sideways changes which default applies, and until the header
+// has been tapped once there is no choice of the owner's to override.
+window.addEventListener("resize", () => {
+  if (storedSidebarConnectionsOpen() !== null) return;
+  const open = !isMobileViewport();
+  if (open === sidebarConnectionsOpen) return;
+  sidebarConnectionsOpen = open;
+  applySidebarConnections();
 });
 threadSearch.addEventListener("input", renderThreadList);
 for (const button of threadInboxTabButtons) {
@@ -9146,6 +9359,7 @@ try {
 } catch {
   // Session storage is optional.
 }
+applySidebarConnections();
 renderFleet();
 loadArtifacts();
 refreshBridgeState(activeBridgeId, { force: true })

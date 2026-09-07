@@ -1007,6 +1007,51 @@
   // shipped stays out of reach until the app is killed by hand. The bridge names
   // the main.js it serves; when that is not the one running, the page reloads
   // itself - once per served build, and never while a turn or a draft is live.
+  function knownBridgeBuild(build) {
+    return build?.schema === 1 && build.available === true
+      && /^[a-f0-9]{40,64}$/.test(build.head || "") && /^[a-f0-9]{64}$/.test(build.fingerprint || "")
+      && typeof build.dirty === "boolean" && typeof build.restartRequired === "boolean";
+  }
+
+  function bridgeBuildIssues(build) {
+    if (!knownBridgeBuild(build)) return ["アプリの版を確認できません"];
+    const issues = [];
+    if (build.dirty) issues.push("未共有の編集");
+    if (build.restartRequired) issues.push("再起動待ち");
+    const upstream = build.upstream;
+    if (!upstream || !Number.isInteger(upstream.ahead) || !Number.isInteger(upstream.behind)
+      || upstream.ahead < 0 || upstream.behind < 0) issues.push("共有先を確認できません");
+    else {
+      if (upstream.ahead > 0) issues.push("未送信の保存版");
+      if (upstream.behind > 0) issues.push("取り込み待ち");
+    }
+    return issues;
+  }
+
+  function bridgeBuildLabel(build) {
+    if (!knownBridgeBuild(build)) return "アプリの版を確認できません";
+    return `アプリ ${build.head.slice(0, 7)} · ${bridgeBuildIssues(build).join(" / ") || "最終確認した共有版と一致"}`;
+  }
+
+  function bridgeBuildNotice(peers = []) {
+    const messages = [];
+    const known = [];
+    for (const peer of peers) {
+      const label = String(peer.label || "接続先");
+      if (!peer.connected || !knownBridgeBuild(peer.build)) {
+        messages.push(`${label}: アプリの更新状況を確認できません`);
+        continue;
+      }
+      known.push(peer);
+      const issues = bridgeBuildIssues(peer.build);
+      if (issues.length) messages.push(`${label}: ${issues.join(" / ")}`);
+    }
+    if (new Set(known.map(peer => `${peer.build.head}:${peer.build.fingerprint}`)).size > 1) {
+      messages.unshift(`${known.map(peer => peer.label || "接続先").join("・")}でアプリの版が異なります`);
+    }
+    return messages.join("。 ");
+  }
+
   function shellVersionOf(href) {
     const match = /[?&]v=([^&#]+)/.exec(String(href || ""));
     return match ? decodeURIComponent(match[1]) : "";
@@ -1114,6 +1159,8 @@
     isMarkdownTableStart,
     parseMarkdownTable,
     shellUpdateDecision,
+    bridgeBuildLabel,
+    bridgeBuildNotice,
     shellVersionOf,
   };
 });

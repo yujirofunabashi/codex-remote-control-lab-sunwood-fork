@@ -12,7 +12,7 @@ const startPhone = path.join(root, "scripts", "start-phone.js");
 // these run a real bridge rather than stubbing the endpoint: the thing under
 // test is what happens to the process.
 function startBridge({ port, token, supervised }) {
-  const workdir = fs.mkdtempSync(path.join(os.homedir(), "restart-test-"));
+  const workdir = fs.mkdtempSync(path.join(os.tmpdir(), "restart-test-"));
   const child = spawn(process.execPath, [startPhone], {
     cwd: root,
     env: {
@@ -68,9 +68,21 @@ function exitCode(child) {
 test("an unsupervised bridge refuses to restart instead of dying", async () => {
   const port = 45981;
   const token = "restart-unsupervised";
-  const { child, ready } = startBridge({ port, token, supervised: false });
+  const { child, ready, workdir } = startBridge({ port, token, supervised: false });
   try {
     await ready;
+    const infoResponse = await fetch(`http://127.0.0.1:${port}/api/bridge/info`, { headers: { "x-phone-token": token } });
+    const info = await infoResponse.json();
+    assert.equal(infoResponse.status, 200);
+    assert.equal(info.workdir, workdir);
+    assert.equal(info.build.root, root, "application identity must not follow the selected chat folder");
+    assert.equal(info.build.available, true);
+    assert.equal(info.build.restartRequired, false);
+    assert.match(info.build.fingerprint, /^[a-f0-9]{64}$/);
+    const html = await (await fetch(`http://127.0.0.1:${port}/`)).text();
+    for (const file of ["main.js", "phone-ui-utils.js", "style.css"]) {
+      assert.ok(html.includes(`${file}?v=${info.build.clientFingerprint}`), `${file} must use the full browser content identity`);
+    }
     const { status, body } = await postRestart(port, token);
 
     assert.equal(status, 409);
@@ -84,13 +96,15 @@ test("an unsupervised bridge refuses to restart instead of dying", async () => {
     assert.equal(health.status, 200);
   } finally {
     child.kill("SIGTERM");
+    await exitCode(child);
+    fs.rmSync(workdir, { recursive: true, force: true });
   }
 });
 
 test("a supervised bridge restarts by exiting 42 for its supervisor", async () => {
   const port = 45982;
   const token = "restart-supervised";
-  const { child, ready } = startBridge({ port, token, supervised: true });
+  const { child, ready, workdir } = startBridge({ port, token, supervised: true });
   try {
     await ready;
     const { status, body } = await postRestart(port, token);
@@ -102,6 +116,8 @@ test("a supervised bridge restarts by exiting 42 for its supervisor", async () =
     assert.equal(await exitCode(child), 42);
   } finally {
     if (child.exitCode === null) child.kill("SIGTERM");
+    await exitCode(child);
+    fs.rmSync(workdir, { recursive: true, force: true });
   }
 });
 

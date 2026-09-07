@@ -15,7 +15,7 @@
 const fs = require("fs");
 const http = require("http");
 const path = require("path");
-const { chromium } = require("playwright");
+const { chromium, webkit } = require("playwright");
 
 const root = path.resolve(__dirname, "..");
 const publicDir = path.join(root, "public");
@@ -24,6 +24,7 @@ const wantShots = process.argv.includes("--shots");
 const shotsDir = path.join(root, ".uploads", "fleet-machines-smoke");
 const airOrigin = "http://127.0.0.1:45999";
 const airBridgeId = "air-bridge";
+const sharedBuild = { schema: 1, available: true, head: "a".repeat(40), fingerprint: "b".repeat(64), dirty: false, restartRequired: false, upstream: { name: "origin/develop", ahead: 0, behind: 0 } };
 
 // The mini and the Air keep the same folder names under different homes, which
 // is exactly the collision the machine label has to resolve.
@@ -80,13 +81,23 @@ function startServer() {
 }
 
 async function mockApi(page) {
+  const state = { airBuild: sharedBuild, airOffline: false };
   await page.route("**/*", async (route) => {
     const url = new URL(route.request().url());
     if (!url.pathname.startsWith("/api/")) return route.continue();
+    const headers = {
+      "access-control-allow-origin": new URL(page.url()).origin,
+      "access-control-allow-credentials": "true",
+      "access-control-allow-headers": "content-type, authorization, x-phone-token",
+      "access-control-allow-methods": "GET, POST, OPTIONS",
+    };
+    if (route.request().method() === "OPTIONS") return route.fulfill({ status: 204, headers });
+    const fulfill = (body) => route.fulfill({ ...body, headers });
     const air = url.origin === airOrigin;
     const cwd = air ? airRepo : miniRepo;
     if (url.pathname === "/api/bridge/info") {
-      return route.fulfill({
+      if (air && state.airOffline) return route.abort();
+      return fulfill({
         json: {
           id: air ? airBridgeId : "home",
           label: air ? "Air Claude" : "mini Claude",
@@ -97,20 +108,22 @@ async function mockApi(page) {
           cwd,
           workdir: cwd,
           branch: "develop",
+          build: air ? state.airBuild : sharedBuild,
           uiPort: air ? 45214 : 45234,
         },
       });
     }
     if (url.pathname === "/api/threads") {
-      return route.fulfill({
+      return fulfill({
         json: { provider: "claude", activeProvider: "claude", data: air ? airThreads : miniThreads, hiddenProjects: [] },
       });
     }
-    if (url.pathname === "/api/status") return route.fulfill({ json: { workdir: cwd, bridges: [] } });
-    if (url.pathname === "/api/thread") return route.fulfill({ json: { threadId: url.searchParams.get("thread") || "mini-1", history: [] } });
-    if (url.pathname === "/api/info") return route.fulfill({ json: { provider: "claude", model: air ? "opus" : "sonnet", workdir: cwd } });
-    return route.fulfill({ json: { data: [] } });
+    if (url.pathname === "/api/status") return fulfill({ json: { workdir: cwd, bridges: [] } });
+    if (url.pathname === "/api/thread") return fulfill({ json: { threadId: url.searchParams.get("thread") || "mini-1", history: [] } });
+    if (url.pathname === "/api/info") return fulfill({ json: { provider: "claude", model: air ? "opus" : "sonnet", workdir: cwd } });
+    return fulfill({ json: { data: [] } });
   });
+  return state;
 }
 
 async function seedBrowser(page) {
@@ -165,10 +178,15 @@ async function run() {
   const { server, origin } = await startServer();
   let browser;
   try {
-    browser = await chromium.launch();
-    const page = await browser.newPage({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2 });
+    browser = await (process.argv.includes("--webkit") ? webkit : chromium).launch();
+    // The network-pass-through worker otherwise takes requests outside route
+    // mocks after activation in WebKit; these bridges are deliberately fake.
+    const page = await browser.newPage({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, serviceWorkers: "block" });
+    const browserErrors = [];
+    page.on("console", msg => { if (msg.type() === "error") browserErrors.push(msg.text()); });
+    page.on("requestfailed", req => browserErrors.push(`${req.method()} ${req.url()}: ${req.failure()?.errorText}`));
     await seedBrowser(page);
-    await mockApi(page);
+    const apiState = await mockApi(page);
     await page.goto(`${origin}/?token=${token}`, { waitUntil: "domcontentloaded" });
     await page.waitForTimeout(2500);
     await page.locator("#mobileThreads").click();
@@ -190,6 +208,7 @@ async function run() {
         };
       }),
     );
+    check("matching shared builds do not crowd the mobile sidebar", await page.locator("#bridgeBuildNotice").isHidden());
 
     const titles = groups.flatMap((group) => group.rows);
     check("the Air's sessions are listed next to the mini's", titles.includes("Air の作業") && titles.includes("mini の作業"), titles.join(" / "));
@@ -250,6 +269,41 @@ async function run() {
       modelBefore.startsWith("haiku") && modelAfter.startsWith("haiku"),
       `${modelBefore} -> ${modelAfter}`,
     );
+
+    await page.locator("#mobileThreads").click();
+    if (await page.locator("#sidebarConnectionsToggle").getAttribute("aria-expanded") === "true") {
+      await page.locator("#sidebarConnectionsToggle").click();
+    }
+    const refreshAir = async () => {
+      await page.waitForFunction(() => !getBridgeState("air-bridge").refreshing);
+      await page.evaluate(() => refreshBridgeState("air-bridge", { force: true }));
+    };
+    const notice = page.locator("#bridgeBuildNotice");
+    apiState.airBuild = { ...sharedBuild, fingerprint: "c".repeat(64), dirty: true };
+    await refreshAir();
+    check("same-commit unshared UI changes stay visible with connections folded",
+      await notice.isVisible() && /版が異なります/.test(await notice.innerText())
+      && /Air.*未共有/.test(await notice.innerText()) && await page.locator("#sidebarConnections").isHidden(),
+      await page.evaluate(() => JSON.stringify({ text: document.querySelector("#bridgeBuildNotice").textContent, error: getBridgeState("air-bridge").lastError })));
+    apiState.airBuild = { ...sharedBuild, restartRequired: true };
+    await refreshAir();
+    check("updated files with an old running server warn about restart", /Air.*再起動待ち/.test(await notice.innerText()));
+    apiState.airBuild = null;
+    await refreshAir();
+    check("an old server without build metadata is unknown, not synchronized", /Air.*確認できません/.test(await notice.innerText()));
+    apiState.airBuild = sharedBuild;
+    await refreshAir();
+    apiState.airOffline = true;
+    await refreshAir();
+    check("a disconnected peer cannot keep a cached synchronized claim", await notice.isVisible() && /Air.*確認できません/.test(await notice.innerText()));
+    apiState.airOffline = false;
+    await refreshAir();
+    check("rechecking matching builds clears the warning", await notice.isHidden());
+    await page.locator("#sidebarConnectionsToggle").click();
+    check("app identity is separate from selected workspace metadata",
+      /アプリ aaaaaaa/.test(await page.locator("#fleetCurrentBuild").innerText())
+      && /作業場所:/.test(await page.locator("#fleetCurrentMeta").innerText()));
+    if (checks.some(result => !result.ok)) console.error(browserErrors.join("\n"));
 
     await page.close();
   } finally {

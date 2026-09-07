@@ -6,6 +6,7 @@ const os = require("os");
 const path = require("path");
 const { execFileSync, spawn } = require("child_process");
 const WebSocket = require("ws");
+const { createBuildTracker } = require("./bridge-build");
 const { bridgeKeyForRequest, bridgeMatchesWorkdir, shouldDisposeIdleBridge, shouldPromoteBridgeKey, shouldReplaceBridgeForWorkdir } = require("./bridge-state");
 const {
   RegistryConflictError,
@@ -34,6 +35,7 @@ const { slashCommandCatalog } = require("./slash-commands");
 const { findLiveBridge, readThreadSnapshot } = require("./thread-read");
 
 const root = path.resolve(__dirname, "..");
+let bridgeBuildTracker;
 
 function normalizeProvider(input) {
   const value = String(input || "codex").trim().toLowerCase();
@@ -768,6 +770,8 @@ function bridgeInfoPayload() {
     head: gitOutput(["rev-parse", "--short", "HEAD"]) || null,
     dirty,
     dirtySummary: summary,
+    // Application code, not the repository selected for this conversation.
+    build: bridgeBuildTracker?.status() || { schema: 1, available: false, restartRequired: null },
     provider: agentProvider,
     providers: ["codex", "claude"],
     model,
@@ -1948,6 +1952,18 @@ function compactCodexError(raw) {
   const additional = String(error.additionalDetails || root.additionalDetails || "");
   const requestId = (additional.match(/request ID\s+([a-f0-9-]+)/i) || text.match(/request ID\s+([a-f0-9-]+)/i))?.[1] || "";
   const willRetry = root.willRetry === true || /reconnecting/i.test(message);
+  // Codex refreshes its own sign-in, answering a stale token with a burst of
+  // 401s it then recovers from, so a turn only fails on one once that recovery
+  // did not come. What arrives is a JSON envelope about bearer tokens and
+  // request ids; the reader holding the phone can act on one thing, which is
+  // signing in again on the Mac.
+  const authExpired = /token_expired|authentication token is expired|401 Unauthorized/i.test(text);
+  if (authExpired) {
+    return {
+      text: "Codexの認証が切れました。しばらく待っても直らないときは、Macで `codex login` を実行してください。",
+      retrying: false,
+    };
+  }
   const streamDisconnected =
     code === "responseStreamDisconnected" || /responseStreamDisconnected|stream disconnected before completion/i.test(text);
   if (!streamDisconnected) return { text, retrying: false };
@@ -2241,7 +2257,11 @@ function manifestHrefForRequest(req, phoneToken) {
 
 function staticAssetHref(fileName) {
   const assetPath = path.join(root, "public", fileName);
-  const version = fs.existsSync(assetPath) ? `${Math.round(fs.statSync(assetPath).mtimeMs).toString(36)}-${phoneAppId}` : phoneAppId;
+  // Any UI file changing (including CSS, HTML or helpers) changes main.js's
+  // URL too, so an already-open phone can detect more than a main.js edit.
+  const clientBuild = bridgeBuildTracker?.status().clientFingerprint;
+  const version = clientBuild ? `${clientBuild}-${phoneAppId}`
+    : fs.existsSync(assetPath) ? `${Math.round(fs.statSync(assetPath).mtimeMs).toString(36)}-${phoneAppId}` : phoneAppId;
   return `${fileName}?v=${encodeURIComponent(version)}`;
 }
 
@@ -2357,6 +2377,7 @@ function serveIndex(req, res, { includeManifest = true, standalone = true, phone
     )
     .replace(/<link rel="stylesheet" href="style\.css" \/>/, `<link rel="stylesheet" href="${escapeHtmlAttribute(staticAssetHref("style.css"))}" />`)
     .replace(/<script src="main\.js"><\/script>/, `<script src="${escapeHtmlAttribute(staticAssetHref("main.js"))}"></script>`)
+    .replace(/<script src="phone-ui-utils\.js"><\/script>/, `<script src="${escapeHtmlAttribute(staticAssetHref("phone-ui-utils.js"))}"></script>`)
     .replace(
       /<meta name="apple-mobile-web-app-title" content="[^"]*" \/>/,
       `<meta name="apple-mobile-web-app-title" content="${escapeHtmlAttribute(identity.shortName)}" />`,
@@ -3016,6 +3037,8 @@ class SharedBridge {
     this.interruptRequested = false;
     this.idleDisposeTimer = null;
     this.longRunningTimer = null;
+    this.disposing = false;
+    this.connectionLostReported = false;
     this.upstream = createUpstreamWebSocket();
     this.bindUpstream();
   }
@@ -3177,6 +3200,7 @@ class SharedBridge {
   }
 
   dispose() {
+    this.disposing = true;
     this.cancelIdleDispose();
     clearLongRunningNotification(this);
     if (this.upstream && this.upstream.readyState !== WebSocket.CLOSED) {
@@ -3496,11 +3520,18 @@ class SharedBridge {
       if (!this.ready) this.startupFailed = true;
       this.interruptRequested = false;
       clearLongRunningNotification(this);
+      // Closing a socket that is still opening makes ws report an error before
+      // the close, so a bridge we tore down ourselves fails on the way out. It
+      // is not a failure anyone has to hear about.
+      if (this.disposing) return;
       this.emit("error", { text: error.message });
       if (this.activeTurnId) this.setBridgeRunState("error", "接続エラー", this.activeTurnId);
       // A connection lost mid-turn is one event for the reader - the work
       // failed, and this is why - not a "connection lost" message followed by a
-      // "failed" message about the same moment.
+      // "failed" message about the same moment. A socket that never opened
+      // reports `error` and then `close`, and that close is the same moment
+      // again, so this message is the one that stands for it.
+      this.connectionLostReported = true;
       if (this.activeTurnId) {
         notifyRunEvent("failed", {
           bridge: this,
@@ -3526,13 +3557,24 @@ class SharedBridge {
       this.interruptRequested = false;
       clearLongRunningNotification(this);
       this.emit("status", { text: "Codex接続が閉じました" });
+      // A bridge taken down on purpose - swapped for another folder, cleaned up
+      // after going idle, replaced when the phone dials again - closes its own
+      // socket, and this handler cannot tell that from Codex hanging up. It
+      // used to announce both as 接続が切れました: a warning that arrives while
+      // the work it names keeps running on another bridge, several at once
+      // whenever a reconnect swept the idle ones. Only a close nobody asked
+      // for is news.
+      if (this.disposing) return;
       if (this.activeTurnId) this.setBridgeRunState("error", "接続が閉じました", this.activeTurnId);
-      notifyBridgeEvent("connection_lost", {
-        bridge: this,
-        turnId: this.activeTurnId,
-        severity: "warning",
-        detail: "Codex側が接続を閉じました。",
-      });
+      if (!this.connectionLostReported) {
+        this.connectionLostReported = true;
+        notifyBridgeEvent("connection_lost", {
+          bridge: this,
+          turnId: this.activeTurnId,
+          severity: "warning",
+          detail: "Codex側が接続を閉じました。",
+        });
+      }
       if (shouldStartCodexServer) {
         ensureCodexServerRunning().catch((error) => {
           this.emit("error", { text: `Codex app-serverを再起動できませんでした: ${error.message}` });
@@ -5479,6 +5521,8 @@ function localModelList(provider = agentProvider) {
 }
 
 async function main() {
+  // Capture before serving requests so later disk edits can require a restart.
+  bridgeBuildTracker = createBuildTracker(root);
   const phoneToken = getToken();
   const managedCodexServer = shouldStartCodexServer;
   if (isCodexProvider) {
@@ -6158,6 +6202,7 @@ if (require.main === module) {
 module.exports = {
   ClaudeBridge,
   SharedBridge,
+  compactCodexError,
   appIdentityForProvider,
   approvalMcpConfig,
   bridgeIsUntouched,

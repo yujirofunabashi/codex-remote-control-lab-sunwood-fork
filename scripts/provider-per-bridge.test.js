@@ -126,6 +126,7 @@ test("a Mac's remembered provider outranks the provider its bridge started with"
 const fleetRecords = new Function(`
   let activeBridgeId = "mini";
   let threadCache = [];
+  let hiddenProjects = [];
   let currentProvider = "codex";
   const bridgeRegistry = { bridges: [{ id: "mini" }, { id: "air" }] };
   const states = { mini: { threadCache: [] }, air: { threadCache: [] } };
@@ -137,11 +138,14 @@ const fleetRecords = new Function(`
     return text === "codex" || text === "claude" ? text : "";
   }
   function currentThreadProvider() { return currentProvider; }
+  function workspaceKeyForThread(thread) { return thread.cwd || ""; }
   ${functionSource("fleetThreadRecords")}
-  return function run({ provider, active, other }) {
+  return function run({ provider, active, other, hidden = [], otherHidden = [] }) {
     currentProvider = provider;
     threadCache = active;
+    hiddenProjects = hidden;
     states.air.threadCache = other;
+    states.air.hiddenProjects = otherHidden;
     return fleetThreadRecords().map((thread) => thread.machineKey + ":" + thread.provider + ":" + thread.id);
   };
 `)();
@@ -164,6 +168,14 @@ test("asking the other Mac for chats does not rewrite the provider that Mac was 
   const source = functionSource("loadFleetThreads");
   assert.doesNotMatch(source, /state\.activeProvider\s*=/, "the fleet refresh must not overwrite a Mac's remembered provider");
   assert.match(source, /currentThreadProvider\(\)/, "the other Mac is asked for the provider the phone is in");
+});
+
+test("hidden projects stay hidden in cached rows without hiding the other Mac's same path", () => {
+  const active = [{ id: "c1", provider: "codex", cwd: "/same/project" }];
+  const other = [{ id: "c2", provider: "codex", cwd: "/same/project" }];
+  assert.deepEqual(fleetRecords({ provider: "codex", active, other, hidden: ["/same/project"] }), ["air:codex:c2"]);
+  assert.deepEqual(fleetRecords({ provider: "codex", active, other, otherHidden: ["/same/project"] }), ["mini:codex:c1"]);
+  assert.equal(fleetRecords({ provider: "codex", active, other }).length, 2, "unhiding restores remembered rows");
 });
 
 const useProvider = new Function(`

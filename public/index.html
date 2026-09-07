@@ -31,49 +31,67 @@
           </span>
         </div>
         <div class="sidebar-project-header">
-          <div class="sidebar-project-title">
+          <!-- The connection block under this header is occasional work - pick a
+               Mac, add one, open automations - while the chat list under it is
+               the reason the drawer gets opened at all. On a phone the block ate
+               about 40% of the drawer, so the header doubles as its disclosure
+               and carries the active machine itself, which is the one thing from
+               the block you have to be able to read without opening it. -->
+          <button
+            type="button"
+            class="sidebar-project-title"
+            id="sidebarConnectionsToggle"
+            aria-controls="sidebarConnections"
+            aria-expanded="true"
+          >
             <span class="sidebar-project-folder" aria-hidden="true"></span>
             <strong id="sidebarProjectName">作業場所</strong>
+            <span class="sidebar-project-bridge" id="sidebarProjectBridge" hidden></span>
             <span class="sidebar-project-chevron" aria-hidden="true"></span>
-          </div>
+          </button>
         </div>
-        <section class="fleet-sidebar" aria-label="接続先">
-          <button type="button" class="fleet-current" id="fleetDashboardButton" data-opens-bridge-fleet aria-haspopup="dialog" aria-expanded="false">
-            <span class="fleet-current-dot" aria-hidden="true"></span>
-            <span class="fleet-current-main">
-              <strong id="fleetCurrentLabel">現在の接続先</strong>
-              <small id="fleetCurrentMeta">接続準備中</small>
-            </span>
-            <span id="fleetCurrentBadges" class="fleet-current-badges"></span>
-          </button>
-          <div id="bridgeFleetList" class="bridge-fleet-list" aria-label="登録済み接続先"></div>
-          <div class="connection-command-row">
-            <button type="button" class="nav-command muted add-bridge-command" id="addBridgeButton" data-opens-bridge-fleet>
-              <span class="command-icon plus-icon" aria-hidden="true"></span>
-              <span>接続先を追加</span>
+        <div class="bridge-build-notice" id="bridgeBuildNotice" role="status" hidden></div>
+        <div class="sidebar-connections" id="sidebarConnections">
+          <section class="fleet-sidebar" aria-label="接続先">
+            <button type="button" class="fleet-current" id="fleetDashboardButton" data-opens-bridge-fleet aria-haspopup="dialog" aria-expanded="false">
+              <span class="fleet-current-dot" aria-hidden="true"></span>
+              <span class="fleet-current-main">
+                <strong id="fleetCurrentLabel">現在の接続先</strong>
+                <small id="fleetCurrentMeta">接続準備中</small>
+                <small id="fleetCurrentBuild" class="bridge-build-label">アプリの版を確認中</small>
+              </span>
+              <span id="fleetCurrentBadges" class="fleet-current-badges"></span>
             </button>
-            <button type="button" class="nav-command muted automation-command" id="automationsButton">
-              <span class="command-icon automation-icon" aria-hidden="true"></span>
-              <span>自動処理</span>
-            </button>
-          </div>
-        </section>
-        <nav class="primary-nav">
-          <button type="button" class="nav-command muted" id="searchButton">
-            <span class="command-icon search-icon" aria-hidden="true"></span>
-            <span>検索</span>
-          </button>
-          <button type="button" class="nav-command muted" id="pluginsButton">
-            <span class="command-icon plugin-icon" aria-hidden="true"></span>
-            <span>追加機能</span>
-          </button>
-        </nav>
+            <div id="bridgeFleetList" class="bridge-fleet-list" aria-label="登録済み接続先"></div>
+            <div class="connection-command-row">
+              <button type="button" class="nav-command muted add-bridge-command" id="addBridgeButton" data-opens-bridge-fleet>
+                <span class="command-icon plus-icon" aria-hidden="true"></span>
+                <span>接続先を追加</span>
+              </button>
+              <button type="button" class="nav-command muted automation-command" id="automationsButton">
+                <span class="command-icon automation-icon" aria-hidden="true"></span>
+                <span>自動処理</span>
+              </button>
+              <button type="button" class="nav-command muted plugins-command" id="pluginsButton">
+                <span class="command-icon plugin-icon" aria-hidden="true"></span>
+                <span>追加機能</span>
+              </button>
+            </div>
+          </section>
+        </div>
         <div class="thread-section">
           <div class="thread-section-header">
-            <div class="section-title">最近のチャット</div>
-            <div id="threadProviderTabs" class="thread-provider-tabs" role="tablist" aria-label="一覧に出すAI">
-              <button type="button" data-thread-provider="claude" aria-selected="false">Claude</button>
-              <button type="button" data-thread-provider="codex" aria-selected="false">Codex</button>
+            <div class="thread-section-top">
+              <div class="section-title">最近のチャット</div>
+              <!-- Searching filters this list and nothing else, so it belongs to
+                   the list header rather than to the nav block that can be shut. -->
+              <button type="button" class="thread-search-toggle" id="searchButton" title="チャットを検索" aria-label="チャットを検索" aria-expanded="false" aria-controls="threadSearch">
+                <span class="command-icon search-icon" aria-hidden="true"></span>
+              </button>
+              <div id="threadProviderTabs" class="thread-provider-tabs" role="tablist" aria-label="一覧に出すAI">
+                <button type="button" data-thread-provider="claude" aria-selected="false">Claude</button>
+                <button type="button" data-thread-provider="codex" aria-selected="false">Codex</button>
+              </div>
             </div>
             <div id="threadInboxTabs" class="thread-inbox-tabs" role="tablist" aria-label="チャットの絞り込み">
               <button type="button" data-thread-filter="attention" aria-selected="false">要対応</button>
@@ -113,7 +131,7 @@
             <span class="bridge-pill-dot" aria-hidden="true"></span>
             <span class="bridge-pill-main">
               <strong id="bridgePillLabel">接続先</strong>
-              <small id="bridgePillMeta">:----</small>
+              <small id="bridgePillMeta"><span class="bridge-pill-agent" id="bridgePillAgent"></span> <span id="bridgePillMetaText">:----</span></small>
             </span>
           </button>
           <button type="button" class="thread-position-pill" id="threadPositionPill" aria-label="チャット切替を開く" aria-haspopup="dialog">

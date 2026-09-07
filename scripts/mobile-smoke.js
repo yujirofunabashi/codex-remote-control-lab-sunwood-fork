@@ -52,7 +52,7 @@ const threads = [
 const threadsById = Object.fromEntries(threads.map((thread) => [thread.id, thread]));
 const staleThreadList = threads.filter((thread) => thread.id !== activeThread.id);
 const repoColorOverrides = {
-  "repo:codex-remote-control-lab": "#2563eb",
+  [`repo:${path.basename(root)}`]: "#2563eb",
   "repo:artifact-workspace": "#db2777",
   "repo:drawer-workspace": "#16a34a",
 };
@@ -132,6 +132,7 @@ async function mockApi(page, origin) {
           cwd: activeRoot,
           workdir: activeRoot,
           branch: activeBranch,
+          build: { schema: 1, available: true, head: "a".repeat(40), fingerprint: "b".repeat(64), dirty: false, restartRequired: false, upstream: { name: "origin/develop", ahead: 0, behind: 0 } },
           uiPort: artifactBridge ? 45224 : 45214,
         },
       });
@@ -243,7 +244,10 @@ async function mockWebSocket(page) {
         const provider = target.searchParams.get("provider") || "codex";
         const requestedThreadId = target.searchParams.get("thread") || (fresh ? payload.freshThreadId : provider === "claude" ? "thread-drawer" : payload.threadId);
         const requestedThread = payload.threadsById[requestedThreadId] || (fresh ? {} : payload.threadsById[payload.threadId]) || {};
-        const requestedWorkdir = target.searchParams.get("workdir") || requestedThread.cwd || payload.workdir;
+        // This fixture answers an unselected Claude connection with the saved
+        // drawer chat. Its canonical folder must agree with that saved ID.
+        const resumesDefaultClaude = provider === "claude" && !fresh && !target.searchParams.get("thread");
+        const requestedWorkdir = (resumesDefaultClaude ? requestedThread.cwd : "") || target.searchParams.get("workdir") || requestedThread.cwd || payload.workdir;
         const repoName = requestedWorkdir.split(/[\\/]/).filter(Boolean).pop() || payload.repoName;
         const threadTitle = requestedThread.name || requestedThread.displayTitle || payload.threadTitle || "Mobile terminal compact polish";
         const readyPayload = {
@@ -459,6 +463,7 @@ async function run() {
     const userFacingLabels = await page.evaluate(() => ({
       fleet: document.querySelector("#fleetCurrentLabel")?.textContent?.trim(),
       bridge: document.querySelector("#bridgePillLabel")?.textContent?.trim(),
+      bridgeAgent: document.querySelector("#bridgePillAgent")?.textContent?.trim(),
       chatTab: document.querySelector("#chatViewButton")?.textContent?.trim(),
       logTab: document.querySelector("#terminalViewButton")?.textContent?.trim(),
       statusTitle: document.querySelector("#statusButton")?.getAttribute("title"),
@@ -472,6 +477,9 @@ async function run() {
     // asserting the one word on that tab that is no longer there.
     check("main tabs identify Codex and Terminal views", userFacingLabels.chatTab?.includes("Codex") && userFacingLabels.logTab?.includes("ターミナル"), JSON.stringify(userFacingLabels));
     check("status panel is named for connection state", userFacingLabels.statusTitle === "接続状態", JSON.stringify(userFacingLabels));
+    // The chip says which Mac and which folder; both Macs run both agents, so
+    // on its own it never said who was working.
+    check("bridge pill names the agent this chat is talking to", userFacingLabels.bridgeAgent === "Codex", JSON.stringify(userFacingLabels));
     await page.locator("#bridgePill").click();
     await page.waitForTimeout(120);
     const connectionSheetText = await page.locator("#bridgeFleetSheet").innerText();
@@ -480,7 +488,7 @@ async function run() {
       !/(Home bridge|Bridge Fleet|Worktree|\btoken\b)/.test(connectionSheetText),
       connectionSheetText.replace(/\s+/g, " ").slice(0, 240),
     );
-    await page.locator(".bridge-sheet-card", { hasText: "codex-remote-control-lab" }).locator("button", { hasText: "切替" }).click();
+    await page.locator(".bridge-sheet-card", { hasText: "この画面の配信元" }).locator("button", { hasText: "切替" }).click();
     await page.waitForFunction(
       (expectedWorkdir) =>
         [...(window.__mockWebSocketUrls || [])].reverse().some((url) => {
@@ -509,7 +517,7 @@ async function run() {
       "manual bridge switch drops stale thread cwd and uses the active bridge workdir",
       !manualBridgeSwitch.thread &&
         manualBridgeSwitch.workdir === root &&
-        manualBridgeSwitch.workspaceRepo === "codex-remote-control-lab" &&
+        manualBridgeSwitch.workspaceRepo === path.basename(root) &&
         manualBridgeSwitch.mismatchHidden === true,
       JSON.stringify(manualBridgeSwitch),
     );
@@ -530,6 +538,54 @@ async function run() {
 
     await page.locator("#mobileThreads").click();
     await page.waitForTimeout(120);
+    // The connection block is shut on a phone so the chat list starts near the
+    // top of the drawer; the machine it is pointed at still has to be readable
+    // without opening it, and opening it has to be one tap on the header.
+    const connectionsCollapsed = await page.evaluate(() => {
+      const sidebar = document.querySelector("#threadSidebar");
+      const toggle = document.querySelector("#sidebarConnectionsToggle");
+      const list = document.querySelector("#threadList");
+      return {
+        collapsed: Boolean(sidebar?.classList.contains("connections-collapsed")),
+        expanded: toggle?.getAttribute("aria-expanded") || "",
+        fleetVisible: getComputedStyle(document.querySelector("#sidebarConnections")).display !== "none",
+        headerBridge: document.querySelector("#sidebarProjectBridge")?.textContent?.trim() || "",
+        listTop: Math.round(list.getBoundingClientRect().top),
+        viewport: window.innerHeight,
+      };
+    });
+    check(
+      "the phone drawer starts with the connection block shut",
+      connectionsCollapsed.collapsed && connectionsCollapsed.expanded === "false" && !connectionsCollapsed.fleetVisible,
+      JSON.stringify(connectionsCollapsed),
+    );
+    check(
+      "the header still names the machine the drawer is pointed at",
+      connectionsCollapsed.headerBridge.includes("mini-smoke"),
+      JSON.stringify(connectionsCollapsed),
+    );
+    check(
+      "and the chat list starts in the top quarter of the drawer",
+      connectionsCollapsed.listTop < connectionsCollapsed.viewport * 0.25,
+      JSON.stringify(connectionsCollapsed),
+    );
+    await page.locator("#sidebarConnectionsToggle").click();
+    const connectionsOpened = await page.evaluate(() => ({
+      collapsed: Boolean(document.querySelector("#threadSidebar")?.classList.contains("connections-collapsed")),
+      expanded: document.querySelector("#sidebarConnectionsToggle")?.getAttribute("aria-expanded") || "",
+      fleetVisible: getComputedStyle(document.querySelector("#sidebarConnections")).display !== "none",
+      headerBridge: document.querySelector("#sidebarProjectBridge")?.hidden,
+      stored: localStorage.getItem("codexPhoneSidebarConnections:v1"),
+    }));
+    check(
+      "tapping the project header opens it and remembers the choice",
+      !connectionsOpened.collapsed &&
+        connectionsOpened.expanded === "true" &&
+        connectionsOpened.fleetVisible &&
+        connectionsOpened.headerBridge === true &&
+        connectionsOpened.stored === "open",
+      JSON.stringify(connectionsOpened),
+    );
     await page.locator("#addBridgeButton").click();
     await page.waitForTimeout(180);
     const addConnectionSheet = await page.evaluate(() => {
@@ -656,6 +712,43 @@ async function run() {
     });
     // Expanding with no way back is its own trap.
     check("and collapses again", afterCollapse.rows === 6, JSON.stringify(afterCollapse));
+    // A Mac with work in several folders spends the list on headings for the
+    // ones nobody is in, so a whole project folds away to its heading - and the
+    // heading then has to say how much it is holding, and the chat that is open
+    // has to stay on screen wherever it lives.
+    const projectGroup = page.locator(".project-group", { hasText: "artifact-workspace" }).first();
+    await projectGroup.locator(".project-collapse").click();
+    const folded = await projectGroup.evaluate((group) => ({
+      collapsed: group.classList.contains("collapsed"),
+      expanded: group.querySelector(".project-collapse")?.getAttribute("aria-expanded") || "",
+      rows: group.querySelectorAll(".thread-item").length,
+      activeRows: group.querySelectorAll(".thread-item.active").length,
+      summary: group.querySelector(".project-folded-summary")?.textContent?.trim() || "",
+      more: group.querySelectorAll(".project-more").length,
+      stored: JSON.parse(localStorage.getItem("codexPhoneCollapsedProjects:v1") || "[]"),
+    }));
+    check(
+      "folding a project leaves its heading and drops its rows",
+      folded.collapsed && folded.expanded === "false" && folded.more === 0 && folded.summary.includes("9件"),
+      JSON.stringify(folded),
+    );
+    check(
+      "the open chat stays visible even inside a folded project",
+      folded.rows === 1 && folded.activeRows === 1,
+      JSON.stringify(folded),
+    );
+    check("the fold is remembered per project and machine", folded.stored.includes("mini-smoke/artifact-workspace"), JSON.stringify(folded.stored));
+    await projectGroup.locator(".project-collapse").click();
+    const unfolded = await projectGroup.evaluate((group) => ({
+      collapsed: group.classList.contains("collapsed"),
+      rows: group.querySelectorAll(".thread-item").length,
+      stored: JSON.parse(localStorage.getItem("codexPhoneCollapsedProjects:v1") || "[]"),
+    }));
+    check(
+      "unfolding puts the rows back and forgets the fold",
+      !unfolded.collapsed && unfolded.rows === 6 && unfolded.stored.length === 0,
+      JSON.stringify(unfolded),
+    );
     // Tooling writes sessions into folders of its own, and which those are
     // differs per machine, so the sidebar has to be told rather than guess.
     await page.locator(".project-group", { hasText: "drawer-workspace" }).locator(".project-hide").click();
@@ -678,13 +771,13 @@ async function run() {
     check(
       "hiding a project drops it from the list and offers a way back",
       afterHide?.hiddenSection?.includes("非表示のプロジェクト") && afterHide.restoreRows === 1,
-      JSON.stringify(afterHide),
+      JSON.stringify(afterHide || await page.evaluate(() => ({ headings: [...document.querySelectorAll(".project-group .project-name")].map(n => n.textContent), hiddenProjects, bridges: [...bridgeStates].map(([id, state]) => ({id, count: state.threads?.length, error: state.lastError})) }))),
     );
     await page.locator(".hidden-project").click();
     const afterRestore = await page
       .waitForFunction(
         () =>
-          Array.from(document.querySelectorAll(".project-group:not(.hidden-projects) .project-name")).some((n) => n.textContent?.trim() === "drawer-workspace")
+          !document.querySelector(".hidden-project") && Array.from(document.querySelectorAll(".project-group:not(.hidden-projects) .project-name")).some((n) => n.textContent?.trim() === "drawer-workspace")
             ? { hiddenRows: document.querySelectorAll(".hidden-project").length }
             : null,
         null,
@@ -698,6 +791,9 @@ async function run() {
     const codexResumeButtons = await page.locator(".thread-resume-copy").count();
     await page.locator('[data-thread-provider="claude"]').click();
     await page.locator(".thread-item", { hasText: "Drawer and composer tuning" }).waitFor();
+    // The list can arrive before the new provider's ready event names its
+    // selected chat. Measure copying only after that independent switch ends.
+    await page.waitForFunction(() => connectionReady && selectedThread === "thread-drawer");
     const resumeCopy = await page.evaluate((codexButtons) => {
       const rowFor = (title) =>
         Array.from(document.querySelectorAll(".thread-item")).find((item) => item.querySelector(".thread-title")?.textContent?.includes(title));
@@ -813,11 +909,11 @@ async function run() {
       retainedLocalThread >= 1,
       retainedThreadListText,
     );
-    const retainedLocalThreadOrder = await page.evaluate(() => {
+    const retainedLocalThreadOrder = await page.evaluate((repoName) => {
       const groups = Array.from(document.querySelectorAll(".project-group:not(.current-thread-group)"));
-      const codexGroup = groups.find((group) => group.querySelector(".project-name")?.textContent?.trim() === "codex-remote-control-lab");
+      const codexGroup = groups.find((group) => group.querySelector(".project-name")?.textContent?.trim() === repoName);
       return Array.from(codexGroup?.querySelectorAll(".thread-title") || []).map((item) => item.textContent?.trim() || "");
-    });
+    }, path.basename(root));
     check(
       "previously opened local thread is promoted within its repo immediately",
       retainedLocalThreadOrder[0] === "Mobile terminal compact polish",

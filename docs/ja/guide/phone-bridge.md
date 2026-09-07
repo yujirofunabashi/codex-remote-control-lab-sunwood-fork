@@ -30,6 +30,23 @@ http://192.168.11.8:45214/?token=abcd…wxyz
 
 完全な `?token=...` URL は local access key です。private に扱ってください。bridge を止めるときは、`npm run phone` を実行している terminal で `Ctrl+C` を押します。terminal を閉じた場合や PC を再起動した場合は、もう一度 `npm run phone` を実行します。
 
+## 複数のMacでの更新
+
+画面や動作の変更は、どちらのMacからでも同じ手順で共有します。まずアプリの保管場所で `feature/*`（=変更専用の作業枝）を作り、検証して `develop`（=変更を集める共有用の枝）へ統合し、`origin`（=共同の保存先）へ送ります。動いているMacに未保存の編集だけを残しても、相手には届きません。詳しくは[貢献手順](../../guide/contributing.md#normal-repository-work)を参照してください。
+
+受け取るMacでは、このアプリの `develop` に未保存の変更がないことを確かめて実行します。
+
+```bash
+npm run bridge:check  # 共有先を取得して比較。作業ファイルは更新しない
+npm run bridge:pull   # 変更を失わずに進められる場合だけ取り込む
+```
+
+片方だけの編集・未送信の保存版・両側で別々に保存した変更・途中の履歴操作がある場合は、更新を止めて理由を表示します。自動的に変更を捨てたり、退避したり、上書きしたりはしません。両側の変更を作業枝で確認して統合してから再実行してください。認証情報、接続先一覧の控え、会話履歴は各Macに残し、相互コピーしません。
+
+取り込み後は両方の接続カードにある「アプリ」の版を確認します。「作業場所」の枝や「変更なし」は会話対象のフォルダーの情報で、アプリの更新完了を意味しません。版の不一致、未共有の編集、再起動待ちは接続欄を折りたたんでも表示されます。相手が切断中・旧版で判定情報がない場合は「確認できません」と表示し、一致扱いにはしません。
+
+版の照合にはファイル内容を使い、更新時刻やMacごとの設定は使いません。共有先との比較は最後に取得した時点の情報なので、最新確認には `npm run bridge:check` を使います。画面の「再確認」は接続先の状態を読み直すだけで、変更の取り込みは行いません。画面の変更は、作業・入力・添付がない時に開いている画面にも反映します。裏側の処理を変えた場合は「再起動待ち」になるため、進行中の作業を保存してから許可を得て対象の中継を再起動し、表示が消えたことを確認します。依存する部品を変更した場合は先に `npm ci`（=指定済みの部品を入れ直す操作）も実行します。
+
 ## 構成
 
 ```text
@@ -89,7 +106,7 @@ Bridge Fleet / Worktree Switchboard を使うと、その複数 slot を 1 つ�
 
 起動通知は任意です。`PHONE_NTFY_TOPIC` を設定すると ready URL を ntfy topic へ投稿します。`PHONE_PUSHOVER_TOKEN` と `PHONE_PUSHOVER_USER` を設定すると同じ URL を Pushover へ送ります。`PHONE_DISCORD_WEBHOOK_URL` を設定すると Discord へ投稿します。起動通知は 1 件で、Mac 名（`PHONE_MACHINE_LABEL`、未設定なら hostname）とフォルダ名を載せ、`tailscale serve` がその bridge を HTTPS で公開していればその公開アドレスを先頭に置きます。`npm run phone` は local `.env` を読んでから環境変数を参照します。これらは fleet の `.env` と同じ slot 付きの形（例 `PHONE_DISCORD_WEBHOOK_URL_45214`）でも指定できます。1 つの `.env` を共有する 2 つの bridge で通知先を分けたり、片方だけ通知させたりできます。slot なしのキーは全 slot に効きます。`PHONE_NTFY_SERVER` は既定で `https://ntfy.sh`、HTTPS 必須です。通知 request は `PHONE_NOTIFY_TIMEOUT_MS` で timeout し、既定は 5000 ms です。起動通知は既定で token を含みません。インストール済みのホーム画面アプリは自分の token を既に持っていて、bridge が上がったことが分かれば足りる一方、channel に残る token 付き URL は bridge が registry backup を配信する以上 fleet 全体の鍵になるためです。初回セットアップで token 付き URL が要るときだけ `PHONE_NOTIFY_STARTUP_TOKEN_URLS=1` を設定し、private/protected な topic、account、channel で使ってください。通知用 credential は Git に入れないでください。
 
-task 完了/中断通知は、設定済み provider へ常に送ります。その他の作業 event 通知も使う場合は `PHONE_NOTIFY_EVENTS=1` を設定します。対応 event は `approval_required`、`approval_expired`、`question_required`、`test_failed`、`connection_lost`、`history_sync_failed`、`long_running` です。起動は起動通知 1 件にまとめ、別の `bridge_started` event は送りません。文面は人が読む日本語です。見出しはどの Mac の誰が何をしたか（例 `✅ mini の Claude の作業が終わりました`、`🔔 Air の Codex が承認を待っています`）で、続けてフォルダ名、依頼文の冒頭、完了なら返答の冒頭（既定 200 文字。`PHONE_NOTIFY_EXCERPT_CHARS` で変更、`0` で省略）、承認待ちなら実行したいコマンドや変更するファイル、質問ならその質問文、失敗なら原因、次に何をすればよいか、最後に token なしの bridge URL を 1 つ載せます。Discord へは見出しを本文、残りを embed として送り、送り主名を `Claude mini` / `Codex Air` のように Mac ごとに変え、embed の帯をその Mac の色（mini は琥珀色、Air は青、それ以外は名前から決めた固定色。`PHONE_BRIDGE_COLOR` で上書き可）にします。2 台の Mac が同じ channel に投稿しても、どちらの通知か読む前に分かります。thread ID、turn ID、model 名、event type の生の値、UTC の時刻は載せません。質問で終わった turn は `question_required` だけを送り、完了通知を重ねません。turn 中に接続が切れた場合は `test_failed` 1 件に原因を含めます。リンクは `tailscale serve` の HTTPS 公開アドレスがあればそれを使います。生の IP は別 origin になり、ホーム画面アプリが保存した token が使えないためです。同じ thread / event type の短時間連投は `PHONE_NOTIFY_EVENT_DEDUPE_MS` で抑制します。event 通知には full token を含めません。
+task 完了/中断通知は、設定済み provider へ常に送ります。その他の作業 event 通知も使う場合は `PHONE_NOTIFY_EVENTS=1` を設定します。対応 event は `approval_required`、`approval_expired`、`question_required`、`test_failed`、`connection_lost`、`history_sync_failed`、`long_running` です。起動は起動通知 1 件にまとめ、別の `bridge_started` event は送りません。文面は人が読む日本語です。見出しはどの Mac の誰が何をしたか（例 `✅ mini の Claude の作業が終わりました`、`🔔 Air の Codex が承認を待っています`）で、続けてフォルダ名、依頼文の冒頭、完了なら返答の冒頭（既定 200 文字。`PHONE_NOTIFY_EXCERPT_CHARS` で変更、`0` で省略）、承認待ちなら実行したいコマンドや変更するファイル、質問ならその質問文、失敗なら原因、次に何をすればよいか、最後に token なしの bridge URL を 1 つ載せます。Discord へは見出しを本文、残りを embed として送り、送り主名を `Claude mini` / `Codex Air` のように Mac ごとに変え、embed の帯をその Mac の色（mini は琥珀色、Air は青、それ以外は名前から決めた固定色。`PHONE_BRIDGE_COLOR` で上書き可）にします。2 台の Mac が同じ channel に投稿しても、どちらの通知か読む前に分かります。thread ID、turn ID、model 名、event type の生の値、UTC の時刻は載せません。質問で終わった turn は `question_required` だけを送り、完了通知を重ねません。turn 中に接続が切れた場合は `test_failed` 1 件に原因を含めます。`connection_lost` は予期しない切断だけに送ります。フォルダの切り替え、放置後の後片付け、再起動で bridge が自分で接続を閉じたときは送りません。Codex の認証切れは生の 401 ではなく、`codex login` を促す 1 行にして送ります。リンクは `tailscale serve` の HTTPS 公開アドレスがあればそれを使います。生の IP は別 origin になり、ホーム画面アプリが保存した token が使えないためです。同じ thread / event type の短時間連投は `PHONE_NOTIFY_EVENT_DEDUPE_MS` で抑制します。event 通知には full token を含めません。
 
 レート制限表示は local の非公式 provider 別 snapshot に対応しています。Codex では `PHONE_CODEX_RATE_LIMIT_REFRESH_COMMAND="node scripts/read-desktop-rate-limits.js"` を設定すると、bridge は Codex auth file `~/.codex/auth.json` を読み、Codex Desktop が使う usage endpoint を呼び、表示に必要な残量 percentage/reset だけを正規化して `.phone-rate-limits.json` に cache します。従来の `PHONE_RATE_LIMIT_REFRESH_COMMAND` も Codex 用としてだけ維持しているため、Claude mode で Codex の制限値が混ざることは避けます。token や raw API response は cache しません。失敗時は前回の provider cache か `unavailable` に fallback します。Codex app UI の macOS Accessibility fallback を明示的に使う場合だけ `PHONE_RATE_LIMIT_SOURCE=desktop` を設定します。
 

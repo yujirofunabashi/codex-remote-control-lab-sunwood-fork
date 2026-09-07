@@ -574,12 +574,91 @@ button[aria-pressed="true"]:disabled {
 
 .sidebar-project-title {
   display: grid;
-  grid-template-columns: 22px minmax(0, 1fr) 9px;
+  grid-template-columns: 22px minmax(0, 1fr) auto 9px;
   align-items: center;
   justify-content: start;
   gap: 8px;
+  width: 100%;
   min-width: 0;
+  border: 0;
+  border-radius: 10px;
+  padding: 4px 6px;
+  background: transparent;
   color: var(--nav-text);
+  font: inherit;
+  text-align: left;
+}
+
+.sidebar-project-title:hover {
+  background: var(--hover);
+}
+
+/* Touch never sees the hover, and this is the one control in the drawer whose
+   job is not written on it, so the press has to answer back. */
+.sidebar-project-title:active {
+  background: var(--hover);
+}
+
+/* The machine the drawer is pointed at, shown in the header only while the
+   connection block is shut - open, the card right below says the same thing. */
+.sidebar-project-bridge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  /* Capped so a long machine name cannot push the project name out of the row;
+     the names these carry - mini, Air - are far shorter than this. */
+  max-width: 118px;
+}
+
+.sidebar-project-bridge-name {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: var(--soft);
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.sidebar-connections {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* Outside the folded connection block: hidden controls must not hide drift. */
+.bridge-build-notice {
+  flex-shrink: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--soft);
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.bridge-build-notice[hidden] {
+  display: none;
+}
+
+.bridge-build-label {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.sidebar.connections-collapsed .sidebar-connections {
+  display: none;
+}
+
+.sidebar.connections-collapsed .sidebar-project-chevron {
+  transform: translateY(1px) rotate(-45deg);
 }
 
 .sidebar-project-title strong {
@@ -859,9 +938,16 @@ button[aria-pressed="true"]:disabled {
   min-height: 38px;
 }
 
-.automation-command {
+.automation-command,
+.plugins-command {
   width: 100%;
   min-width: 0;
+}
+
+/* Third in a two-up row: a lone half-width button beside a gap reads as
+   something missing, so it takes the whole line instead. */
+.plugins-command {
+  grid-column: 1 / -1;
 }
 
 .window-actions {
@@ -907,11 +993,6 @@ button[aria-pressed="true"]:disabled {
 
 .window-chevron.right {
   transform: rotate(135deg);
-}
-
-.primary-nav {
-  display: grid;
-  gap: 5px;
 }
 
 .nav-command,
@@ -1069,6 +1150,41 @@ button[aria-pressed="true"]:disabled {
   flex: 0 0 auto;
 }
 
+.thread-section-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.thread-search-toggle {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.thread-search-toggle:hover {
+  background: var(--hover);
+  color: var(--nav-text);
+}
+
+.thread-search-toggle[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--accent) 12%, var(--card));
+  color: var(--accent);
+}
+
+.thread-search-toggle .command-icon {
+  width: 17px;
+  height: 17px;
+}
+
 .section-title {
   flex: 0 0 auto;
   padding: 10px 12px 8px;
@@ -1173,6 +1289,82 @@ button.project-heading.active {
   width: 100%;
   max-width: 100%;
   min-width: 0;
+}
+
+/* Folding is the heading's own job, so it takes the folder and the name and
+   leaves the row's two action buttons their columns beside it. The gaps are
+   tighter than the plain heading's: those buttons are 28px boxes around a much
+   smaller glyph, so the space is already there, and every pixel spent here
+   comes straight out of the project name. */
+.project-heading.has-collapse {
+  grid-template-columns: minmax(0, 1fr) 30px 28px;
+  gap: 5px;
+}
+
+.project-collapse {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  font: inherit;
+}
+
+.project-collapse .project-folder {
+  flex: none;
+}
+
+/* `width: 100%` would make the title row's flex basis the whole heading, so
+   everything else pushed it into an ellipsis even with room to spare. Content
+   width as the basis, grow to fill, shrink only when the name really is too
+   long - which also keeps the chevron on the right edge. */
+.project-collapse .project-title-row {
+  flex: 1 1 auto;
+  width: auto;
+}
+
+.project-folded-summary {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+}
+
+.project-folded-summary .thread-status-badge {
+  min-height: 20px;
+  padding: 1px 6px;
+  font-size: 10.5px;
+  font-weight: 700;
+}
+
+.project-folded-count {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.project-chevron {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+  transform: translateY(-2px) rotate(45deg);
+}
+
+.project-group.collapsed .project-chevron {
+  transform: translateY(1px) rotate(-45deg);
+}
+
+/* Nothing under the heading any more, so the space below it is the gap between
+   two projects rather than a hole where the rows used to be. */
+.project-group.collapsed {
+  margin: 6px 0;
 }
 
 .project-folder {
@@ -1530,6 +1722,23 @@ button.project-heading.active {
   font-size: 10.5px;
   font-weight: 400;
   line-height: 1.12;
+}
+
+/* The chip named the Mac and the folder, which is where the work is, and never
+   the agent, which is who is doing it. Weight rather than colour: the list's
+   own Claude/Codex switch keeps clear of colour so a provider can never be
+   read as one of the machine chips, and this has to agree with it. The divider
+   is a rule rather than a written separator, the way the pill beside it splits
+   position from run state - and it leaves the read-aloud name as two words
+   rather than one run-together string. */
+.bridge-pill-agent {
+  color: var(--text);
+  font-weight: 760;
+}
+
+.bridge-pill-agent:not(:empty) {
+  padding-right: 5px;
+  border-right: 1px solid color-mix(in srgb, currentColor 26%, transparent);
 }
 
 .bridge-pill[data-state="approval"] {
@@ -5986,7 +6195,7 @@ body[data-main-view="terminal"] .pwa-install-hint {
     inset: 0 auto 0 0;
     z-index: var(--layer-drawer);
     width: min(78vw, 310px);
-    gap: 9px;
+    gap: 8px;
     /* Pinned to both edges of the screen, so it owns both insets: the project
        name at the top was landing behind the clock, and the settings button at
        the bottom sits where the home indicator is drawn. */
@@ -6019,12 +6228,20 @@ body[data-main-view="terminal"] .pwa-install-hint {
   }
 
   .sidebar-project-title {
-    grid-template-columns: 21px minmax(0, 1fr) 9px;
-    gap: 8px;
+    grid-template-columns: 21px minmax(0, 1fr) auto 9px;
+    gap: 7px;
+    /* A finger, not a pointer: the row is short but the target must not be. */
+    min-height: 34px;
+    padding: 2px 6px;
   }
 
   .sidebar-project-title strong {
-    font-size: 16px;
+    font-size: 15.5px;
+  }
+
+  .sidebar-project-bridge-name {
+    padding: 1px 7px;
+    font-size: 10.5px;
   }
 
   .sidebar-project-folder {
@@ -6037,17 +6254,21 @@ body[data-main-view="terminal"] .pwa-install-hint {
     height: 18px;
   }
 
-  .fleet-sidebar {
+  .sidebar-connections {
     gap: 6px;
+  }
+
+  .fleet-sidebar {
+    gap: 5px;
   }
 
   .fleet-current,
   .bridge-fleet-row {
     grid-template-columns: 12px minmax(0, 1fr) auto;
     gap: 7px;
-    min-height: 40px;
+    min-height: 36px;
     border-radius: 10px;
-    padding: 6px 8px;
+    padding: 5px 8px;
   }
 
   .fleet-current-dot,
@@ -6084,11 +6305,13 @@ body[data-main-view="terminal"] .pwa-install-hint {
   }
 
   .bridge-fleet-list {
-    max-height: 116px;
+    max-height: 108px;
     gap: 4px;
   }
 
-  .add-bridge-command {
+  .add-bridge-command,
+  .automation-command,
+  .plugins-command {
     width: 100%;
     min-height: 30px;
     grid-template-columns: 19px minmax(0, 1fr);
@@ -6101,32 +6324,11 @@ body[data-main-view="terminal"] .pwa-install-hint {
     font-weight: 480;
   }
 
-  .automation-command {
-    width: 100%;
-    min-height: 30px;
-    grid-template-columns: 19px minmax(0, 1fr);
-    gap: 8px;
-    border: 1px solid color-mix(in srgb, var(--line) 86%, transparent);
-    border-radius: 999px;
-    padding: 0 9px 0 7px;
-    background: color-mix(in srgb, var(--card) 62%, transparent);
-    font-size: 12.5px;
-    font-weight: 480;
-  }
-
-  .add-bridge-command .command-icon {
+  .add-bridge-command .command-icon,
+  .automation-command .command-icon,
+  .plugins-command .command-icon {
     width: 18px;
     height: 18px;
-  }
-
-  .automation-command .command-icon {
-    width: 18px;
-    height: 18px;
-  }
-
-  .primary-nav {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 6px;
   }
 
   .nav-command,
@@ -6223,11 +6425,19 @@ body[data-main-view="terminal"] .pwa-install-hint {
   }
 
   .thread-section-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    padding: 3px 2px 6px;
+    display: grid;
+    gap: 4px;
+    padding: 2px 2px 5px;
+  }
+
+  .thread-section-top {
+    gap: 4px;
+    min-height: 30px;
+  }
+
+  .thread-search-toggle {
+    width: 28px;
+    height: 28px;
   }
 
   .section-title {
@@ -6245,21 +6455,11 @@ body[data-main-view="terminal"] .pwa-install-hint {
   }
 
   .thread-inbox-tabs button {
-    min-height: 27px;
+    min-height: 26px;
     border-radius: 999px;
     padding: 0 9px;
     font-size: 12px;
     font-weight: 650;
-  }
-
-  /* The header is a single flex row here, and a third group of pills would
-     squeeze the filter tabs off the edge. Let the sort row take its own line. */
-  .thread-section-header {
-    flex-wrap: wrap;
-  }
-
-  .thread-sort-tabs {
-    flex: 1 0 100%;
   }
 
   .composer-status-bar {
@@ -6641,6 +6841,19 @@ body[data-main-view="terminal"] .pwa-install-hint {
     padding: 0 6px;
     font-size: 15px;
     font-weight: 620;
+  }
+
+  .project-heading.has-collapse {
+    grid-template-columns: minmax(0, 1fr) 28px 26px;
+    gap: 4px;
+  }
+
+  .project-collapse {
+    gap: 6px;
+  }
+
+  .project-group.collapsed {
+    margin: 4px 0;
   }
 
   /* Nothing sits between a heading and the rows under it, so the space above it
@@ -7617,6 +7830,9 @@ body[data-main-view="terminal"] .pwa-install-hint {
    would collide with the machine chips beside the folder names. */
 .thread-provider-tabs {
   display: flex;
+  /* Its own line where there is room for one; the phone pulls it up beside the
+     heading, where the heading and the switch together read as one label. */
+  flex: 1 1 100%;
   gap: 3px;
   margin: 0 10px 10px;
   padding: 3px;
@@ -7641,4 +7857,23 @@ body[data-main-view="terminal"] .pwa-install-hint {
   background: var(--text);
   color: var(--bg, #fff);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.14);
+}
+
+/* Kept next to the rules it overrides: the base block above sits after the
+   phone breakpoint, so an override written up there would lose the cascade. */
+@media (max-width: 820px) {
+  .thread-provider-tabs {
+    flex: 0 1 auto;
+    margin: 0 0 0 auto;
+    padding: 2px;
+    border-radius: 9px;
+  }
+
+  .thread-provider-tabs button {
+    min-height: 26px;
+    padding: 0 10px;
+    border-radius: 7px;
+    font-size: 12.5px;
+    font-weight: 720;
+  }
 }

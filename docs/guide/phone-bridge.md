@@ -36,6 +36,23 @@ Open a private tokenized startup URL from a protected notification channel, or o
 
 Any full `?token=...` URL is a local access key. Keep it private. To stop the bridge, press `Ctrl+C` in the terminal that is running `npm run phone`. If the terminal is closed or the PC restarts, start it again with `npm run phone`.
 
+## Updating across machines
+
+Use the same workflow in either direction: create a dedicated `feature/*` branch/worktree from `develop`, verify the change, integrate it into `develop`, then push to `origin`. An uncommitted edit on a running bridge is not shared. See [Normal Repository Work](./contributing.md#normal-repository-work).
+
+In the receiving application's clean `develop` checkout:
+
+```bash
+npm run bridge:check  # Fetch and compare; do not update working files
+npm run bridge:pull   # Accept only a safe fast-forward
+```
+
+Unfinished edits, unpublished/diverging commits, unexpected tracking branches and interrupted Git operations stop the update. The commands never commit, push, stash, reset or switch branches. Inspect and integrate both sides on a feature branch before retrying. Keep each machine's credentials, connection registry backups and conversation histories local; do not synchronize those files.
+
+Connection cards distinguish **app** build identity from the selected **workspace** branch/dirty status. Matching HEAD alone does not prove delivery: the authenticated `/api/bridge/info` response includes `build` with the application root, commit, actual source fingerprints, dirty/tracking state and `restartRequired`. The fingerprints exclude machine settings and timestamps. The sidebar warns about differing builds, unshared changes and restart waits even when connections are folded. Disconnected peers or older bridges without this metadata remain unknown, not synchronized.
+
+Tracking state reflects the last local fetch; run `bridge:check` for a fresh remote comparison. The UI's recheck button refreshes bridge state but does not pull code. Any browser source change, including CSS and helpers, changes the served browser build so idle pages can reload; active work, drafts and attachments defer it. Backend changes require an authorized restart of the affected supervised bridge after active work is saved. If dependencies changed, run `npm ci` first. Verify both bridges' actual served screens and matching clean builds with no restart warning afterward.
+
 ## Runtime Layout
 
 ```text

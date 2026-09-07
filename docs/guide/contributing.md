@@ -13,6 +13,10 @@ This project keeps two contribution paths separate:
 
 Use `develop` for integration work. Start normal features from `develop` on a `feature/<short-description>` branch, then merge finished work back into `develop`. Push `main` only through a release or hotfix flow.
 
+The same workflow applies in either direction between machines. Keep unfinished edits in a dedicated feature branch/worktree, test and integrate them, then push `develop`. CI runs on `develop` and `main` pushes. On the receiving application's `develop` checkout, use `npm run bridge:check` to fetch/compare and `npm run bridge:pull` for a guarded fast-forward. Neither command commits, pushes, stashes, resets or switches branches. Dirty files, unpublished/diverging commits, unknown tracking branches and interrupted Git operations stop the update; inspect and integrate both sides on a feature branch instead of overwriting them.
+
+Delivery requires more than matching HEAD: verify both authenticated `/api/bridge/info` application build fingerprints, clean/shared state, the served UI and no pending server restart. The workspace branch shown for the current conversation is not the application version. Preserve machine-local credentials, connection registry and histories. Follow [Updating across machines](./phone-bridge.md#updating-across-machines), including dependency installation and authorized restarts after active work is saved. Run `npm run check:sync` and `npm run smoke:fleet` when changing this path.
+
 Before handoff, run the focused check that matches the change. For code changes this is usually:
 
 ```bash
@@ -31,6 +35,7 @@ Do not commit local-only or sensitive files:
 
 - `.codex-home*`
 - `.phone-token`
+- `.phone-bridges.*.local.json` and its backups
 - `.uploads/`
 - logs
 - generated session databases

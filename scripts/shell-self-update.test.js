@@ -7,6 +7,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
+const vm = require("node:vm");
 
 const { shellUpdateDecision, shellVersionOf } = require("../public/phone-ui-utils");
 
@@ -43,4 +44,43 @@ test("the page checks the build on every poll of the bridge it was loaded from",
   assert.match(check, /location\.reload\(\)/);
   const server = fs.readFileSync(path.join(__dirname, "start-phone.js"), "utf8");
   assert.match(server, /shell: \{ main: staticAssetHref\("main\.js"\)/, "the bridge names the build it serves");
+});
+
+test("a draft or upload started during the reload notice is preserved and retried when idle", () => {
+  const main = fs.readFileSync(path.join(__dirname, "..", "public", "main.js"), "utf8");
+  const source = main.slice(main.indexOf("const shellReloadStorageKey ="), main.indexOf("async function refreshBridgeState("));
+  const tasks = [], saved = [];
+  let reloads = 0;
+  const context = vm.createContext({
+    uiUtils: { shellUpdateDecision, shellVersionOf }, homeBridgeId: "home",
+    liveTurnActive: false, threadSwitchBusy: false, pendingFiles: [], addButton: { disabled: false },
+    promptModal: { classList: { contains: () => true } }, promptInput: { value: "" },
+    document: { visibilityState: "visible", querySelector: () => ({ getAttribute: () => running }) },
+    sessionStorage: {}, safeReadStorage: () => saved.at(-1) || "", safeWriteStorage: (_storage, _key, value) => saved.push(value),
+    showToast() {}, location: { reload: () => { reloads++; } },
+    window: { setTimeout: callback => { tasks.push(callback); return tasks.length; } },
+  });
+  vm.runInContext(source, context);
+  const poll = () => context.checkShellFreshness({ shell: { main: served } }, { id: "home" });
+  poll();
+  poll();
+  assert.equal(tasks.length, 1, "one pending notice, not many reloads");
+  context.promptInput.value = "unfinished text";
+  tasks.shift()();
+  assert.equal(reloads, 0);
+  assert.equal(saved.length, 0);
+  context.promptInput.value = "";
+  context.pendingFiles.push({ path: "fixture.png" });
+  poll();
+  assert.equal(tasks.length, 0);
+  context.pendingFiles.length = 0;
+  context.addButton.disabled = true;
+  poll();
+  assert.equal(tasks.length, 0, "an upload is still busy before the attachment arrives");
+  context.addButton.disabled = false;
+  poll();
+  tasks.shift()();
+  assert.equal(reloads, 1);
+  poll();
+  assert.equal(tasks.length, 0, "a served build is reloaded only once");
 });
