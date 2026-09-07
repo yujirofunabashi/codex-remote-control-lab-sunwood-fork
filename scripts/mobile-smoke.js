@@ -126,6 +126,7 @@ async function mockApi(page, origin) {
         json: {
           label: artifactBridge ? "artifact-workspace" : "Home bridge",
           hostName: "mini-smoke",
+          codexUrl: "ws://127.0.0.1:45213",
           provider: "codex",
           repoRoot: activeRoot,
           cwd: activeRoot,

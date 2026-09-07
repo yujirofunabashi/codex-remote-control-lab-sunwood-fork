@@ -135,3 +135,90 @@ test("approval decisions must match the pending request and its thread, even whe
   own.approval(approval, "accept");
   assert.equal(sent.length, 1, "an already answered request cannot be reused");
 });
+
+test("a terminal-started turn can be interrupted and queued behind from the phone", () => {
+  const own = bridge("shared", null);
+  own.turnQueue = [];
+  own.ready = true;
+  const sent = [];
+  own.request = (method, params) => { sent.push({ method, params }); return 1; };
+  deliver(own, { method: "turn/started", params: { threadId: "shared", turn: { id: "terminal-turn" } } });
+  assert.equal(own.activeTurnId, "terminal-turn");
+  assert.equal(own.runState.state, "running");
+  own.prompt("next from phone");
+  assert.equal(own.turnQueue.length, 1);
+  own.interrupt();
+  assert.deepEqual(sent, [{ method: "turn/interrupt", params: { threadId: "shared", turnId: "terminal-turn" } }]);
+});
+
+test("terminal user input appears once on the phone, including repeated text in later turns", () => {
+  const own = bridge("shared", null);
+  for (const id of ["one", "two"]) {
+    deliver(own, { method: "turn/started", params: { threadId: "shared", turn: { id } } });
+    const params = { threadId: "shared", turnId: id, item: { type: "userMessage", id: `input-${id}`, content: [{ type: "text", text: "continue" }] } };
+    deliver(own, { method: "item/started", params });
+    deliver(own, { method: "item/completed", params });
+  }
+  assert.deepEqual(own.history.map((entry) => entry.text), ["continue", "continue"]);
+  assert.equal(own.events.filter((event) => event.type === "user").length, 2);
+});
+
+test("the phone's immediate user echo is not duplicated by shared server events", () => {
+  const own = bridge("shared", null);
+  own.request = () => 42;
+  own.startPrompt("from phone");
+  deliver(own, { id: 42, result: { turn: { id: "phone-turn" } } });
+  const params = { threadId: "shared", turnId: "phone-turn", item: { type: "userMessage", id: "phone-input", content: [{ type: "text", text: "from phone" }] } };
+  deliver(own, { method: "item/started", params });
+  deliver(own, { method: "item/completed", params });
+  assert.equal(own.history.filter((entry) => entry.type === "user").length, 1);
+  assert.equal(own.events.filter((event) => event.type === "user").length, 1);
+});
+
+test("a delayed turn/start reply cannot reset an already streaming turn", () => {
+  const own = bridge("shared", null);
+  own.pending.set(42, "turn/start");
+  deliver(own, { method: "turn/started", params: { threadId: "shared", turn: { id: "turn-1" } } });
+  deliver(own, { method: "item/agentMessage/delta", params: { threadId: "shared", turnId: "turn-1", delta: "partial" } });
+  deliver(own, { id: 42, result: { turn: { id: "turn-1" } } });
+  assert.equal(own.turnStarted, true);
+  assert.equal(own.streamingStarted, true);
+  assert.equal(own.runState.state, "streaming");
+  assert.equal(own.events.filter((event) => event.type === "turn" && event.status === "started").length, 1);
+});
+
+test("reopening the phone during terminal work restores the active turn", () => {
+  const own = bridge("shared", null);
+  own.promoteBridgeKey = () => {};
+  own.readyPayload = () => ({ run: own.runPayload() });
+  own.pending.set(7, "thread/resume");
+  deliver(own, { id: 7, result: { thread: { id: "shared", turns: [{ id: "terminal-turn", status: "inProgress",
+    items: [{ type: "agentMessage", id: "partial", text: "Partial " }] }] } } });
+  assert.equal(own.activeTurnId, "terminal-turn");
+  assert.equal(own.turnStarted, true);
+  assert.equal(own.history[0].text, "Partial ");
+  assert.equal(own.events.find((event) => event.type === "ready").run.state, "running");
+});
+
+test("joining a terminal's conversation preserves its model and permission choices", () => {
+  const own = bridge("shared", null);
+  const requests = [];
+  own.request = (method, params) => { requests.push({ method, params }); return requests.length; };
+  own.upstream.send = () => {};
+  own.upstream.emit("open");
+  assert.deepEqual(requests.find((request) => request.method === "thread/resume").params,
+    { threadId: "shared", cwd: own.workdir });
+});
+
+test("an approval answered on the terminal disappears from the phone", () => {
+  const own = bridge("shared");
+  const approval = messages("shared").find((message) => message.id === 101);
+  deliver(own, approval);
+  deliver(own, { method: "serverRequest/resolved", params: { threadId: "foreign", requestId: 101 } });
+  assert.deepEqual(own.pendingApproval, approval);
+  deliver(own, { method: "serverRequest/resolved", params: { threadId: "shared", requestId: 102 } });
+  assert.deepEqual(own.pendingApproval, approval);
+  deliver(own, { method: "serverRequest/resolved", params: { threadId: "shared", requestId: 101 } });
+  assert.equal(own.pendingApproval, null);
+  assert.equal(own.runPayload().state, "running");
+});

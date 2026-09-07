@@ -758,6 +758,8 @@ function bridgeInfoPayload() {
     startedAt: bridgeStartedAt,
     uiPort,
     hostName: os.hostname(),
+    codexUrl,
+    codexSocketPath: codexSocketPath || null,
     machineLabel: phoneMachineLabel || null,
     workdir,
     cwd: workdir,
@@ -2437,11 +2439,11 @@ function serveManifest(url, phoneToken, res) {
   res.end(JSON.stringify(manifest, null, 2));
 }
 
-function stripUiDirectives(text) {
-  return String(text || "")
+function stripUiDirectives(text, preserveWhitespace = false) {
+  const cleaned = String(text || "")
     .replace(/(?:^|\n)::[a-z0-9-]+\{[^\n]*\}(?=\n|$)/gi, "")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+    .replace(/\n{3,}/g, "\n\n");
+  return preserveWhitespace ? cleaned : cleaned.trim();
 }
 
 function summarizeItem(item) {
@@ -2472,7 +2474,7 @@ function summarizeItem(item) {
       attachments,
     };
   }
-  if (item.type === "agentMessage") return { type: "assistant", text: stripUiDirectives(item.text) };
+  if (item.type === "agentMessage") return { type: "assistant", text: stripUiDirectives(item.text, true) };
   if (item.type === "commandExecution") return { type: "status", text: `$ ${item.command}` };
   if (item.type === "fileChange") return { type: "status", text: `file changes: ${item.status}` };
   return null;
@@ -3009,6 +3011,8 @@ class SharedBridge {
     this.runState = { state: "connecting", label: "接続中", turnId: null, updatedAt: Date.now() };
     this.streamingStarted = false;
     this.turnStarted = false;
+    this.seenUserItems = new Set();
+    this.localUserEcho = null;
     this.interruptRequested = false;
     this.idleDisposeTimer = null;
     this.longRunningTimer = null;
@@ -3189,6 +3193,40 @@ class SharedBridge {
     return Array.from(this.pending.values()).includes("turn/interrupt");
   }
 
+  observeTurnStart(turnId, started = false) {
+    if (!turnId) return;
+    const changed = this.activeTurnId !== turnId;
+    if (changed) {
+      this.activeTurnId = turnId;
+      this.streamingStarted = false;
+      this.turnStarted = false;
+      scheduleLongRunningNotification(this, turnId);
+      this.setBridgeRunState("running", "Agent 処理中", turnId);
+      this.emit("turn", { status: "started", turnId, run: this.runPayload() });
+    }
+    // Notifications can precede the reply to our own turn/start request.
+    // A late reply must not reset streaming or disable the interrupt button.
+    this.turnStarted = this.turnStarted || started;
+  }
+
+  observeUserItem(item, turnId) {
+    if (item?.type !== "userMessage") return;
+    const key = `${turnId || this.activeTurnId}:${item.id || JSON.stringify(item.content)}`;
+    this.seenUserItems ||= new Set();
+    if (this.seenUserItems.has(key)) return;
+    this.seenUserItems.add(key);
+    if (this.seenUserItems.size > historyLimit) this.seenUserItems.delete(this.seenUserItems.values().next().value);
+    const entry = summarizeItem(item);
+    const local = this.localUserEcho;
+    if (local && (!local.turnId || local.turnId === turnId)
+      && local.text === item.content.filter((part) => part.type === "text").map((part) => part.text).join("\n")) {
+      this.localUserEcho = null;
+      return;
+    }
+    this.appendHistory({ ...entry, outputGroup: turnId || this.activeTurnId || null });
+    this.emit("user", { text: entry.text, attachments: entry.attachments || [] });
+  }
+
   promoteBridgeKey() {
     if (!shouldPromoteBridgeKey({ bridgeKey: this.baseBridgeKey, threadId: this.threadId })) return;
     const previousKey = this.bridgeKey;
@@ -3236,11 +3274,7 @@ class SharedBridge {
       }
       const id = this.request("thread/resume", {
         threadId: this.requestedThreadId,
-        model: this.model,
-        serviceTier: this.serviceTier,
         cwd: this.workdir,
-        approvalPolicy: "on-request",
-        sandbox: "workspace-write",
       });
       this.pending.set(id, "thread/resume");
       this.emit("status", { text: "既存threadを再開中..." });
@@ -3269,12 +3303,20 @@ class SharedBridge {
           return;
         }
         this.threadId = msg.result.thread.id;
+        this.model = msg.result.model || this.model;
         this.startupFailed = false;
         this.promoteBridgeKey();
         this.ready = true;
         this.history = historyFromThread(msg.result.thread);
+        this.seenUserItems = new Set((msg.result.thread.turns || []).flatMap((turn) =>
+          (turn.items || []).filter((item) => item.type === "userMessage").map((item) => `${turn.id}:${item.id}`)).slice(-historyLimit));
         this.terminalHistory = terminalHistoryFromChatHistory(this.history);
-        const idleState = runStateFromSessionFile(msg.result.thread) || idleRunStateFromHistory(this.history);
+        const activeTurn = (msg.result.thread.turns || []).findLast((turn) => turn.status === "inProgress");
+        this.activeTurnId = activeTurn?.id || null;
+        this.turnStarted = Boolean(activeTurn);
+        const idleState = activeTurn
+          ? { state: "running", label: "Agent 処理中", turnId: activeTurn.id }
+          : runStateFromSessionFile(msg.result.thread) || idleRunStateFromHistory(this.history);
         this.setBridgeRunState(idleState.state, idleState.label, idleState.turnId);
         this.emit("ready", this.readyPayload());
         if (this.requestedThreadId) this.emit("status", { text: `既存threadを再開しました: ${this.threadId}` });
@@ -3284,6 +3326,7 @@ class SharedBridge {
       if (pendingMethod === "turn/start") {
         this.pending.delete(msg.id);
         if (msg.error) {
+          this.localUserEcho = null;
           this.interruptRequested = false;
           const error = compactCodexError(msg.error.message || JSON.stringify(msg.error));
           this.emit(error.retrying ? "status" : "error", { text: error.text });
@@ -3299,12 +3342,8 @@ class SharedBridge {
           }
           this.startNextQueuedTurn();
         } else {
-          this.activeTurnId = msg.result.turn.id;
-          this.streamingStarted = false;
-          this.turnStarted = false;
-          scheduleLongRunningNotification(this, this.activeTurnId);
-          this.setBridgeRunState("running", "Agent 処理中", this.activeTurnId);
-          this.emit("turn", { status: "started", turnId: this.activeTurnId, run: this.runPayload() });
+          if (this.localUserEcho) this.localUserEcho.turnId = msg.result.turn.id;
+          this.observeTurnStart(msg.result.turn.id);
           if (this.interruptRequested) {
             this.setBridgeRunState("interrupting", "開始後に中断します", this.activeTurnId);
           }
@@ -3325,7 +3364,7 @@ class SharedBridge {
       }
 
       if (msg.method === "turn/started") {
-        this.turnStarted = true;
+        this.observeTurnStart(msg.params.turn?.id || msg.params.turnId, true);
         this.flushPendingInterrupt();
         return;
       }
@@ -3343,6 +3382,7 @@ class SharedBridge {
 
       if (msg.method === "item/started") {
         this.turnStarted = true;
+        this.observeUserItem(msg.params.item, msg.params.turnId);
         this.flushPendingInterrupt();
         const text = summarizeLiveItem(msg.params.item, "started");
         if (text) this.emit("status", { text });
@@ -3351,6 +3391,7 @@ class SharedBridge {
 
       if (msg.method === "item/completed") {
         this.turnStarted = true;
+        this.observeUserItem(msg.params.item, msg.params.turnId);
         this.flushPendingInterrupt();
         const entry = summarizeItem(msg.params.item);
         if (entry && entry.type !== "user") this.appendHistory({ ...entry, outputGroup: this.activeTurnId || null });
@@ -3364,6 +3405,7 @@ class SharedBridge {
         const completedTurn = msg.params.turn || {};
         const completedTurnId = msg.params.turnId || completedTurn.id || this.activeTurnId;
         const wasInterrupted = completedTurn.status === "interrupted";
+        this.localUserEcho = null;
         this.interruptRequested = false;
         this.activeTurnId = null;
         this.streamingStarted = false;
@@ -3397,6 +3439,14 @@ class SharedBridge {
         this.syncHistory("turn completed");
         this.startNextQueuedTurn();
         this.scheduleIdleDispose();
+        return;
+      }
+
+      if (msg.method === "serverRequest/resolved") {
+        if (this.pendingApproval?.id === msg.params.requestId) {
+          this.pendingApproval = null;
+          this.setBridgeRunState(this.streamingStarted ? "streaming" : "running", "別の画面で承認に回答しました", this.activeTurnId);
+        }
         return;
       }
 
@@ -3645,6 +3695,7 @@ class SharedBridge {
     const id = this.request("turn/start", {
       ...params,
     });
+    this.localUserEcho = { text: input[0].text, turnId: null };
     this.pending.set(id, "turn/start");
     this.setBridgeRunState("running", "送信済み・開始待ち");
     const savedAttachments = [...savedImages, ...savedFiles];

@@ -632,7 +632,7 @@ test("the copy button hands over a command that works as pasted", () => {
   for (const provider of ["claude", "codex"]) {
     const command = resumeCommandForThread(
       { id: "2bec35bc-1324-4b49-8a83-d550e9a9ba07", cwd: "/Users/you/Prj/example", provider },
-      { hostName: "Example-Mac-mini.local" },
+      { hostName: "Example-Mac-mini.local", codexUrl: "ws://127.0.0.1:45233" },
     );
     assert.ok(command.includes("cd -- '/Users/you/Prj/example'"));
     assert.ok(command.includes(`${provider} ${provider === "codex" ? "resume" : "--resume"} '2bec35bc-1324-4b49-8a83-d550e9a9ba07'`));

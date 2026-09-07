@@ -289,7 +289,25 @@
   // The command always resumes on the owner, never on whichever Mac happened
   // to receive the paste. Air/mini use the operator's existing SSH aliases;
   // other hosts use their hostname and require ordinary SSH configuration.
-  function resumeCommandForThread(thread = {}, { hostName = "" } = {}) {
+  function codexRemoteEndpoint({ codexUrl = "", codexSocketPath = "" } = {}) {
+    if (codexSocketPath) {
+      const socket = String(codexSocketPath);
+      return socket.startsWith("/") && !/[\r\n\0]/.test(socket) ? `unix://${socket}` : "";
+    }
+    try {
+      const url = new URL(codexUrl);
+      // The command runs on the owning Mac after the SSH hop. Never copy
+      // credentials or dial an unrelated network service from that Mac.
+      if (!["ws:", "wss:"].includes(url.protocol) || !["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
+        || url.username || url.password || url.search || url.hash) return "";
+      return String(codexUrl);
+    } catch {
+      return "";
+    }
+  }
+
+  function resumeCommandForThread(thread = {}, options = {}) {
+    const { hostName = "" } = options;
     const provider = String(thread.provider || "").trim().toLowerCase();
     if (!["codex", "claude"].includes(provider)) return "";
     const id = String(thread.id || "").trim();
@@ -301,7 +319,11 @@
     const quote = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`;
     const machine = machineLabelFromHost(host).toLowerCase();
     const destination = ["air", "mini"].includes(machine) ? machine : host;
-    const resume = `${provider} ${provider === "codex" ? "resume" : "--resume"} ${quote(id)}`;
+    const endpoint = provider === "codex" ? codexRemoteEndpoint(options) : "";
+    // A plain resume creates another writer and fails while the phone owns
+    // the conversation. Both interfaces must join the same app-server.
+    if (provider === "codex" && !endpoint) return "";
+    const resume = `${provider} ${provider === "codex" ? "resume" : "--resume"} ${quote(id)}${endpoint ? ` --remote ${quote(endpoint)}` : ""}`;
     const local = `cd -- ${quote(cwd)} && exec ${resume}`;
     // Check again after SSH: a stale alias must fail, not resume a session on
     // the wrong host. A login/interactive shell loads the owner's CLI PATH.
@@ -1049,7 +1071,7 @@
     sameWorkspaceThreadRecord,
     isOpaqueThreadId,
     resumeCommandForThread,
-    portableResumeVersion: 1,
+    portableResumeVersion: 2,
     threadDisplayTitle,
     timestampValueMs,
     threadTimestamp,

@@ -1835,6 +1835,7 @@ function applyServerRunState(run = {}) {
   if (terminalRunStates.has(state)) interruptRequestPending = false;
   if (state !== "approval" && pendingApproval) {
     pendingApproval = null;
+    getBridgeState().pendingApproval = null;
     questionAnswerDraft = new Map();
     approval.classList.add("hidden");
     renderApprovalStrip(null);
@@ -2338,11 +2339,16 @@ function selectModel(model) {
 
 function resumeCommandForThread(thread) {
   // An older cached helper ignores ownership and returns local-only commands.
-  if (uiUtils.portableResumeVersion === 1 && uiUtils.resumeCommandForThread) {
+  if (uiUtils.portableResumeVersion === 2 && uiUtils.resumeCommandForThread) {
     // Resolve the row's owner, not the currently selected bridge or the phone's
     // origin. Display labels may be renamed and are not routing information.
     const owner = getBridgeState(thread.bridgeId || activeBridgeId);
-    return uiUtils.resumeCommandForThread(thread, { hostName: owner.info?.hostName || "" });
+    const endpoint = Object.prototype.hasOwnProperty.call(owner.info || {}, "codexUrl") ? owner.info : owner.status || {};
+    return uiUtils.resumeCommandForThread(thread, {
+      hostName: owner.info?.hostName || "",
+      codexUrl: endpoint.codexUrl,
+      codexSocketPath: endpoint.codexSocketPath,
+    });
   }
   return "";
 }
@@ -2792,13 +2798,13 @@ function renderMarkdown(text, options = {}) {
   return blocks.join("");
 }
 
-function stripUiDirectives(text) {
-  return String(text || "")
+function stripUiDirectives(text, preserveWhitespace = false) {
+  const cleaned = String(text || "")
     .replace(/(?:^|\n)::[a-z0-9-]+\{[^\n]*\}(?=\n|$)/gi, "")
     .replace(/\[CODEX_TASK_COMPLETED\]/g, "\n\n**完了**")
     .replace(/\[CODEX_TASK_FAILED\]/g, "\n\n**エラー**")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+    .replace(/\n{3,}/g, "\n\n");
+  return preserveWhitespace ? cleaned : cleaned.trim();
 }
 
 function parseJsonish(value) {
@@ -2921,7 +2927,7 @@ function showBridgeError(rawText) {
 }
 
 function setEntryText(body, kind, text) {
-  body.markdownSource = kind === "assistant" ? stripUiDirectives(text) : text || "";
+  body.markdownSource = kind === "assistant" ? stripUiDirectives(text, true) : text || "";
   if (kind === "assistant" || kind === "user") body.innerHTML = renderMarkdown(body.markdownSource);
   else body.textContent = body.markdownSource;
 }
@@ -4039,6 +4045,7 @@ function renderHistoryEntries(history, liveText) {
   log.replaceChildren();
   statusGroup = null;
   assistantEntry = null;
+  let currentAssistant = null;
   const outputGroupLastIndex = new Map();
   for (const [index, entry] of (history || []).entries()) {
     if (entry.type !== "assistant" || !entry.outputGroup) continue;
@@ -4047,17 +4054,24 @@ function renderHistoryEntries(history, liveText) {
   for (const [index, entry] of (history || []).entries()) {
     const outputGroup = entry.outputGroup || "";
     const showBulkCopy = entry.type === "assistant" && outputGroup && outputGroupLastIndex.get(outputGroup) === index;
-    addEntry(entry.type, entry.text, entry.attachments || [], {
+    const rendered = addEntry(entry.type, entry.text, entry.attachments || [], {
       outputGroup,
       showBulkCopy,
     });
+    if (liveTurnActive && outputGroup === liveOutputGroup && entry.type === "assistant") currentAssistant = rendered;
   }
   syncLogEmptyState();
-  if (!liveText || !liveTurnActive) return;
+  if (!liveText || !liveTurnActive) {
+    assistantEntry = currentAssistant;
+    return;
+  }
   // Unless the history being drawn already ends with what was streamed, in
   // which case re-adding it would show the same answer twice.
   const alreadyDrawn = (history || []).some((entry) => entry.type === "assistant" && String(entry.text || "").includes(liveText));
-  if (alreadyDrawn) return;
+  if (alreadyDrawn) {
+    assistantEntry = currentAssistant;
+    return;
+  }
   assistantEntry = addEntry("assistant", liveText, [], {
     outputGroup: liveOutputGroup || "",
     showBulkCopy: true,
@@ -8472,13 +8486,13 @@ function connect({ preserveHistory = false, freshThread = false, workdir = "" } 
       state.runState = msg.run?.state || state.runState || "ready";
       state.lastEventAt = Date.now();
       syncReadyThread(msg.threadId);
+      applyServerRunState(msg.run || { state: "ready" });
       renderHistoryIfChanged(msg.history || []);
       handleTerminalMessage(msg);
       // The workspace strip directly below already names the folder, and it does
       // it with the home directory collapsed. Repeating the absolute path here
       // only pushed the line under the pills to its right.
       meta.textContent = `${msg.model}  •  ${msg.clients}端末`;
-      applyServerRunState(msg.run || { state: "ready" });
       applyCurrentThreadAccent();
       updateThreadNavigation();
       addEntry("status", `チャットを開きました: ${msg.threadId}`);

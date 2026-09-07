@@ -7,6 +7,7 @@ const { spawnSync } = require("node:child_process");
 const { resumeCommandForThread } = require("../public/phone-ui-utils");
 
 const hosts = { air: "Example-MacBook-Air.local", mini: "Example-Mac-mini.local" };
+const endpoints = { air: "ws://127.0.0.1:45213", mini: "ws://127.0.0.1:45233" };
 
 // Run the actual generated shell syntax, but replace the AI and network
 // executables. No conversation is resumed and no SSH connection is made.
@@ -53,13 +54,14 @@ for (const provider of ["codex", "claude"]) {
     test(`${provider}: ${target} session resumes on its owner from either Mac`, (t) => {
       const f = fixture(t);
       const id = "01234567-89ab-cdef-0123-456789abcdef";
-      const command = resumeCommandForThread({ provider, id, cwd: f.cwd }, { hostName: hosts[target] });
+      const command = resumeCommandForThread({ provider, id, cwd: f.cwd }, { hostName: hosts[target], codexUrl: endpoints[target] });
       assert.match(command, /ssh -t /);
       for (const source of ["air", "mini"]) {
         const result = f.run(command, source);
         assert.equal(result.status, 0, result.stderr);
         assert.deepEqual(JSON.parse(result.stdout), {
-          provider, host: hosts[target], cwd: fs.realpathSync(f.cwd), args: [provider === "codex" ? "resume" : "--resume", id],
+          provider, host: hosts[target], cwd: fs.realpathSync(f.cwd),
+          args: provider === "codex" ? ["resume", id, "--remote", endpoints[target]] : ["--resume", id],
         });
       }
     });
@@ -68,12 +70,30 @@ for (const provider of ["codex", "claude"]) {
 
 test("wrong SSH destination and failed connections never fall back to the local AI", (t) => {
   const f = fixture(t);
-  const command = resumeCommandForThread({ provider: "codex", id: "saved-id", cwd: f.cwd }, { hostName: hosts.air });
+  const command = resumeCommandForThread({ provider: "codex", id: "saved-id", cwd: f.cwd }, { hostName: hosts.air, codexUrl: endpoints.air });
   for (const extra of [{ RESUME_TEST_WRONG_HOST: hosts.mini }, { RESUME_TEST_SSH_FAIL: "1" }]) {
     const result = f.run(command, "mini", extra);
     assert.notEqual(result.status, 0);
     assert.equal(result.stdout, "");
   }
+});
+
+test("Codex never starts a second writer when its shared endpoint is missing or unsafe", () => {
+  const thread = { provider: "codex", id: "saved-id", cwd: "/tmp/project" };
+  for (const codexUrl of [undefined, "", "https://localhost:45213", "ws://remote.example:45213", "ws://user:secret@localhost:45213", "ws://localhost:45213?token=secret", "ws://localhost:45213#secret"]) {
+    assert.equal(resumeCommandForThread(thread, { hostName: hosts.air, codexUrl }), "", String(codexUrl));
+  }
+});
+
+test("a local Unix socket takes precedence over the bridge's placeholder WebSocket URL", (t) => {
+  const f = fixture(t);
+  const codexSocketPath = `${f.cwd}/codex.sock`;
+  const command = resumeCommandForThread({ provider: "codex", id: "saved-id", cwd: f.cwd }, {
+    hostName: hosts.air, codexSocketPath, codexUrl: "ws://codex-app-server/rpc",
+  });
+  const result = f.run(command, "mini");
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout).args, ["resume", "saved-id", "--remote", `unix://${codexSocketPath}`]);
 });
 
 test("unknown ownership, missing cwd, placeholders and option-like IDs yield no command", () => {
