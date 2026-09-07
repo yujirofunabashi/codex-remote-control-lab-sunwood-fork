@@ -8,7 +8,7 @@ const http = require("node:http");
 const path = require("node:path");
 const { chromium, webkit } = require("playwright");
 const root = path.resolve(__dirname, "..");
-const airOrigin = "http://127.0.0.1:45999";
+const airOrigin = process.env.SESSION_SMOKE_ORIGIN?.startsWith("https:") ? "https://air.fixture.invalid:45999" : "http://127.0.0.1:45999";
 const build = { available: true, fingerprint: "test", clientFingerprint: "test", serverFingerprint: "test", head: "a".repeat(40), dirty: false, restartRequired: false, upstream: { name: "origin/develop", ahead: 0, behind: 0 } };
 const run = (threadId, provider, state, title, machine = "mini") => ({ threadId, provider, workdir: `/fixture/${machine}/project`, run: { state, updatedAt: 100 }, title });
 const state = {
@@ -85,7 +85,12 @@ async function main() {
       return reply({ data: [] });
     });
     await page.goto(`${origin}/?token=fixture-token&thread=idle&provider=codex`, { waitUntil: "domcontentloaded" });
-    await page.waitForFunction(() => document.querySelectorAll(".session-activity-chip").length === 5);
+    try {
+      await page.waitForFunction(() => document.querySelectorAll(".session-activity-chip").length === 5, null, { timeout: 15000 });
+    } catch (error) {
+      console.error(JSON.stringify({ pageErrors: errors, strip: await page.locator("#sessionActivityStrip").count(), chips: await page.locator(".session-activity-chip").count() }));
+      throw error;
+    }
     assert.equal(await page.locator("#sessionActivityCount").textContent(), "処理中 1");
     const byKey = (machine, provider, threadId) => page.locator(`.session-activity-chip[data-session-key='${JSON.stringify([machine.toLowerCase(), provider, threadId])}']`);
     const metrics = await page.evaluate(() => {
