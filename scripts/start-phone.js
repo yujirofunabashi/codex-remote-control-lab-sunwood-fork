@@ -4007,7 +4007,7 @@ class ClaudeBridge {
     this.longRunningTimer = null;
     this.stalledTurnId = null;
     this.sessionWatchPath = "";
-    this.sessionWatchListener = null;
+    this.sessionWatchTimer = null;
   }
 
   addClient(browser) {
@@ -4036,17 +4036,30 @@ class ClaudeBridge {
     const file = claudeSessionFilePath(this.claudeSessionId);
     if (!file) return;
     this.sessionWatchPath = file;
-    // watchFile rather than watch: it is a stat poll, so it survives the atomic
-    // replaces and editor-style rewrites that fs.watch drops on macOS.
-    this.sessionWatchListener = () => this.reloadSessionFromDisk();
-    fs.watchFile(file, { interval: claudeSessionWatchIntervalMs }, this.sessionWatchListener);
+    // Keep our own initial stat: watchFile takes its baseline asynchronously,
+    // so an append just after joining can become that baseline and never emit
+    // a change (observed on Linux). A stat poll also survives atomic replaces.
+    let lastStamp = "";
+    const poll = () => {
+      if (this.hasActiveWork()) return;
+      try {
+        const stat = fs.statSync(file);
+        const stamp = `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
+        if (stamp === lastStamp) return;
+        this.reloadSessionFromDisk();
+        lastStamp = stamp;
+      } catch { lastStamp = ""; }
+    };
+    poll();
+    this.sessionWatchTimer = setInterval(poll, claudeSessionWatchIntervalMs);
+    this.sessionWatchTimer.unref?.();
   }
 
   unwatchSession() {
     if (!this.sessionWatchPath) return;
-    fs.unwatchFile(this.sessionWatchPath, this.sessionWatchListener);
+    clearInterval(this.sessionWatchTimer);
     this.sessionWatchPath = "";
-    this.sessionWatchListener = null;
+    this.sessionWatchTimer = null;
   }
 
   reloadSessionFromDisk() {

@@ -258,8 +258,10 @@ test("the last phone to close stops the watch", () => {
   const closers = [];
   bridge.addClient({ readyState: 1, send() {}, on: (event, handler) => event === "close" && closers.push(handler) });
   assert.ok(bridge.sessionWatchPath, "watching while someone is looking");
+  assert.ok(bridge.sessionWatchTimer, "a poll remains active after establishing the initial snapshot");
 
   bridge.clients.clear();
   for (const close of closers) close();
   assert.equal(bridge.sessionWatchPath, "", "a stat per second for a session nobody has open is waste");
+  assert.equal(bridge.sessionWatchTimer, null);
 });

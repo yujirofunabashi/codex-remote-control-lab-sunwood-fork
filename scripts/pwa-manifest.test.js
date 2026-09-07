@@ -192,5 +192,8 @@ test("the install page carries the requested provider's icon, name and manifest"
   // The page markup names providers of its own (the list switch), so only the
   // manifest link and the icon are checked for the parameter.
   assert.doesNotMatch(plain.body, /site\.webmanifest\?[^"]*provider=/);
-  assert.doesNotMatch(plain.body, /<title>Codex /);
+  // No provider means this bridge's default, not always Claude. A clean CI
+  // checkout defaults to Codex; the owner's launch environment may not.
+  const defaultManifest = manifestPayloadForRequest(new URL("http://127.0.0.1:45214/site.webmanifest"));
+  assert.ok(plain.body.includes(`<title>${defaultManifest.name}</title>`));
 });
