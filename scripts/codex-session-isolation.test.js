@@ -2,6 +2,9 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { EventEmitter } = require("node:events");
 const os = require("node:os");
+const fs = require("node:fs");
+const path = require("node:path");
+const { sessionActivityStatus } = require("../public/phone-ui-utils");
 
 // No real server, phone, or notification channel participates in these tests.
 // Loading start-phone may read local settings, so also block outbound fetches.
@@ -198,6 +201,52 @@ test("reopening the phone during terminal work restores the active turn", () => 
   assert.equal(own.turnStarted, true);
   assert.equal(own.history[0].text, "Partial ");
   assert.equal(own.events.find((event) => event.type === "ready").run.state, "running");
+});
+
+for (const [text, expected] of [
+  ["実装が完了しました。質問・許可待ちは?、エラーは!で表示します。", "done"],
+  ["実装が完了しました。画面で確認してください。", "done"],
+  ["作業先はminiとAirのどちらにしますか？", "question"],
+  ["希望する端末名を返信してください。", "question"],
+]) {
+  test(`completion and reopening deliver ${expected} for: ${text}`, (t) => {
+    const own = bridge("reply-state", "current-turn");
+    deliver(own, { method: "item/completed", params: { threadId: "reply-state", turnId: "current-turn", item: { type: "agentMessage", text } } });
+    deliver(own, { method: "turn/completed", params: { threadId: "reply-state", turn: { id: "current-turn", status: "completed" } } });
+    const completed = own.events.find((event) => event.type === "turn" && event.status === "completed");
+    assert.equal(completed.run.state, expected);
+    assert.equal(sessionActivityStatus(completed.run), expected);
+
+    // The authoritative session file says the turn stopped executing, not
+    // whether its answer asks the owner to reply. Restoring it must agree.
+    const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-reply-state-"));
+    t.after(() => fs.rmSync(fixtureDir, { recursive: true, force: true }));
+    const sessionPath = path.join(fixtureDir, "session.jsonl");
+    fs.writeFileSync(sessionPath, JSON.stringify({ type: "event_msg", timestamp: "2026-01-01T00:00:00Z", payload: { type: "task_complete", turn_id: "current-turn" } }) + "\n");
+    const reopened = bridge("reply-state", null);
+    reopened.promoteBridgeKey = () => {};
+    reopened.readyPayload = () => ({ run: reopened.runPayload() });
+    reopened.pending.set(7, "thread/resume");
+    deliver(reopened, { id: 7, result: { thread: { id: "reply-state", path: sessionPath, turns: [{ id: "current-turn", status: "completed", items: [{ type: "agentMessage", text }] }] } } });
+    const ready = reopened.events.find((event) => event.type === "ready");
+    assert.equal(ready.run.state, expected);
+    assert.equal(sessionActivityStatus(ready.run), expected);
+  });
+}
+
+test("an empty completed turn does not inherit a previous question", () => {
+  const own = bridge("reply-state", "new-turn");
+  own.history = [{ type: "assistant", text: "続行しますか？", outputGroup: "previous-turn" }];
+  deliver(own, { method: "turn/completed", params: { threadId: "reply-state", turn: { id: "new-turn", status: "completed" } } });
+  assert.equal(own.runPayload().state, "done");
+});
+
+test("a nonblocking progress question cannot become a final reply wait", () => {
+  const own = bridge("reply-state", "current-turn");
+  deliver(own, { method: "item/completed", params: { threadId: "reply-state", turnId: "current-turn", item: { type: "agentMessage", phase: "commentary", text: "こちらで続行しますか？" } } });
+  assert.equal(own.history[0].phase, "commentary");
+  deliver(own, { method: "turn/completed", params: { threadId: "reply-state", turn: { id: "current-turn", status: "completed" } } });
+  assert.equal(own.runPayload().state, "done");
 });
 
 test("joining a terminal's conversation preserves its model and permission choices", () => {

@@ -7,6 +7,7 @@ const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
 const { chromium, webkit } = require("playwright");
+const { idleRunStateFromHistory } = require("./question-state");
 const root = path.resolve(__dirname, "..");
 const airOrigin = process.env.SESSION_SMOKE_ORIGIN?.startsWith("https:") ? "https://air.fixture.invalid:45999" : "http://127.0.0.1:45999";
 const build = { available: true, fingerprint: "test", clientFingerprint: "test", serverFingerprint: "test", head: "a".repeat(40), dirty: false, restartRequired: false, upstream: { name: "origin/develop", ahead: 0, behind: 0 } };
@@ -131,9 +132,16 @@ async function main() {
     state.mini[1].run = { state: "running", updatedAt: 200 };
     await page.evaluate((run) => window.__socket.emit({ type: "runState", threadId: "finished", ...run }), state.mini[1].run);
     assert.equal(await page.locator("#sessionActivityCount").textContent(), "処理中 2");
-    state.mini[1].run = { state: "done", updatedAt: 300 };
+    // Exercise classifier output, not only hand-written UI states. An old
+    // erroneous question must clear from both the strip and the composer.
+    state.mini[1].run = { ...idleRunStateFromHistory([{ type: "assistant", text: "続行しますか？", outputGroup: "reply-turn" }]), updatedAt: 250 };
+    await page.evaluate((run) => window.__socket.emit({ type: "runState", threadId: "finished", ...run }), state.mini[1].run);
+    assert.equal(await byKey("mini", "codex", "finished").getAttribute("data-state"), "question");
+    assert.equal(await page.locator("#runStateLabel").textContent(), "返信待ち");
+    state.mini[1].run = { ...idleRunStateFromHistory([{ type: "assistant", text: "実装が完了しました。質問・許可待ちは?、エラーは!で表示します。", outputGroup: "reply-turn" }]), updatedAt: 300 };
     await page.evaluate((run) => window.__socket.emit({ type: "runState", threadId: "finished", ...run }), state.mini[1].run);
     assert.equal(await byKey("mini", "codex", "finished").getAttribute("data-state"), "done");
+    assert.equal(await page.locator("#runStateLabel").textContent(), "前回完了・送信できます");
     await page.evaluate((run) => window.__socket.emit({ type: "ready", provider: "codex", threadId: "finished", workdir: "/fixture/mini/project", history: [], run }), state.mini[1].run);
     assert.equal(await byKey("mini", "codex", "finished").getAttribute("data-state"), "done", "background reconnect must not acknowledge completion");
     const socketCount = await page.evaluate(() => window.__socketUrls.length);
@@ -171,7 +179,7 @@ async function main() {
     await page.evaluate(() => refreshFleet({ force: true }));
     assert.equal(await page.locator("#sessionActivityStrip").isVisible(), false);
     assert.deepEqual(errors, []);
-    console.log("Session strip verified: identity, 48px layout, orbit, reduced motion, stable scroll, full titles, completion acknowledgement, provider/Mac navigation, offline safety and empty state.");
+    console.log("Session strip verified: identity, 48px layout, orbit, reduced motion, stable scroll, full titles, question classification/correction, completion acknowledgement, provider/Mac navigation, offline safety and empty state.");
   } finally {
     await browser?.close();
     await new Promise((resolve) => server.close(resolve));

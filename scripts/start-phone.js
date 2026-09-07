@@ -33,6 +33,7 @@ const { servedHttpsEndpoint, tailscaleServeStatus } = require("./remote-url");
 const { defaultCodexAppServerPort, settingEnvKeysForSlot, slotEnvKey, slotSettingValue } = require("./phone-slot-settings");
 const { slashCommandCatalog } = require("./slash-commands");
 const { findLiveBridge, readThreadSnapshot } = require("./thread-read");
+const { latestAssistantQuestion, idleRunStateFromHistory } = require("./question-state");
 
 const root = path.resolve(__dirname, "..");
 let bridgeBuildTracker;
@@ -1631,17 +1632,6 @@ function clearLongRunningNotification(bridge) {
   bridge.longRunningTimer = null;
 }
 
-function latestAssistantQuestion(bridge) {
-  const assistant = [...(bridge?.history || [])].reverse().find((entry) => entry.type === "assistant" && entry.text);
-  const text = String(assistant?.text || "");
-  if (!/(\?|？|確認してください|どちら|選んで|教えてください|必要ですか)/.test(text)) return "";
-  return text.split(/\r?\n/).filter(Boolean).slice(-3).join("\n").slice(0, 500);
-}
-
-function latestQuestionFromHistory(history = []) {
-  return latestAssistantQuestion({ history });
-}
-
 function waitForReady(timeoutMs = 10_000) {
   const url = `http://127.0.0.1:${codexPort}/readyz`;
   return new Promise((resolve, reject) => {
@@ -2495,7 +2485,7 @@ function summarizeItem(item) {
       attachments,
     };
   }
-  if (item.type === "agentMessage") return { type: "assistant", text: stripUiDirectives(item.text, true) };
+  if (item.type === "agentMessage") return { type: "assistant", text: stripUiDirectives(item.text, true), ...(item.phase ? { phase: item.phase } : {}) };
   if (item.type === "commandExecution") return { type: "status", text: `$ ${item.command}` };
   if (item.type === "fileChange") return { type: "status", text: `file changes: ${item.status}` };
   return null;
@@ -2644,18 +2634,6 @@ function runStateFromSessionFile(thread) {
     return { state: "done", label: "前回完了・送信できます", turnId: latestCompleted.turnId };
   }
   return null;
-}
-
-function idleRunStateFromHistory(history = []) {
-  const lastConversationEntry = [...history].reverse().find((entry) => entry.type === "user" || entry.type === "assistant");
-  if (!lastConversationEntry) return { state: "ready", label: "未実行・送信できます", turnId: null };
-  if (lastConversationEntry.type === "assistant") {
-    if (latestQuestionFromHistory(history)) {
-      return { state: "question", label: "返信待ち", turnId: lastConversationEntry.outputGroup || null };
-    }
-    return { state: "done", label: "前回完了・送信できます", turnId: lastConversationEntry.outputGroup || null };
-  }
-  return { state: "ready", label: "前回送信済み・応答未確認", turnId: lastConversationEntry.outputGroup || null };
 }
 
 function capHistory(history) {
@@ -3340,7 +3318,7 @@ class SharedBridge {
         this.turnStarted = Boolean(activeTurn);
         const idleState = activeTurn
           ? { state: "running", label: "Agent 処理中", turnId: activeTurn.id }
-          : runStateFromSessionFile(msg.result.thread) || idleRunStateFromHistory(this.history);
+          : idleRunStateFromHistory(this.history, runStateFromSessionFile(msg.result.thread));
         this.setBridgeRunState(idleState.state, idleState.label, idleState.turnId);
         this.emit("ready", this.readyPayload());
         if (this.requestedThreadId) this.emit("status", { text: `既存threadを再開しました: ${this.threadId}` });
@@ -3435,7 +3413,7 @@ class SharedBridge {
         this.streamingStarted = false;
         this.turnStarted = false;
         clearLongRunningNotification(this);
-        const question = latestAssistantQuestion(this);
+        const question = latestAssistantQuestion(this, completedTurnId);
         this.setBridgeRunState(
           wasInterrupted ? "interrupted" : question ? "question" : "done",
           wasInterrupted ? "中断しました" : question ? "返信待ち" : "完了しました",
@@ -4717,7 +4695,7 @@ class ClaudeBridge {
         notifyRunEvent("failed", { bridge: this, model: this.model, turnId, message });
       } else if (code === 0 && !wasInterrupted) {
         if (assistantText.trim()) this.appendHistory({ type: "assistant", text: assistantText, outputGroup: turnId });
-        const question = latestAssistantQuestion(this);
+        const question = latestAssistantQuestion(this, turnId);
         this.setBridgeRunState(question ? "question" : "done", question ? "返信待ち" : "完了しました", turnId);
         this.emit("turn", { status: "completed", turnId, run: this.runPayload() });
         // One message per finished turn: the question when there is one, the

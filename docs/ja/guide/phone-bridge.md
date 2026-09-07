@@ -269,6 +269,7 @@ statusLine は対話セッションの機能なので、`claude -p`（bridge の
 - 登録済み bridge 全体の global running monitor と approval inbox
 - ヘッダー下の高さ 48px の1行で、登録済み Mac の Codex・Claude の会話を横断して確認・移動できます。`Codex mini①` のように担当・機体・会話番号を表示し、処理中は文字を囲む枠の一部が周回します。完了は緑の `✓`、返信待ち・許可待ちは琥珀色の `?`、エラーは赤の `!`、接続・状態未確認は灰色の `!`、中断は灰色の `−` を枠に重ねます。件数は処理中だけを数えます。多いときは横スクロールでき、件数を押すと会話名と状態の一覧が開きます。完了は会話を開いて確認するまで残り、質問・許可待ち・エラーは開くだけでは消えません。確認済みの完了と通常の待機だけになれば行は隠れます。未確認情報はこのブラウザ内に保存され、機体から状態を取得できないときは実行中と断定しません。端末の動きを減らす設定では周回を止め、青い部分枠で処理中を示します
 - thread status badge と `要対応 / 実行中 / 最近` inbox filter
+- 「返信待ち」は本文中の `?` や「確認してください」の有無だけでは決めません。実際に保持している回答・許可の要求を優先し、通常の返答は最後の本文・質問リストに明確な問いかけや返信依頼がある場合に限って判定します。コード、引用、表、例示、用語メモは判定対象から除き、記号を説明した完了報告は完了として扱います。Codex・Claude の処理終了と履歴からの復元に同じ判定を使い、前の処理の質問を次の完了へ持ち越しません。文章の意味を AI に再判定させる仕組みではなく、曖昧な表現をすべて認識する保証はありません
 - Summary / Diff / Tests / Terminal / Artifacts / Actions を持つ Review Center
 - bridge、app-server、WebSocket、history sync、token age、notification provider、host、LAN URL を見る health panel
 - `/api/*`、WebSocket、token 付き URL、uploads、raw file response を除外する PWA app shell cache
