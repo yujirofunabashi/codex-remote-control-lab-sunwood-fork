@@ -209,7 +209,9 @@ async function main() {
       await deadline(stopped, "test server cleanup", 5000);
     }
     await new Promise((resolve) => model.close(resolve));
-    fs.rmSync(directory, { recursive: true, force: true });
+    // The CLI wrapper can exit just before its child flushes the isolated
+    // session files. Retry that transient ENOTEMPTY during test cleanup.
+    fs.rmSync(directory, { recursive: true, force: true, maxRetries:10, retryDelay:100 });
   }
 }
 

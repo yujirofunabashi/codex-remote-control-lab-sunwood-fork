@@ -6,9 +6,10 @@ const { startServer, mockApi, mockWebSocket } = require("./mobile-smoke");
 async function run() {
   const { server, origin } = await startServer();
   const engine = process.argv.includes("--webkit") ? webkit : chromium;
-  const browser = await engine.launch();
-  const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  let browser;
   try {
+    browser = await engine.launch();
+    const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
     await mockApi(page, origin);
     await mockWebSocket(page);
     await page.goto(`${origin}/?token=smoke-token`);
@@ -121,7 +122,7 @@ async function run() {
     assert.deepEqual(resumedStream, { sameEntry: true, text: "Partial continuation" });
     console.log(`${engine.name()}: Codex/Claude copy buttons preserve owning host, clipboard and selection; fit 320/390/430px; missing ownership and old cached helpers fail closed`);
   } finally {
-    await browser.close();
+    await browser?.close();
     await new Promise((resolve) => server.close(resolve));
   }
 }
