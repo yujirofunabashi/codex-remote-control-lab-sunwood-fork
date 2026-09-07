@@ -256,7 +256,8 @@ statusLine は対話セッションの機能なので、`claude -p`（bridge の
 - chat / terminal のどちらでも見える approval card
 - 勝手に送信せず入力欄へ prompt template を挿入する quick action chip
 - model、plugin、config、auth、automation の確認
-- Codex model 表示は Standard では `5.5-L/M/H/XH`、Fast mode では `5.5-XH ⚡` のように省略表示します。dropdown では Fast mode を1行トグルにし、reasoning は Low / Medium / High / Extra High のフルネームで表示します
+- Codex・Claude（AI 作業ツール）のモデル（使用する機種）と推論の深さは、機種名と「標準」「かなり深め」「最大」などの日本語で表示します。選択肢は接続先が報告する対応範囲に従います。Fast mode（速度優先設定）は1行の切替と `⚡` で示します
+- 本人が選んだ深さは、この画面のブラウザ保存領域に保持します。起動・再接続・会話や機種の切替では保存値を書き換えません。対応しない機種では、その場の表示と送信だけを対応範囲内に調整し、対応する機種へ戻れば保存した深さに戻ります。機種ごとの対応範囲は Air・mini（それぞれの Mac）を分けて保持し、途中まで届いた一覧で既知の範囲を消しません。以前の不具合ですでに失われた選択は復元できないため、一度選び直してください
 - 次 turn 向けの承認・sandbox mode 切り替え
 - repository artifact preview
 - chat と artifact の Markdown rendering

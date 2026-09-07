@@ -1903,7 +1903,7 @@ const fallbackReasoningChoices = {
 // Deepest last. Used to pick the closest level a model does have when the one
 // that was chosen is not on its list.
 const reasoningDepthOrder = ["low", "medium", "high", "xhigh", "max", "ultra"];
-let liveReasoningChoices = {};
+const reasoningChoicesByBridge = new Map();
 
 const serviceTierAliases = new Map([
   ["", ""],
@@ -1938,13 +1938,21 @@ function adoptModelChoices(choices) {
 
 // The bridge reports the levels each model advertises, so the menu names them
 // the way the model does instead of guessing a fixed set.
-function adoptReasoningChoices(choices) {
+function adoptReasoningChoices(choices, { bridgeId = activeBridgeId } = {}) {
   if (!choices || typeof choices !== "object") return;
-  liveReasoningChoices = { ...liveReasoningChoices, ...choices };
-  if (typeof updateModelButton === "function" && modelMenu) updateModelButton();
+  const previous = reasoningChoicesByBridge.get(bridgeId) || {};
+  // A partial reconnect answer must not erase model capabilities already
+  // learned from this Mac, or borrow those of the other Mac.
+  const byModel = { ...previous.byModel };
+  for (const [model, levels] of Object.entries(choices.byModel || {})) {
+    if (Array.isArray(levels) && levels.length) byModel[model] = levels;
+  }
+  reasoningChoicesByBridge.set(bridgeId, { ...previous, ...choices, byModel });
+  if (bridgeId === activeBridgeId && typeof updateModelButton === "function" && modelMenu) updateModelButton();
 }
 
 function reasoningChoicesForModel(provider, model) {
+  const liveReasoningChoices = reasoningChoicesByBridge.get(activeBridgeId) || {};
   const known = liveReasoningChoices.byModel?.[String(model || "").trim()];
   if (Array.isArray(known) && known.length) return known;
   const perProvider = liveReasoningChoices[provider];
@@ -2095,8 +2103,10 @@ function adoptBridgeProvider(provider, servedProviders = []) {
 }
 
 async function syncProviderFromBridge() {
+  const bridgeId = activeBridgeId;
   try {
     const info = await apiGet("/api/info");
+    if (bridgeId !== activeBridgeId) return;
     adoptBridgeProvider(info?.provider, info?.providers);
     adoptModelChoices(info?.modelChoices);
     adoptReasoningChoices(info?.reasoningChoices);
@@ -2145,7 +2155,7 @@ function renderReasoningChoices() {
   const separator = modelMenu.querySelector("[data-reasoning-separator]");
   if (!separator) return;
   for (const row of modelMenu.querySelectorAll("[data-reasoning]")) row.remove();
-  for (const name of reasoningChoicesForModel(activeProvider, selectedModel)) {
+  for (const name of reasoningChoicesForModel(currentThreadProvider(), selectedModel)) {
     const row = document.createElement("button");
     row.type = "button";
     row.className = "model-menu-row";
@@ -2159,20 +2169,20 @@ function renderReasoningChoices() {
 
 function updateModelButton() {
   const showReasoning = providerSupportsReasoning();
+  // Rendering is not a user choice. Startup and reconnect initially have only
+  // fallback levels; persisting their clamp permanently lost max/ultra. Keep
+  // the requested preference intact and derive what this model can run.
+  const effectiveReasoning = effortForSubmission();
   if (showReasoning) {
-    // A model swap can drop the chosen level; settle on one it has before
-    // anything is drawn or sent.
-    const settled = nearestSupportedReasoning(normalizeReasoning(selectedReasoning), reasoningChoicesForModel(activeProvider, selectedModel));
-    if (settled !== selectedReasoning) {
-      selectedReasoning = settled;
-      localStorage.setItem("codexPhoneReasoning", selectedReasoning);
-    }
     renderReasoningChoices();
   }  const showServiceTier = providerSupportsServiceTier();
   const serviceTierSuffix = showServiceTier && selectedServiceTier === "fast" ? " ⚡" : "";
   modelButton.textContent = showReasoning
-    ? `${selectedModelLabel}・${reasoningDisplayLabel(selectedReasoning)}${serviceTierSuffix}`
+    ? `${selectedModelLabel}・${reasoningDisplayLabel(effectiveReasoning)}${serviceTierSuffix}`
     : selectedModelLabel;
+  modelButton.title = showReasoning && effectiveReasoning !== selectedReasoning
+    ? `保存した深さ：${reasoningDisplayLabel(selectedReasoning)} / このモデルで使う深さ：${reasoningDisplayLabel(effectiveReasoning)}`
+    : "";
   modelMenu.classList.toggle("no-reasoning", !showReasoning);
   renderInlineModelChoices();
   for (const row of modelMenu.querySelectorAll(".model-menu-label, [data-reasoning]")) {
@@ -2191,7 +2201,7 @@ function updateModelButton() {
     serviceTierToggle.setAttribute("aria-pressed", String(fastMode));
   }
   for (const row of modelMenu.querySelectorAll("[data-reasoning]")) {
-    const active = row.dataset.reasoning === selectedReasoning;
+    const active = row.dataset.reasoning === effectiveReasoning;
     row.classList.toggle("active", active);
     let mark = row.querySelector(".checkmark");
     if (active && !mark) {

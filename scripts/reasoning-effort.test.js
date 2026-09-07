@@ -10,6 +10,9 @@ const os = require("os");
 const path = require("path");
 const { WebSocketServer } = require("ws");
 
+// Local notification settings must never escape through this test's teardown.
+globalThis.fetch = async () => ({ ok: true, status: 204, text: async () => "" });
+
 const APP_SERVER_PORT = 45996;
 const recorded = [];
 const wss = new WebSocketServer({ port: APP_SERVER_PORT });

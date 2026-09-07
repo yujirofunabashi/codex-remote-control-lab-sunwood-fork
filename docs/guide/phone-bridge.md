@@ -291,7 +291,8 @@ Override the location with `PHONE_CLAUDE_RATE_LIMIT_CACHE_PATH`. Only normalized
 - approval cards that stay visible from both chat and terminal views
 - quick action chips that insert prompt templates without auto-sending
 - model, plugin, config, auth, and automation lookups
-- Codex model badges stay abbreviated, such as `5.5-L/M/H/XH`; Fast mode adds a `⚡` suffix, and the dropdown exposes it as a one-row toggle above Low / Medium / High / Extra High reasoning
+- Codex and Claude show the model and effective reasoning depth using readable Japanese labels; available depths follow the connected bridge's model capabilities. Fast mode remains a one-row toggle with a `⚡` suffix
+- The user's requested reasoning depth stays in this page's browser storage. Startup, reconnects, and thread/model switches never persist a capability fallback over it. An unsupported model adjusts only the displayed and submitted depth; returning to a capable model restores the requested depth. Capabilities are kept separately per bridge, and partial responses do not erase known model levels. A preference already overwritten by an older version cannot be reconstructed; select it once again after updating
 - approval and sandbox mode controls for the next turn
 - repository artifact preview
 - Markdown rendering for chat and artifacts
