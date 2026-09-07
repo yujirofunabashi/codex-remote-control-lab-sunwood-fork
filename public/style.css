@@ -7859,6 +7859,55 @@ body[data-main-view="terminal"] .pwa-install-hint {
 }
 }
 
+.new-session-button {
+  display: flex;
+  align-items: center;
+  flex: none;
+  gap: 10px;
+  min-height: 44px;
+  margin: 4px 10px 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.new-session-button:hover { background: var(--hover); }
+.new-session-button .compose-icon { width: 21px; height: 21px; }
+.new-session-dialog {
+  box-sizing: border-box;
+  width: min(520px, calc(100vw - 24px));
+  max-height: calc(100dvh - 32px);
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--card);
+  color: var(--text);
+  overflow-y: auto;
+}
+.new-session-dialog::backdrop { background: var(--scrim); }
+.new-session-dialog header, .new-session-dialog footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.new-session-dialog h2 { margin: 0; font-size: 18px; }
+.new-session-dialog p { margin: 8px 0 16px; color: var(--muted); font-size: 13px; line-height: 1.6; white-space: normal; overflow-wrap: anywhere; }
+.new-session-dialog button { min-height: 44px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: var(--text); font: inherit; cursor: pointer; }
+.new-session-dialog button:disabled { opacity: .45; cursor: default; }
+.new-session-dialog header button { min-width: 44px; border: 0; font-size: 24px; }
+.new-session-dialog footer { flex-wrap: wrap; justify-content: flex-end; }
+.new-session-dialog .new-session-create { background: var(--button); color: var(--button-text); border-color: var(--button); }
+.new-session-selects { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; margin-bottom: 16px; }
+.new-session-selects label, .new-session-path-form label { display: grid; gap: 6px; font-size: 13px; }
+.new-session-dialog select, .new-session-dialog input { min-width: 0; width: 100%; min-height: 44px; font-size: 16px; }
+.new-session-folder-tools { display: flex; gap: 8px; flex-wrap: wrap; }
+.new-session-path-form > div { display: flex; gap: 8px; margin-top: 6px; }
+.new-session-path-form button { flex: none; }
+.new-session-dialog .workspace-browser-list { max-height: min(30dvh, 260px); min-height: 70px; }
+.new-session-dialog .workspace-browser-row { display: flex; align-items: center; gap: 10px; border: 0; text-align: left; }
+.new-session-dialog .workspace-browser-row span:last-child { min-width: 0; overflow-wrap: anywhere; }
+#newSessionStatus.error { color: var(--error); }
+
 .workspace-browser {
   display: flex;
   flex-direction: column;

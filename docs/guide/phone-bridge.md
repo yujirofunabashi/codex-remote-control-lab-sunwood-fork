@@ -168,6 +168,10 @@ The sidebar now reads every workdir under `~/.claude/projects`, in one of two or
 
 The choice is remembered per device.
 
+Use **新規セッション (New session)** above the chat list to start in a folder that has no session history. Choose the Mac and AI, browse from that Mac's home folder, and press **このフォルダで開始 (Start in this folder)**. **ホーム (Home)** and **↑ 上の階層 (Parent folder)** navigate the tree; entering an absolute path and pressing **開く (Open)** also checks a folder. The picker uses existing directories under the selected Mac's home, including ordinary folders without a Git repository. It does not create directories or change startup defaults.
+
+Browsing does not switch the active conversation. Cancelling preserves the current chat and draft; starting opens a fresh session on the selected Mac with the selected AI. Existing chats remain available in the list. A loading, failed or edited path cannot be used until its folder is confirmed. Check this flow with `node scripts/new-session-smoke.js` and `node scripts/new-session-smoke.js --webkit`; these use mocked connections and do not send AI requests.
+
 The `>_` at the end of each Codex or Claude row copies a command that can be pasted into either Mac's terminal. It resumes the exact session in its original working directory **on the Mac that owns it**, without transferring any transcript.
 
 On the owning Mac it starts locally; on the other Mac it connects through SSH. The mini must already have an `air` SSH alias targeting the Air's session owner, and the Air must have a `mini` alias targeting the mini's session owner. Other host types use their hostname as the SSH destination. The generated command checks the hostname again after connecting and stops on a mismatch. Connection failures never fall back to starting an AI on the wrong Mac.

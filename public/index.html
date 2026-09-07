@@ -80,6 +80,10 @@
           </section>
         </div>
         <div class="thread-section">
+          <button type="button" id="newSessionButton" class="new-session-button" aria-haspopup="dialog" aria-controls="newSessionDialog">
+            <span class="compose-icon" aria-hidden="true"></span>
+            <span>新規セッション</span>
+          </button>
           <div class="thread-section-header">
             <div class="thread-section-top">
               <div class="section-title">最近のチャット</div>
@@ -545,6 +549,37 @@
       </section>
     </main>
 
+    <dialog id="newSessionDialog" class="new-session-dialog" aria-labelledby="newSessionTitle" aria-describedby="newSessionHelp">
+      <header>
+        <h2 id="newSessionTitle">新規セッション</h2>
+        <button type="button" id="closeNewSession" aria-label="新規セッションを閉じる">×</button>
+      </header>
+      <p id="newSessionHelp">Macとフォルダを選んで開始します。まだチャットがないフォルダも選べます。</p>
+      <div class="new-session-selects">
+        <label>使用するMac<select id="newSessionMachine" class="settings-select"></select></label>
+        <label>使用するAI<select id="newSessionProvider" class="settings-select"><option value="codex">Codex</option><option value="claude">Claude</option></select></label>
+      </div>
+      <div class="workspace-browser">
+        <div class="new-session-folder-tools">
+          <button type="button" id="newSessionHome">ホーム</button>
+          <button type="button" id="newSessionUp" disabled>↑ 上の階層</button>
+        </div>
+        <form id="newSessionPathForm" class="new-session-path-form">
+          <label for="newSessionPath">フォルダの場所</label>
+          <div>
+            <input id="newSessionPath" class="settings-input" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="フォルダの場所を入力" enterkeyhint="go" />
+            <button type="submit" id="newSessionBrowse">開く</button>
+          </div>
+        </form>
+        <div id="newSessionLocation" class="workspace-browser-path"></div>
+        <div id="newSessionFolders" class="workspace-browser-list" aria-label="フォルダ一覧"></div>
+      </div>
+      <p id="newSessionStatus" role="status" aria-live="polite"></p>
+      <footer>
+        <button type="button" id="cancelNewSession">キャンセル</button>
+        <button type="button" id="createNewSession" class="new-session-create" disabled>このフォルダで開始</button>
+      </footer>
+    </dialog>
     <div id="toastStack" class="toast-stack" aria-live="polite" aria-atomic="true"></div>
     <script src="phone-ui-utils.js"></script>
     <script src="main.js"></script>

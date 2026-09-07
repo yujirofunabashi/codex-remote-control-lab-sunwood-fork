@@ -545,12 +545,18 @@ async function run() {
       const sidebar = document.querySelector("#threadSidebar");
       const toggle = document.querySelector("#sidebarConnectionsToggle");
       const list = document.querySelector("#threadList");
+      const newSession = document.querySelector("#newSessionButton");
+      const action = newSession.getBoundingClientRect();
+      const actionStyle = getComputedStyle(newSession);
       return {
         collapsed: Boolean(sidebar?.classList.contains("connections-collapsed")),
         expanded: toggle?.getAttribute("aria-expanded") || "",
         fleetVisible: getComputedStyle(document.querySelector("#sidebarConnections")).display !== "none",
         headerBridge: document.querySelector("#sidebarProjectBridge")?.textContent?.trim() || "",
         listTop: Math.round(list.getBoundingClientRect().top),
+        actionTop: action.top,
+        actionHeight: action.height,
+        actionSpace: action.height + parseFloat(actionStyle.marginTop) + parseFloat(actionStyle.marginBottom),
         viewport: window.innerHeight,
       };
     });
@@ -565,8 +571,13 @@ async function run() {
       JSON.stringify(connectionsCollapsed),
     );
     check(
-      "and the chat list starts in the top quarter of the drawer",
-      connectionsCollapsed.listTop < connectionsCollapsed.viewport * 0.25,
+      "new session stays near the top with a full-size tap target",
+      connectionsCollapsed.actionTop < connectionsCollapsed.viewport * 0.25 && connectionsCollapsed.actionHeight >= 44 && connectionsCollapsed.actionSpace <= 64,
+      JSON.stringify(connectionsCollapsed),
+    );
+    check(
+      "the chat list keeps its space after allowing for the new-session row",
+      connectionsCollapsed.listTop - connectionsCollapsed.actionSpace < connectionsCollapsed.viewport * 0.25,
       JSON.stringify(connectionsCollapsed),
     );
     await page.locator("#sidebarConnectionsToggle").click();

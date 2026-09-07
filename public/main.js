@@ -20,6 +20,19 @@ const chatLatestButton = document.querySelector("#chatLatestButton");
 const meta = document.querySelector("#meta");
 const connectButton = document.querySelector("#connect");
 const searchButton = document.querySelector("#searchButton");
+const newSessionButton = document.querySelector("#newSessionButton");
+const newSessionDialog = document.querySelector("#newSessionDialog");
+const newSessionMachine = document.querySelector("#newSessionMachine");
+const newSessionProvider = document.querySelector("#newSessionProvider");
+const newSessionPath = document.querySelector("#newSessionPath");
+const newSessionFolders = document.querySelector("#newSessionFolders");
+const newSessionLocation = document.querySelector("#newSessionLocation");
+const newSessionStatus = document.querySelector("#newSessionStatus");
+const newSessionUp = document.querySelector("#newSessionUp");
+const createNewSession = document.querySelector("#createNewSession");
+let newSessionBrowseSeq = 0;
+let newSessionFolder = null;
+let newSessionStarting = false;
 const pluginsButton = document.querySelector("#pluginsButton");
 const automationsButton = document.querySelector("#automationsButton");
 const settingsButton = document.querySelector("#settingsButton");
@@ -1372,6 +1385,7 @@ function currentThreadColorKey() {
   const selected = threadCache.find((thread) => thread.id === selectedThread);
   if (selected) return threadColorKeyFor(selected);
   return threadColorKeyFor({
+    id: selectedThread,
     provider: currentThreadProvider(),
     cwd: currentWorkspace.workspaceLocation || currentWorkspace.repoName || "",
   });
@@ -7043,13 +7057,126 @@ async function switchToBridgeForWorkdir(workdir, options = {}) {
 
 async function startNewThread(options = {}) {
   const workdir = String(options.workdir || "").trim();
-  workspaceFollowsSelectedThread = Boolean(workdir);
-  const switchedByBridge = await switchToNamedBridge(options.bridgeId);
-  if (workdir) {
-    if (!switchedByBridge && !options.bridgeId) await switchToBridgeForWorkdir(workdir, { reconnect: false, followThreadWorkdir: true });
-    setWorkspaceMeta({ repoName: options.project || projectForThread({ cwd: workdir }), workspaceLocation: workdir, gitBranch: "" });
+  // selectThread saves the old draft before changing its folder or Mac. Carry
+  // the chosen provider through the switch, even if that Mac defaults to another.
+  return selectThread("", { fresh: true, workdir, project: options.project, bridgeId: options.bridgeId || "", thread: { provider: options.provider || currentThreadProvider() } });
+}
+
+function invalidateNewSessionFolder() {
+  newSessionBrowseSeq += 1;
+  newSessionFolder = null;
+  createNewSession.disabled = true;
+  newSessionUp.disabled = true;
+}
+
+function setNewSessionStarting(starting) {
+  newSessionStarting = starting;
+  for (const control of newSessionDialog.querySelectorAll("select, input, #newSessionHome, #newSessionBrowse")) control.disabled = starting;
+  newSessionUp.disabled = starting || !newSessionFolder?.parent;
+  createNewSession.disabled = starting || !newSessionFolder;
+}
+
+async function browseNewSessionFolder(targetPath = "") {
+  if (newSessionStarting) return;
+  invalidateNewSessionFolder();
+  const seq = newSessionBrowseSeq;
+  const bridgeId = newSessionMachine.value;
+  const entry = bridgeById(bridgeId);
+  const machine = entry ? shortMachineName(entry, getBridgeState(bridgeId)) || bridgeDisplayLabel(entry, bridgeId) : "";
+  const stillCurrent = () => newSessionDialog.open && seq === newSessionBrowseSeq && newSessionMachine.value === bridgeId;
+  newSessionPath.value = targetPath;
+  newSessionFolders.replaceChildren();
+  newSessionFolders.setAttribute("aria-busy", "true");
+  newSessionLocation.textContent = machine;
+  newSessionStatus.classList.remove("error");
+  newSessionStatus.textContent = "フォルダを読み込み中…";
+  try {
+    if (!entry || !effectiveBridgeToken(entry)) throw new Error("このMacの接続を確認してください。");
+    const result = await apiGet(`/api/workspaces/browse${targetPath ? `?path=${encodeURIComponent(targetPath)}` : ""}`, { bridgeId });
+    if (!stillCurrent()) return;
+    if (!result.path || !Array.isArray(result.entries)) throw new Error("フォルダを取得できませんでした。「ホーム」から選び直してください。");
+    newSessionFolder = { ...result, bridgeId };
+    newSessionPath.value = result.path;
+    newSessionLocation.textContent = `${machine} · ${result.displayPath || result.path}`;
+    newSessionUp.disabled = !result.parent;
+    createNewSession.disabled = false;
+    for (const entry of result.entries) {
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "workspace-browser-row";
+      const icon = document.createElement("span");
+      icon.className = "sidebar-project-folder";
+      icon.setAttribute("aria-hidden", "true");
+      const name = document.createElement("span");
+      name.textContent = entry.name;
+      row.append(icon, name);
+      row.addEventListener("click", () => browseNewSessionFolder(entry.path));
+      newSessionFolders.appendChild(row);
+    }
+    if (!result.entries.length) {
+      const empty = document.createElement("div");
+      empty.className = "workspace-browser-empty";
+      empty.textContent = "この中にフォルダはありません。このフォルダで開始できます。";
+      newSessionFolders.appendChild(empty);
+    }
+    newSessionStatus.textContent = "表示中のフォルダで新しいチャットを開きます。";
+  } catch (error) {
+    if (!stillCurrent()) return;
+    newSessionStatus.classList.add("error");
+    newSessionStatus.textContent = error.message;
+  } finally {
+    if (stillCurrent()) newSessionFolders.setAttribute("aria-busy", "false");
   }
-  selectThread("", { fresh: true, workdir, bridgeId: options.bridgeId || "" });
+}
+
+function showNewSessionPicker() {
+  if (newSessionDialog.open) return;
+  newSessionMachine.replaceChildren();
+  const entries = bridgeRegistry.bridges || [];
+  const names = entries.map((entry) => shortMachineName(entry, getBridgeState(entry.id)) || bridgeDisplayLabel(entry, entry.id));
+  for (const [index, entry] of entries.entries()) {
+    const port = entry.port || getBridgeState(entry.id).info?.uiPort || new URL(entry.baseUrl).port;
+    const label = names.filter((name) => name === names[index]).length > 1 ? `${names[index]} :${port}` : names[index];
+    newSessionMachine.add(new Option(label, entry.id));
+  }
+  newSessionMachine.value = activeBridgeId;
+  newSessionProvider.value = currentThreadProvider();
+  invalidateNewSessionFolder();
+  setNewSessionStarting(false);
+  newSessionDialog.showModal();
+  // Start at this Mac's home, independent of the session list and saved cwd.
+  browseNewSessionFolder();
+}
+
+async function createSessionFromPicker() {
+  const folder = newSessionFolder;
+  if (newSessionStarting || !folder || folder.bridgeId !== newSessionMachine.value) return;
+  const seq = newSessionBrowseSeq;
+  const provider = newSessionProvider.value;
+  const stillCurrent = () => newSessionDialog.open && seq === newSessionBrowseSeq;
+  setNewSessionStarting(true);
+  newSessionStatus.classList.remove("error");
+  newSessionStatus.textContent = "開始するフォルダを確認中…";
+  try {
+    if (!bridgeById(folder.bridgeId)) throw new Error("このMacの接続が見つかりません。選び直してください。");
+    // Validate again before leaving the current chat; this also remembers the
+    // folder without changing the bridge's startup settings or creating files.
+    const result = await apiPost("/api/workspaces", { path: folder.path }, { bridgeId: folder.bridgeId });
+    if (!stillCurrent()) return;
+    if (result.workspace?.path !== folder.path || !bridgeById(folder.bridgeId)) throw new Error("フォルダを確認できませんでした。選び直してください。");
+    await startNewThread({ workdir: folder.path, bridgeId: folder.bridgeId, provider });
+    newSessionDialog.close();
+    closeRightPanel();
+    setMainView("chat");
+  } catch (error) {
+    if (!stillCurrent()) return;
+    setNewSessionStarting(false);
+    invalidateNewSessionFolder();
+    newSessionStatus.classList.add("error");
+    newSessionStatus.textContent = error.message;
+  } finally {
+    if (stillCurrent()) setNewSessionStarting(false);
+  }
 }
 
 function showRightPanel() {
@@ -9158,6 +9285,29 @@ searchButton.addEventListener("click", () => {
   renderThreadList();
   setSidebarVisible(true);
 });
+newSessionButton.addEventListener("click", showNewSessionPicker);
+newSessionMachine.addEventListener("change", () => browseNewSessionFolder());
+document.querySelector("#newSessionHome").addEventListener("click", () => browseNewSessionFolder());
+newSessionUp.addEventListener("click", () => {
+  if (newSessionFolder?.parent) browseNewSessionFolder(newSessionFolder.parent);
+});
+document.querySelector("#newSessionPathForm").addEventListener("submit", (event) => {
+  event.preventDefault();
+  browseNewSessionFolder(newSessionPath.value.trim());
+});
+newSessionPath.addEventListener("input", () => {
+  invalidateNewSessionFolder();
+  newSessionFolders.replaceChildren();
+  newSessionFolders.setAttribute("aria-busy", "false");
+  newSessionStatus.classList.remove("error");
+  newSessionStatus.textContent = "「開く」で入力したフォルダを確認してください。";
+});
+for (const id of ["closeNewSession", "cancelNewSession"]) document.getElementById(id).addEventListener("click", () => newSessionDialog.close());
+newSessionDialog.addEventListener("close", () => {
+  invalidateNewSessionFolder();
+  setNewSessionStarting(false);
+});
+createNewSession.addEventListener("click", createSessionFromPicker);
 sidebarConnectionsToggle?.addEventListener("click", () => {
   setSidebarConnectionsOpen(!sidebarConnectionsOpen);
 });
