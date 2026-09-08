@@ -19,7 +19,7 @@ async function run() {
   const labOrigin = `http://127.0.0.1:${app.server.address().port}`;
   const root = config.workRoot;
   const airOrigin = "http://127.0.0.1:45999";
-  let vmState = "off", runningJob = null, runCount = 0;
+  let vmState = "off", aiEnabled = false, runningJob = null, runCount = 0;
   const results = [];
   const finish = (id, data) => app.store.complete(id, { ok: true, data });
   const snapshot = { artifacts: [{ path: `${root}/example/report.md`, size: 30 }], firstPlan: { path: `${root}/first-ai-task-01/PLAN.json`, text: '{"status":"計画の下書き"}', modifiedAt: Date.now() } };
@@ -27,7 +27,7 @@ async function run() {
   app.store.state.folders[root] = { path: root, fetchedAt: Date.now(), entries: [{ name: "example", path: `${root}/example` }] };
   const worker = setInterval(() => {
     try {
-      app.store.heartbeat({ vmState, guestReady: vmState === "running" });
+      app.store.heartbeat({ vmState, guestReady: vmState === "running", aiReady: aiEnabled && vmState === "running" });
       const command = app.store.lease();
       if (!command) return;
       if (command.op === "start") { vmState = "running"; finish(command.id, { ready: true }); }
@@ -125,6 +125,16 @@ async function run() {
     assert.ok(await page.locator("#modelButton").isDisabled());
     assert.equal(await page.evaluate(() => localStorage.getItem("codexPhoneReasoning")), "max");
     await page.locator("#prompt").fill("専用フォルダ内の検査をしてください");
+    assert.ok(await page.locator("#send").isDisabled());
+    assert.match(await page.locator("#labStateLabel").textContent(), /AI作業は準備中/);
+    await page.locator("#prompt").press("Control+Enter");
+    assert.equal(await page.locator("#prompt").inputValue(), "専用フォルダ内の検査をしてください");
+    assert.equal(runCount, 0);
+    await page.evaluate(async () => { await loadArtifacts(); await showArtifact("/home/agent-lab/work/example/report.md"); });
+    assert.match(await page.locator("#artifactPreview").textContent(), /実験室から取得/);
+    await page.evaluate(() => setMainView("chat"));
+    aiEnabled = true; // Simulated approval/verification, never a real guest toggle.
+    await page.waitForFunction(() => getBridgeState(activeBridgeId).status?.lab?.aiReady && !sendButton.disabled);
     await page.locator("#prompt").press("Control+Enter");
     await page.waitForFunction(() => currentRunState === "running" && !pendingSubmission && runStateLabel.textContent === "Windowsで作業中");
     assert.equal(runCount, 1);
@@ -155,7 +165,7 @@ async function run() {
     assert.equal(await page.evaluate(() => localStorage.getItem("codexPhoneReasoning")), "max");
     assert.deepEqual(errors, []);
     assert.deepEqual(results, []);
-    process.stdout.write("Windows lab UI passed: three machines, offline cache, guarded folder, one submission through reconnect, results, original draft/settings.\n");
+    process.stdout.write("Windows lab UI passed: three machines, read-only before AI verification, offline cache, guarded folder, one submission through reconnect, results, original draft/settings.\n");
   } finally {
     clearInterval(worker);
     await browser.close();

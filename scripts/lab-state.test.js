@@ -7,7 +7,7 @@ const { LabState, labPath } = require("./lab-state");
 const root = "/home/agent-lab/work";
 
 function ready(store) {
-  store.heartbeat({ vmState: "running", guestReady: true });
+  store.heartbeat({ vmState: "running", guestReady: true, aiReady: true });
   for (const job of Object.values(store.state.jobs)) {
     if (job.finishedAt) continue;
     if (job.op === "browse") store.complete(job.id, { ok: true, data: { path: root, entries: [] } });
@@ -19,6 +19,20 @@ function ready(store) {
 test("only the explicit lab directory is addressable", () => {
   assert.equal(labPath(`${root}/計画 & 作業`, root), `${root}/計画 & 作業`);
   for (const name of ["/etc/passwd", `${root}2`, `${root}/../.codex/auth.json`, `${root}/.env`, `${root}/a/./b`, "C:\\Users\\USER", `${root}/a\0b`]) assert.throws(() => labPath(name, root));
+});
+
+test("file availability alone never authorizes or queues an AI turn", () => {
+  const store = ready(new LabState({ workRoot: root }));
+  const thread = store.createThread(root);
+  for (const aiReady of [undefined, false, "true"]) {
+    store.heartbeat({ vmState: "running", guestReady: true, aiReady });
+    assert.equal(store.target().ready, true);
+    assert.equal(store.target().aiReady, false);
+    assert.match(store.target().label, /AI作業は準備中/);
+    assert.throws(() => store.enqueue("run", { prompt: "test" }, { threadId: thread.id }), /承認・実機検証/);
+    assert.equal(thread.history.length, 0);
+    assert.equal(Object.values(store.state.jobs).filter(job => job.op === "run").length, 0);
+  }
 });
 
 test("accepted submissions survive reconnect/restart and are not accepted twice", t => {

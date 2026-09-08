@@ -49,9 +49,10 @@ class LabState extends EventEmitter {
     const vmState = hostOnline ? this.state.target.vmState : "unknown";
     const ready = hostOnline && vmState === "running" && this.state.target.guestReady === true;
     const pendingOperation = Object.values(this.state.jobs).find(job => ["start", "shutdown"].includes(job.op) && !job.finishedAt)?.op;
-    return { ...this.state.target, vmState, hostOnline, ready, stale: !ready,
+    const aiReady = ready && this.state.target.aiReady === true;
+    return { ...this.state.target, vmState, hostOnline, ready, aiReady, stale: !ready,
       pendingOperation,
-      label: !hostOnline ? "Windowsへの接続を確認できません" : pendingOperation === "start" ? "実験室へ起動を依頼しています" : pendingOperation === "shutdown" ? "実験室へ停止を依頼しています" : vmState === "off" ? "実験室は停止中" : ready ? "実験室を操作できます" : "実験室を確認中" };
+      label: !hostOnline ? "Windowsへの接続を確認できません" : pendingOperation === "start" ? "実験室へ起動を依頼しています" : pendingOperation === "shutdown" ? "実験室へ停止を依頼しています" : vmState === "off" ? "実験室は停止中" : aiReady ? "実験室を操作できます" : ready ? "ファイルは確認できます・AI作業は準備中" : "実験室を確認中" };
   }
 
   requireReady() {
@@ -61,7 +62,7 @@ class LabState extends EventEmitter {
   heartbeat(target = {}) {
     if (!["running", "off", "starting", "stopping", "unknown"].includes(target.vmState)) throw failure("Invalid VM state");
     this.lastHeartbeat = this.now();
-    this.state.target = { vmState: target.vmState, guestReady: target.guestReady === true, observedAt: this.now() };
+    this.state.target = { vmState: target.vmState, guestReady: target.guestReady === true, aiReady: target.aiReady === true, observedAt: this.now() };
     this.save();
     this.emit("target", this.target());
     if (this.target().ready) {
@@ -113,6 +114,7 @@ class LabState extends EventEmitter {
     if (op !== "start") this.requireReady();
     else if (!this.target().hostOnline) throw failure("Windowsの中継処理が接続されていません。", 409);
     if (op === "run") {
+      if (!this.target().aiReady) throw failure("この接続の作業権限の承認・実機検証が未完了です。入力は残し、AIは起動しません。", 409);
       if (Object.values(this.state.jobs).some(job => ["run", "shutdown"].includes(job.op) && !job.finishedAt)) throw failure("実験室で別の作業が動いています。終了後に送信してください。", 409);
       const thread = this.thread(threadId);
       if (typeof args.prompt !== "string" || !args.prompt.trim() || args.prompt.length > 20000) throw failure("指示は1〜20,000文字で入力してください。");

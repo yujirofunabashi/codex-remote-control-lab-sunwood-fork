@@ -1,6 +1,7 @@
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import Mock
 import uuid
 from lab_host import HostAgent, RelayClient, WindowsVM
 
@@ -121,6 +122,21 @@ class HostTest(unittest.TestCase):
         restored.drain()
         self.assertFalse(restored.state["jobs"][command["id"]]["result"]["ok"])
         self.assertEqual(restored.driver.sent, [])
+
+    def test_read_only_guest_cannot_get_a_model_connection(self):
+        vm = WindowsVM.__new__(WindowsVM)
+        vm.ready, vm.ai_ready = True, False
+        vm.net = Mock()
+        vm.net.inspect.return_value = {"State": "Running"}
+        def require(value, message):
+            if not value:
+                raise RuntimeError(message)
+        vm.net.require.side_effect = require
+        vm.check_attachment = Mock()
+        with self.assertRaisesRegex(RuntimeError, "承認・実機検証"):
+            vm.network(True)
+        vm.net.ps.assert_not_called()
+        vm.net.gateway_check.assert_not_called()
 
 
 if __name__ == "__main__":

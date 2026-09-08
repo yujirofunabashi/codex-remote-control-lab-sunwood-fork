@@ -16,6 +16,7 @@ import signal
 import stat
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -150,6 +151,49 @@ def guarded_helper(config):
     return helper
 
 
+def read_medium_instance():
+    """Read the actual read-only CD, not only cloud-init's potentially stale cache."""
+    directory = tempfile.mkdtemp(prefix="phone-lab-medium-", dir="/run")
+    mounted = False
+    try:
+        subprocess.run(["mount", "-t", "iso9660", "-o", "ro,nosuid,nodev,noexec", "/dev/sr0", directory],
+                       check=True, timeout=10, capture_output=True)
+        mounted = True
+        fd = os.open(Path(directory) / "meta-data", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_size > 4096:
+                raise ValueError("Invalid lab medium metadata")
+            record = json.loads(os.read(fd, 4097))
+            return record.get("instance-id") if isinstance(record, dict) else None
+        finally:
+            os.close(fd)
+    finally:
+        if mounted:
+            # If unmount fails, preserve the mounted directory rather than try
+            # to remove its contents. No recursive cleanup is used here.
+            subprocess.run(["umount", directory], check=True, timeout=10, capture_output=True)
+        os.rmdir(directory)
+
+
+def medium_is_current(config, instance_file=Path("/var/lib/cloud/data/instance-id")):
+    """A later boot into another experiment must not claim its console or shut it down."""
+    expected = config.get("instanceId", "")
+    if not isinstance(expected, str) or not re.fullmatch(r"agent-lab-phone-[a-z0-9-]{1,40}", expected):
+        return False
+    try:
+        fd = os.open(instance_file, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022 or info.st_size > 128:
+                return False
+            return os.read(fd, 129).decode("ascii").strip() == expected and read_medium_instance() == expected
+        finally:
+            os.close(fd)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return False
+
+
 def codex_command(config, workdir, session=None):
     args = [config["codex"], "-a", "never", "-c", 'forced_login_method="chatgpt"',
             "-c", 'cli_auth_credentials_store="file"', "-c", 'web_search="disabled"',
@@ -215,7 +259,8 @@ class Guest:
         self.emit({"id": task_id, "result": result})
 
     def identity(self):
-        return {"ready": not self.stopping, "activeTask": self.active, "guestSha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}
+        return {"ready": not self.stopping, "aiReady": not self.stopping and self.config.get("aiExecutionVerified") is True,
+                "activeTask": self.active, "guestSha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}
 
     def handle(self, request):
         task_id, op, args = request.get("id", ""), request.get("op"), request.get("args", {})
@@ -268,6 +313,8 @@ class Guest:
                 raise RuntimeError("実験室で別の作業が動いています。")
             if self.stopping:
                 raise RuntimeError("実験室は停止処理中です。")
+            if self.config.get("aiExecutionVerified") is not True:
+                raise RuntimeError("この接続の作業権限の承認・実機検証が未完了です。AIは起動していません。")
             prompt, thread_id, workdir = args.get("prompt"), args.get("threadId", ""), args.get("workdir", "")
             if not isinstance(prompt, str) or not 0 < len(prompt.strip()) <= 20000 or not re.fullmatch(r"lab-(?:first-plan|[a-f0-9-]{36})", thread_id):
                 raise ValueError("Invalid task input")
@@ -340,10 +387,20 @@ def main():
     import tty
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, required=True)
+    parser.add_argument("--check-medium", action="store_true")
     args = parser.parse_args()
     if args.config.is_symlink() or args.config.stat().st_uid != 0 or args.config.stat().st_mode & 0o022:
         raise RuntimeError("Guest config must be protected by the controller")
     config = json.loads(args.config.read_text())
+    current = medium_is_current(config)
+    if args.check_medium:
+        raise SystemExit(0 if current else 1)
+    if not current:
+        raise RuntimeError("別の実験の起動媒体のため、接続・停止処理は開始しません。")
+    guarded_helper(config)
+    # A unit-level Conflicts= would stop the other console before ExecCondition
+    # is evaluated. Claim it only after this medium and its guard are verified.
+    subprocess.run(["systemctl", "stop", "serial-getty@ttyS0.service"], check=True, timeout=10, capture_output=True)
     os.umask(0o077)
     fd = os.open("/dev/ttyS0", os.O_RDWR | os.O_NOCTTY)
     original = termios.tcgetattr(fd)

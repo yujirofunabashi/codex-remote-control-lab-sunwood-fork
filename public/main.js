@@ -5410,12 +5410,15 @@ function renderLabControls() {
   accessButton.textContent = info ? "実験フォルダ内のみ" : accessMode.label;
   addButton.disabled = Boolean(info);
   updateModelButton();
-  if (!info) return;
   const state = getBridgeState(activeBridgeId);
-  const lab = state.status?.lab || info.lab || {};
+  const lab = state.status?.lab || info?.lab || {};
+  sendButton.disabled = !connectionReady || Boolean(pendingSubmission) || Boolean(info && !lab.aiReady);
+  sendButton.title = info && !lab.aiReady ? "AI作業は準備中です。入力は残せます。"
+    : pendingSubmission ? "送信確認中です" : connectionReady ? "送信" : "接続後に送信できます";
+  if (!info) return;
   const busy = labOperationPending.has(activeBridgeId) || Boolean(lab.pendingOperation);
   labStateLabel.textContent = lab.label || "実験室の状態を確認中";
-  labObservedAt.textContent = `${lab.observedAt ? `Windows確認: ${new Date(lab.observedAt).toLocaleString("ja-JP")}` : "Windowsの状態は未取得"}。${lab.ready ? "専用の作業フォルダだけを操作できます。" : "結果は保存済みの表示です。"}`;
+  labObservedAt.textContent = `${lab.observedAt ? `Windows確認: ${new Date(lab.observedAt).toLocaleString("ja-JP")}` : "Windowsの状態は未取得"}。${lab.aiReady ? "専用の作業フォルダだけを操作できます。" : lab.ready ? "専用フォルダを閲覧できます。AI作業は承認・実機検証後に有効にします。" : "結果は保存済みの表示です。"}`;
   labStart.disabled = busy || !lab.hostOnline || lab.vmState !== "off";
   labShutdown.disabled = busy || !lab.ready || (state.status?.bridges || []).some(bridge => ["running", "streaming", "interrupting", "disconnected"].includes(bridge.run?.state));
 }
@@ -9275,6 +9278,11 @@ composer.addEventListener("submit", (event) => {
   const inputValue = promptInput.value;
   const text = inputValue.trim();
   if (!text && !pendingFiles.length) return;
+  const lab = activeLabInfo();
+  if (lab && !(getBridgeState(activeBridgeId).status?.lab || lab.lab)?.aiReady) {
+    addStatus("AI作業の承認・実機検証が未完了のため送信しません。入力は残しています。");
+    return;
+  }
   if (pendingSubmission) {
     addStatus("前回の送信確認中です。入力は残しています。");
     return;

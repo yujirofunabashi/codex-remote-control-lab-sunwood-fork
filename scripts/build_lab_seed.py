@@ -12,10 +12,10 @@ CONTROL = "/opt/agent-lab/control/phone-bridge"
 UNIT = """[Unit]
 Description=Owner-operated lab console, no automatic AI tasks
 Requires=agent-lab-network-guard.service agent-lab-egress.service
-After=agent-lab-network-guard.service agent-lab-egress.service
-Conflicts=serial-getty@ttyS0.service
+After=cloud-config.service agent-lab-network-guard.service agent-lab-egress.service
 [Service]
 Type=simple
+ExecCondition=/usr/bin/python3 -B /opt/agent-lab/control/phone-bridge/lab_guest.py --config /opt/agent-lab/control/phone-bridge/config.json --check-medium
 ExecStart=/usr/bin/python3 -B /opt/agent-lab/control/phone-bridge/lab_guest.py --config /opt/agent-lab/control/phone-bridge/config.json
 RuntimeMaxSec=1850
 TimeoutStopSec=45
@@ -54,7 +54,9 @@ def build(output, instance, config, network):
     source = Path(__file__).with_name("lab_guest.py")
     files = [
         {"path": CONTROL + "/lab_guest.py", "owner": "root:root", "permissions": "0644", "encoding": "b64", "content": base64.b64encode(source.read_bytes()).decode()},
-        {"path": CONTROL + "/config.json", "owner": "root:root", "permissions": "0600", "content": json.dumps(config)},
+        # Native execution stays off until the lab's current sandbox boundary
+        # is independently verified and its owner authorizes the new workflow.
+        {"path": CONTROL + "/config.json", "owner": "root:root", "permissions": "0600", "content": json.dumps(dict(config, instanceId=instance, aiExecutionVerified=False))},
         {"path": "/etc/systemd/system/phone-lab-bridge.service", "owner": "root:root", "permissions": "0644", "content": UNIT},
     ]
     cloud = {"users": [], "disable_root": True, "ssh_pwauth": False, "ssh_deletekeys": False, "ssh_genkeytypes": [],

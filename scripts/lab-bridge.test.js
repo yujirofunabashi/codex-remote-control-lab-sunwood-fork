@@ -17,7 +17,7 @@ async function fixture(t) {
   const worker = (url, body, headers = {}) => request(`/worker/${url}`, { method: "POST", headers: { "content-type": "application/json", "x-lab-worker-token": config.workerToken, ...headers }, body: JSON.stringify(body) });
   async function ready() {
     for (let i = 0; i < 3; i++) {
-      const response = await worker("poll", { target: { vmState: "running", guestReady: true } });
+      const response = await worker("poll", { target: { vmState: "running", guestReady: true, aiReady: true } });
       const { command } = await response.json();
       if (!command) break;
       await worker("result", { id: command.id, result: { ok: true, data: command.op === "browse" ? { path: root, entries: [] } : { artifacts: [] } } });
@@ -84,7 +84,7 @@ test("the real socket protocol accepts a prompt once, rejects scope changes, and
   socket.send(JSON.stringify(prompt));
   await until(() => messages.filter(message => message.type === "promptAccepted").length === 2);
   assert.equal(thread.history.length, 1);
-  const poll = await (await app.worker("poll", { target: { vmState: "running", guestReady: true } })).json();
+  const poll = await (await app.worker("poll", { target: { vmState: "running", guestReady: true, aiReady: true } })).json();
   assert.equal(poll.command.op, "run");
   assert.equal(poll.command.args.workdir, root);
   assert.equal(JSON.stringify(poll).includes(app.config.phoneToken), false);

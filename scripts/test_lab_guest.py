@@ -4,11 +4,12 @@ import json
 import os
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 import uuid
 
-from lab_guest import WorkFiles, Guest, encode_frame, decode_frame, service_command
+from lab_guest import WorkFiles, Guest, encode_frame, decode_frame, service_command, medium_is_current, main
 from build_lab_seed import build, guest_config
 
 
@@ -88,6 +89,7 @@ class GuestTest(unittest.TestCase):
         self.root = Path(self.temp.name)
         (self.root / "work").mkdir()
         self.config = config(self.root)
+        self.config["aiExecutionVerified"] = True  # Only this test's fake launcher.
         self.messages, self.commands = [], []
         def launch(command, **kwargs):
             self.commands.append(command)
@@ -102,6 +104,16 @@ class GuestTest(unittest.TestCase):
 
     def request(self, task_id=None, thread_id=None):
         return {"id": task_id or str(uuid.uuid4()), "op": "run", "args": {"prompt": "検査して", "threadId": thread_id or "lab-" + str(uuid.uuid4()), "workdir": self.config["workRoot"]}}
+
+    def test_reading_does_not_authorize_native_ai_execution(self):
+        for value in (None, False, "true"):
+            self.config["aiExecutionVerified"] = value
+            self.assertTrue(self.guest.identity()["ready"])
+            self.assertFalse(self.guest.identity()["aiReady"])
+            self.guest.handle(self.request())
+            self.assertFalse(self.messages[-1]["result"]["ok"])
+        self.assertEqual(self.commands, [])
+        self.assertEqual(self.guest.state["tasks"], {})
 
     def test_persistent_deduplication_and_native_resume(self):
         request = self.request()
@@ -170,6 +182,46 @@ class GuestTest(unittest.TestCase):
 
 
 class SeedTest(unittest.TestCase):
+    def test_wrong_medium_exits_before_any_console_or_shutdown_operation(self):
+        with tempfile.TemporaryDirectory(prefix="phone-lab-start-") as temp:
+            settings = Path(temp) / "config.json"
+            settings.write_text("{}")
+            with patch("lab_guest.sys.argv", ["lab_guest.py", "--config", str(settings)]), \
+                 patch("lab_guest.Path.stat", return_value=SimpleNamespace(st_uid=0, st_mode=0o100600)), \
+                 patch("lab_guest.medium_is_current", return_value=False), \
+                 patch("lab_guest.subprocess.run") as commands, patch("lab_guest.os.open") as opened:
+                with self.assertRaisesRegex(RuntimeError, "別の実験"):
+                    main()
+                commands.assert_not_called()
+                opened.assert_not_called()
+
+    def test_other_experiment_medium_never_starts_receiver(self):
+        with tempfile.TemporaryDirectory(prefix="phone-lab-medium-") as temp:
+            source = Path(temp) / "instance-id"
+            values = {"instanceId": "agent-lab-phone-test"}
+            source.write_text("agent-lab-phone-test\n")
+            # Ownership is checked in production; emulate the root-owned cloud
+            # record without making tests write anywhere outside their fixture.
+            info = source.stat()
+            protected = SimpleNamespace(st_mode=info.st_mode & ~0o022, st_uid=0, st_size=info.st_size)
+            with patch("lab_guest.os.fstat", return_value=protected), patch("lab_guest.read_medium_instance", return_value="agent-lab-phone-test") as medium:
+                self.assertTrue(medium_is_current(values, source))
+                medium.return_value = "agent-lab-internal-report-10"
+                self.assertFalse(medium_is_current(values, source))
+                medium.side_effect = OSError("no CD")
+                self.assertFalse(medium_is_current(values, source))
+                medium.side_effect = None
+                medium.return_value = "agent-lab-phone-test"
+                source.write_text("agent-lab-internal-report-10\n")
+                self.assertFalse(medium_is_current(values, source))
+                self.assertFalse(medium_is_current({}, source))
+                alias = Path(temp) / "alias"
+                alias.symlink_to(source)
+                self.assertFalse(medium_is_current(values, alias))
+            with patch("lab_guest.os.fstat", return_value=SimpleNamespace(st_mode=info.st_mode, st_uid=501, st_size=info.st_size)):
+                self.assertFalse(medium_is_current(values, source))
+            self.assertFalse(medium_is_current(values, Path(temp) / "missing"))
+
     def test_no_credentials_bootstrapping_or_ai_turns_in_new_medium(self):
         with tempfile.TemporaryDirectory(prefix="phone-lab-seed-") as temp:
             values = config(Path(temp))
@@ -181,6 +233,14 @@ class SeedTest(unittest.TestCase):
             self.assertEqual(cloud["users"], [])
             self.assertFalse(cloud["ssh_deletekeys"])
             self.assertEqual(len(cloud["write_files"]), 3)
+            installed = json.loads(cloud["write_files"][1]["content"])
+            self.assertEqual(installed["instanceId"], "agent-lab-phone-test")
+            self.assertIs(installed["aiExecutionVerified"], False)
+            unit = cloud["write_files"][2]["content"]
+            self.assertIn("After=cloud-config.service ", unit)
+            self.assertIn("ExecCondition=", unit)
+            self.assertIn("--check-medium", unit)
+            self.assertNotIn("Conflicts=", unit)
             self.assertFalse(any("/home/" in entry["path"] for entry in cloud["write_files"]))
             self.assertEqual(cloud["runcmd"], [["systemctl", "daemon-reload"], ["systemctl", "enable", "--now", "phone-lab-bridge.service"]])
             with self.assertRaises(FileExistsError):

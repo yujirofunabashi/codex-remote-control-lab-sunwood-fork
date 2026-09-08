@@ -70,6 +70,7 @@ class WindowsVM:
         self.check_attachment(self.net.inspect())
         self.pipe = None
         self.ready = False
+        self.ai_ready = False
         self.write_lock = threading.Lock()
         self.reader = None
         self.closed = False
@@ -82,11 +83,11 @@ class WindowsVM:
         if state["State"] == "Off":
             allowed.append(self.config["previousSeed"])
         self.net.require(any(self.net.same_path(state["Dvd"], medium) for medium in allowed),
-                         "別の実験の起動媒体です。その実験の終了と引き継ぎを確認してください。")
+                         "別の実験の起動媒体です。作業の停止と再開設定の引き継ぎを確認してください。")
 
     def target(self):
         if time.monotonic() - self.inspected_at < 4:
-            return dict(self.snapshot, guestReady=self.ready)
+            return dict(self.snapshot, guestReady=self.ready, aiReady=self.ready and self.ai_ready)
         try:
             state = self.net.inspect()
             self.net.validate_acl(state)
@@ -104,7 +105,7 @@ class WindowsVM:
             self.ready = False
             self.snapshot = {"vmState": "unknown", "guestReady": False}
         self.inspected_at = time.monotonic()
-        return dict(self.snapshot, guestReady=self.ready)
+        return dict(self.snapshot, guestReady=self.ready, aiReady=self.ready and self.ai_ready)
 
     def open_pipe(self):
         if self.pipe is not None:
@@ -149,10 +150,12 @@ class WindowsVM:
                         continue
                     if message.get("ready") is True and message.get("version") == 1:
                         self.ready = message.get("guestSha256") == self.config["guestSha256"]
+                        self.ai_ready = self.ready and message.get("aiReady") is True
                     elif message.get("id") in self.pending_status:
                         self.pending_status.discard(message["id"])
                         data = message.get("result", {}).get("data", {})
                         self.ready = data.get("ready") is True and data.get("guestSha256") == self.config["guestSha256"]
+                        self.ai_ready = self.ready and data.get("aiReady") is True
                     else:
                         self.emit(message)
         finally:
@@ -207,6 +210,7 @@ class WindowsVM:
         self.check_attachment(current)
         if enabled:
             self.net.require(current["State"] == "Running" and self.ready, "guest must report ready before connecting")
+            self.net.require(self.ai_ready, "AI作業の承認・実機検証が未完了のため、通信は接続しません。")
             self.net.gateway_check(current)
             self.net.require(current["Switch"] in ("", "Default Switch", None), "different guest switch")
             self.net.ps("Connect-VMNetworkAdapter -VMName agent-lab -SwitchName 'Default Switch'")
