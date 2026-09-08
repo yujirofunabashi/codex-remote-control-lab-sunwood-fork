@@ -5012,6 +5012,20 @@ function getBridge(threadId, provider = agentProvider, connectionId = crypto.ran
   const requestedWorkdir = options.workdir ? validateWorkdir(options.workdir) : "";
   const requestedServiceTier = requestedProvider === "codex" && Object.prototype.hasOwnProperty.call(options, "serviceTier") ? normalizeServiceTier(options.serviceTier) : null;
   const bridgeOptions = { ...options, ...(requestedWorkdir ? { workdir: requestedWorkdir } : {}), serviceTier: requestedServiceTier };
+  // Keep creation ownership on the bridge itself: its map key is promoted to
+  // the real thread id before the browser necessarily receives ready.
+  const newSessionId = !threadId && bridgeOptions.fresh ? String(options.newSessionId || "") : "";
+  if (newSessionId && !/^[A-Za-z0-9_-]{1,128}$/.test(newSessionId)) throw new Error("Invalid new session id");
+  if (newSessionId) {
+    for (const bridge of bridges.values()) {
+      if (bridge.provider !== requestedProvider || bridge.newSessionId !== newSessionId) continue;
+      if (!bridgeMatchesWorkdir({ bridgeWorkdir: bridge.newSessionWorkdir, targetWorkdir: requestedWorkdir || workdir })) {
+        throw new Error("New session workdir changed; start a separate session");
+      }
+      if (typeof bridge.isReusable === "function" && !bridge.isReusable()) throw new Error("New session unavailable; start a separate session");
+      return bridge;
+    }
+  }
   // A Claude session already names its own directory, and the bridge reads it
   // out of the transcript - a requested folder is only the fallback for a
   // session that does not exist yet. So for a request that names one, the
@@ -5068,7 +5082,10 @@ function getBridge(threadId, provider = agentProvider, connectionId = crypto.ran
     existing = null;
   }
   if (!existing && !bridges.has(key)) {
-    bridges.set(key, requestedProvider === "claude" ? new ClaudeBridge(threadId, baseKey, bridgeOptions) : new SharedBridge(threadId, baseKey, bridgeOptions));
+    const created = requestedProvider === "claude" ? new ClaudeBridge(threadId, baseKey, bridgeOptions) : new SharedBridge(threadId, baseKey, bridgeOptions);
+    created.newSessionId = newSessionId;
+    created.newSessionWorkdir = requestedWorkdir || workdir;
+    bridges.set(key, created);
   }
   return bridges.get(key);
 }
@@ -5107,6 +5124,14 @@ async function bindBrowser(browser, phoneToken, threadId, provider = agentProvid
   }
   if (browser.readyState !== WebSocket.OPEN) return;
   const requestedWorkspace = usableRequestedWorkdir(options.workdir);
+  if (!threadId && requestedWorkspace.problem) {
+    browser.send(JSON.stringify({
+      type: "error", code: "invalid_new_session_workdir", retryable: false,
+      text: `選んだ作業場所を使えないため、新しい会話を開始できません。新規セッションからフォルダを選び直してください: ${requestedWorkspace.problem}`,
+    }));
+    browser.close();
+    return;
+  }
   const bridge = resolveBridge(threadId, requestedProvider, crypto.randomUUID(), { ...options, workdir: requestedWorkspace.workdir });
   bridge.addClient(browser);
   if (requestedWorkspace.problem) {
@@ -6155,6 +6180,7 @@ async function main() {
     wss.handleUpgrade(req, socket, head, (ws) => {
       bindBrowser(ws, phoneToken, threadId, requestedProvider, {
         fresh,
+        newSessionId: url.searchParams.get("newSessionId") || "",
         workdir: url.searchParams.get("workdir") || "",
         serviceTier: url.searchParams.has("serviceTier") ? url.searchParams.get("serviceTier") : undefined,
       }).catch((error) => {

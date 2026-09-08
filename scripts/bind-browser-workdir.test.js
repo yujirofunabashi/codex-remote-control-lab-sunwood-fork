@@ -5,7 +5,6 @@
 const assert = require("node:assert/strict");
 const { EventEmitter } = require("node:events");
 const test = require("node:test");
-const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const WebSocket = require("ws");
@@ -75,16 +74,12 @@ test("dropping the folder is reported rather than silently working elsewhere", a
 });
 
 test("a folder that exists is still passed through untouched", async () => {
-  const real = fs.mkdtempSync(path.join(os.homedir(), "bind-workdir-"));
+  const real = os.homedir();
   const seen = [];
   const requested = [];
-  try {
-    await bind(new FakeBrowser(), real, seen, requested);
-    assert.equal(requested[0], real);
-    assert.equal(seen.filter((entry) => entry.type === "status").length, 0, "nothing to report when the folder is usable");
-  } finally {
-    fs.rmSync(real, { recursive: true, force: true });
-  }
+  await bind(new FakeBrowser(), real, seen, requested);
+  assert.equal(requested[0], real);
+  assert.equal(seen.filter((entry) => entry.type === "status").length, 0, "nothing to report when the folder is usable");
 });
 
 test("no folder asked for is not a problem to report", async () => {
@@ -94,3 +89,19 @@ test("no folder asked for is not a problem to report", async () => {
   assert.equal(requested[0], "");
   assert.equal(seen.filter((entry) => entry.type === "status").length, 0);
 });
+
+for (const provider of ["codex", "claude"]) {
+  test(`a missing new ${provider} folder never falls back to the default project`, async () => {
+    const browser = new FakeBrowser();
+    let resolved = false;
+    await bindBrowser(browser, "fixture-token", null, provider, { fresh: true, workdir: "/not-an-allowed-project" }, {
+      async ensureCodexServerRunning() {},
+      getBridge() { resolved = true; return fakeBridge([]); },
+    });
+    assert.equal(resolved, false, "no conversation may be created in another folder");
+    assert.equal(browser.messages[0]?.type, "error");
+    assert.equal(browser.messages[0]?.code, "invalid_new_session_workdir");
+    assert.equal(browser.messages[0]?.retryable, false);
+    assert.equal(browser.closeCalls, 1);
+  });
+}
