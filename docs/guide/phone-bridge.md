@@ -84,13 +84,14 @@ npm run phone
 
 In this mode, OCdex does not start a new app-server. It uses the app-server behind the socket. If Codex Desktop opens the same headless app-server as a Remote Connection, the Desktop remote view and OCdex browser subscribe to the same thread event stream.
 
-### Isolated Windows lab connection (prepared; hardware verification pending)
+### Isolated Windows lab connection (file access verified; AI execution pending) {#windows-lab}
 
 A separate adapter can list an isolated Windows-hosted Linux lab beside Air and mini. It is **not** a Windows desktop or unrestricted Windows file browser. See the [Japanese setup and boundary reference](../ja/guide/phone-bridge.md#windows-lab).
 
 - `scripts/start-lab-bridge.js` serves the existing UI protocol and persists conversations, assigned request IDs and cached files on the trusted relay.
 - `scripts/lab_host.py` polls that relay from Windows. It verifies the existing VM/network guard and exchanges framed data over the existing named-pipe serial console. It opens no inbound Windows listener and copies no fleet credentials into the guest.
 - `scripts/lab_guest.py` permits only confined folder browsing, bounded text reads, artifact indexing, explicit AI turns, interruption and shutdown. Symlinks, hidden paths, outside paths, special files and multiply linked file reads are rejected.
+- Opening Files refreshes the index, including immediately after entering a connection key without reloading the page. A late response updates the cache without replacing a different panel or file opened in the meantime.
 
 Launch the relay manually with `npm run phone:lab -- /absolute/path/.phone-lab.local.json`. This owner-readable-only local file requires `id`, `targetHost`, `host`, `port`, `workRoot`, `model`, `effort`, `stateFile`, independent random `phoneToken` and `workerToken`, and exact `allowedOrigins`. Bind only to loopback or the relay's Tailscale IP. An HTTPS UI needs a private HTTPS proxy; do not expose a public tunnel. The ordinary phone command does not activate a lab.
 
@@ -108,7 +109,9 @@ The selected model/effort and workspace-write/never policy are fixed for this co
 
 The native-turn prototype uses an ordinary lab user in a hardened transient systemd service, with a 600-second execution limit. The host disconnects its guarded network on completion and has a separate 660-second response watchdog. The guest management receiver shuts down after 30 minutes. It checks both the actual read-only CD metadata and the boot instance record before claiming the console: another experiment's medium must not start this receiver or its shutdown timer. This receiver starts with a manually booted VM using its dedicated medium; it does not enqueue an AI turn. No Windows scheduled task or unattended AI invocation is installed.
 
-`npm run test:lab` verifies confinement, protocol authorization, idempotency and durable result handling. `npm run smoke:lab` exercises the real UI/relay in Chromium and WebKit with a simulated Windows peer. Neither is hardware deployment evidence. Verify guest provisioning, actual AI edits/tests, old evidence preservation and a stopped/disconnected VM separately before calling the connection delivered. Passing a test never grants external or financial approval.
+`npm run test:lab` verifies confinement, protocol authorization, idempotency and durable result handling. `npm run smoke:lab` exercises the real UI/relay in Chromium and WebKit with a simulated Windows peer, including entering a connection key and opening a file through visible controls without a page reload.
+
+On the target hardware on 2026-09-08, the Windows relay connected, the Hyper-V guest booted, confined folder selection and an existing report opened in the browser, three existing output files matched their previously recorded hashes, and the guest shut down normally. No AI turn was requested during that verification. Native AI edits/tests and deployment into the owner's usual Air/mini interfaces remain pending. Protect active work and obtain restart approval before updating those interfaces; verify any new target hardware separately. These checks never grant external or financial approval.
 
 ## Useful Environment Variables
 
