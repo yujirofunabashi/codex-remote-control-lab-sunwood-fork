@@ -20,7 +20,7 @@
     "phone:claude": "PHONE_AGENT_PROVIDER_DEFAULT=claude node scripts/start-phone.js",
     "screenshots:readme": "node scripts/capture-readme-screenshots.js",
     "smoke:mobile": "node scripts/mobile-smoke.js",
-    "smoke:handoff": "node scripts/shared-session-smoke.js && node scripts/resume-copy-smoke.js && node scripts/resume-copy-smoke.js --webkit",
+    "smoke:handoff": "node scripts/codex-empty-restart-smoke.js && node scripts/shared-session-smoke.js && node scripts/resume-copy-smoke.js && node scripts/resume-copy-smoke.js --webkit",
     "smoke:fleet": "node scripts/fleet-machines-smoke.js && node scripts/fleet-machines-smoke.js --webkit",
     "smoke:registry": "node scripts/bridge-registry-smoke.js",
     "phone:loop": "sh -c 'while :; do PHONE_SUPERVISED=1 npm run phone; code=$?; [ \"$code\" = 42 ] || exit \"$code\"; sleep 1; done'",

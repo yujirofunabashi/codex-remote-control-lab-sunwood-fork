@@ -33,7 +33,7 @@ const { servedHttpsEndpoint, tailscaleServeStatus } = require("./remote-url");
 const { defaultCodexAppServerPort, settingEnvKeysForSlot, slotEnvKey, slotSettingValue } = require("./phone-slot-settings");
 const { slashCommandCatalog } = require("./slash-commands");
 const { findLiveBridge, readThreadSnapshot } = require("./thread-read");
-const { isUnavailableHistoryError, emptyCodexThreadWorkdir } = require("./codex-empty-thread");
+const { isUnavailableHistoryError, emptyCodexThreadWorkdir, hasSavedCodexThread } = require("./codex-empty-thread");
 const { latestAssistantQuestion, idleRunStateFromHistory } = require("./question-state");
 
 const root = path.resolve(__dirname, "..");
@@ -1918,7 +1918,7 @@ function isImagePath(filePath) {
 }
 
 function isMissingThreadError(error) {
-  return /no rollout found for thread id/i.test(error?.message || "");
+  return /no rollout found for thread id|^thread not loaded:/i.test(error?.message || "");
 }
 
 function parseJsonish(value) {
@@ -3277,6 +3277,34 @@ class SharedBridge {
     this.emit("error", { text });
   }
 
+  completeStartup(result) {
+    this.threadId = result.thread.id;
+    const resumedWorkdir = result.cwd || result.thread.cwd;
+    if (resumedWorkdir) {
+      try { this.workdir = validateWorkdir(resumedWorkdir); } catch {
+        this.failStartup("この会話の作業フォルダを開けません。元のフォルダがこの Mac にあるか確認してください。");
+        return;
+      }
+    }
+    this.model = result.model || this.model;
+    this.startupFailed = false;
+    this.promoteBridgeKey();
+    this.ready = true;
+    this.history = historyFromThread(result.thread);
+    this.seenUserItems = new Set((result.thread.turns || []).flatMap((turn) =>
+      (turn.items || []).filter((item) => item.type === "userMessage").map((item) => `${turn.id}:${item.id}`)).slice(-historyLimit));
+    this.terminalHistory = terminalHistoryFromChatHistory(this.history);
+    const activeTurn = (result.thread.turns || []).findLast((turn) => turn.status === "inProgress");
+    this.activeTurnId = activeTurn?.id || null;
+    this.turnStarted = Boolean(activeTurn);
+    const idleState = activeTurn
+      ? { state: "running", label: "Agent 処理中", turnId: activeTurn.id }
+      : idleRunStateFromHistory(this.history, runStateFromSessionFile(result.thread));
+    this.setBridgeRunState(idleState.state, idleState.label, idleState.turnId);
+    this.emit("ready", this.readyPayload());
+    if (this.requestedThreadId) this.emit("status", { text: `既存threadを再開しました: ${this.threadId}` });
+  }
+
   bindUpstream() {
     this.upstream.on("open", () => {
       this.request("initialize", {
@@ -3303,6 +3331,21 @@ class SharedBridge {
       // Server requests and client requests use separate id namespaces.
       const pendingMethod = msg.method ? undefined : this.pending.get(msg.id);
 
+      if (pendingMethod === "thread/read:persist-start") {
+        this.pending.delete(msg.id);
+        const started = this.pendingStartedThread;
+        this.pendingStartedThread = null;
+        if (!started || (msg.error && !isUnavailableHistoryError(msg.error))
+          || (msg.result?.thread?.id && msg.result.thread.id !== started.thread.id)
+          || !hasSavedCodexThread(started.thread)) {
+          debugLog("codex.start.save-failed", { threadId: started?.thread?.id, error: msg.error?.message });
+          this.failStartup("新しい会話の保存を確認できませんでした。送信せず、接続状態を確認してから新規作成をやり直してください。");
+          return;
+        }
+        this.completeStartup({ ...started, thread: msg.result?.thread || started.thread });
+        return;
+      }
+
       if (pendingMethod === "thread/read:resume-recovery") {
         this.pending.delete(msg.id);
         if (!msg.error && this.recoverEmptyThread(msg.result?.thread)) return;
@@ -3324,31 +3367,16 @@ class SharedBridge {
           this.failStartup(compact.text);
           return;
         }
-        this.threadId = msg.result.thread.id;
-        const resumedWorkdir = msg.result.cwd || msg.result.thread.cwd;
-        if (resumedWorkdir) {
-          try { this.workdir = validateWorkdir(resumedWorkdir); } catch {
-            this.failStartup("この会話の作業フォルダを開けません。元のフォルダがこの Mac にあるか確認してください。");
-            return;
-          }
+        if (pendingMethod === "thread/start" && !hasSavedCodexThread(msg.result.thread)) {
+          this.pendingStartedThread = msg.result;
+          // Codex materializes its initial record on a full history read, even
+          // when a paginated empty history reports an unsupported-turns error.
+          const id = this.request("thread/read", { threadId: msg.result.thread.id, includeTurns: true });
+          this.pending.set(id, "thread/read:persist-start");
+          this.emit("status", { text: "新しい会話の保存を確認中..." });
+          return;
         }
-        this.model = msg.result.model || this.model;
-        this.startupFailed = false;
-        this.promoteBridgeKey();
-        this.ready = true;
-        this.history = historyFromThread(msg.result.thread);
-        this.seenUserItems = new Set((msg.result.thread.turns || []).flatMap((turn) =>
-          (turn.items || []).filter((item) => item.type === "userMessage").map((item) => `${turn.id}:${item.id}`)).slice(-historyLimit));
-        this.terminalHistory = terminalHistoryFromChatHistory(this.history);
-        const activeTurn = (msg.result.thread.turns || []).findLast((turn) => turn.status === "inProgress");
-        this.activeTurnId = activeTurn?.id || null;
-        this.turnStarted = Boolean(activeTurn);
-        const idleState = activeTurn
-          ? { state: "running", label: "Agent 処理中", turnId: activeTurn.id }
-          : idleRunStateFromHistory(this.history, runStateFromSessionFile(msg.result.thread));
-        this.setBridgeRunState(idleState.state, idleState.label, idleState.turnId);
-        this.emit("ready", this.readyPayload());
-        if (this.requestedThreadId) this.emit("status", { text: `既存threadを再開しました: ${this.threadId}` });
+        this.completeStartup(msg.result);
         return;
       }
 

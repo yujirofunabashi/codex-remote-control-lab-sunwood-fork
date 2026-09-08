@@ -21,12 +21,14 @@ wss.on("connection", (sock) => {
     const msg = JSON.parse(data.toString());
     recorded.push(msg);
     if (msg.method === "initialize") sock.send(JSON.stringify({ id: msg.id, result: {} }));
-    if (msg.method === "thread/start") sock.send(JSON.stringify({ id: msg.id, result: { thread: { id: "test-thread" } } }));
+    if (msg.method === "thread/start") sock.send(JSON.stringify({ id: msg.id, result: { thread: { id: "test-thread", path: sessionPath } } }));
     if (msg.method === "turn/start") sock.send(JSON.stringify({ id: msg.id, result: { turn: { id: "test-turn" } } }));
   });
 });
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "reasoning-effort-"));
+const sessionPath = path.join(tmp, "rollout.jsonl");
+fs.writeFileSync(sessionPath, JSON.stringify({ type: "session_meta", payload: { id: "test-thread", cwd: tmp } }) + "\n");
 process.env.CODEX_APP_SERVER_URL = `ws://127.0.0.1:${APP_SERVER_PORT}`;
 process.env.PHONE_UI_PORT = "45996";
 process.env.PHONE_TOKEN = "test-token";

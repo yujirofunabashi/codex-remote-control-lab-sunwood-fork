@@ -2772,6 +2772,9 @@ body.terminal-focus-mode .composer-footer {
   gap: 6px;
   min-height: 180px;
   max-width: 42ch;
+  min-width: 0;
+  width: 100%;
+  overflow-wrap: anywhere;
   color: var(--muted);
 }
 
@@ -2789,6 +2792,34 @@ body.terminal-focus-mode .composer-footer {
 
 .log-empty-hint {
   color: color-mix(in srgb, var(--muted) 78%, transparent);
+}
+
+.thread-recovery {
+  min-width: 0;
+  max-width: 100%;
+  margin: 12px 0;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.thread-recovery > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.thread-recovery button {
+  min-height: 44px;
+  max-width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  white-space: normal;
 }
 
 .terminal-view {

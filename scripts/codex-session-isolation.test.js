@@ -275,6 +275,47 @@ test("a missing conversation is inspected and fails without starting a replaceme
   assert.equal(requests.length, 1);
 });
 
+test("a new conversation is not ready until Codex has saved its matching header", t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "codex-new-persistence-"));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const sessionPath = path.join(directory, "rollout.jsonl");
+  const own = bridge(null, null);
+  own.ready = false;
+  own.promoteBridgeKey = () => {};
+  own.readyPayload = () => ({ threadId: own.threadId });
+  const requests = [];
+  own.request = (method, params) => { requests.push({ method, params }); return 8; };
+  own.pending.set(7, "thread/start");
+  deliver(own, { id: 7, result: { thread: { id: "new-thread", path: sessionPath, turns: [] } } });
+  assert.equal(own.ready, false, "a generated id alone does not survive a restart");
+  assert.deepEqual(requests, [{ method: "thread/read", params: { threadId: "new-thread", includeTurns: true } }]);
+  fs.writeFileSync(sessionPath, JSON.stringify({ type: "session_meta", payload: { id: "new-thread", cwd: directory } }) + "\n");
+  deliver(own, { id: 8, error: { message: "list_turns is not supported yet" } });
+  assert.equal(own.ready, true);
+  assert.equal(own.threadId, "new-thread");
+  assert.equal(own.events.filter(event => event.type === "ready").length, 1);
+});
+
+for (const savedId of [null, "some-other-thread"]) {
+  test(`a new conversation fails safely when persistence is ${savedId ? "for another id" : "missing"}`, t => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "codex-save-failure-"));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    const sessionPath = path.join(directory, "rollout.jsonl");
+    const own = bridge(null, null);
+    own.ready = false;
+    own.promoteBridgeKey = () => {};
+    own.readyPayload = () => ({});
+    own.request = () => 8;
+    own.pending.set(7, "thread/start");
+    deliver(own, { id: 7, result: { thread: { id: "new-thread", path: sessionPath, turns: [] } } });
+    if (savedId) fs.writeFileSync(sessionPath, JSON.stringify({ type: "session_meta", payload: { id: savedId, cwd: directory } }) + "\n");
+    deliver(own, { id: 8, result: { thread: { id: "new-thread", path: sessionPath, turns: [] } } });
+    assert.equal(own.ready, false);
+    assert.equal(own.startupFailed, true);
+    assert.equal(own.events.some(event => event.type === "ready"), false);
+  });
+}
+
 test("an approval answered on the terminal disappears from the phone", () => {
   const own = bridge("shared");
   const approval = messages("shared").find((message) => message.id === 101);

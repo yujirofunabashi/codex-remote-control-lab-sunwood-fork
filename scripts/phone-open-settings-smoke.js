@@ -40,6 +40,7 @@ async function main() {
     page.setDefaultTimeout(5000);
     page.on("pageerror", error => errors.push(error.message));
     await page.addInitScript(({ homeId, airOrigin }) => {
+      localStorage.setItem("codexPhonePwaInstallHint:v1", "dismissed");
       window.__socketUrls = [];
       class MockWebSocket extends EventTarget {
         constructor(address) {
@@ -81,6 +82,9 @@ async function main() {
     }, { homeId, airOrigin });
     let delayRecovery = null;
     let recoveryRequested = null;
+    let delayWorkspace = null;
+    let workspaceRequested = null;
+    let workspaceFailure = false;
     await page.route("**/api/**", async route => {
       const url = new URL(route.request().url());
       const machine = url.origin === airOrigin ? "air" : "mini";
@@ -101,6 +105,11 @@ async function main() {
         return reply({ threadId: id, provider, history: [{ type: "assistant", text: `${machine} ${provider} の元の回答` }] });
       }
       if (url.pathname === "/api/status") return reply({ provider, bridges: [] });
+      if (url.pathname === "/api/workspaces") {
+        if (workspaceFailure) return reply({ error: "フォルダを確認できません" }, 404);
+        if (delayWorkspace) { workspaceRequested?.(); await delayWorkspace; }
+        return reply({ workspace: { path: JSON.parse(route.request().postData()).path } });
+      }
       if (url.pathname === "/api/config") return reply({ config: { config: { model: "sonnet" } }, auth: { authMethod: "test" } });
       if (url.pathname === "/api/local-settings") return reply({ active: { provider: "claude", model: "sonnet", workdir: cwd }, settings: { provider: "claude", model: "sonnet", workdir: cwd }, options: { providers: ["codex", "claude"], models: ["sonnet"], workspaces: [{ path: cwd, name: "work" }] } });
       if (url.pathname === "/api/workspaces/browse") return reply({ path: cwd, displayPath: `/fixture/${"long-folder-".repeat(30)}`, entries: [{ name: "folder", path: `${cwd}/folder` }] });
@@ -160,6 +169,67 @@ async function main() {
     await page.evaluate(() => renderHistoryEntries([], ""));
     check("a failed history load is never described as an empty conversation", !(await page.locator("#log").innerText()).includes("まだやり取りはありません"));
     check("a genuinely missing thread is retained without creating a replacement", (await view()).thread === "missing" && !(await view()).ready, await view());
+    const recoveryButton = page.getByRole("button", { name: "同じフォルダで新しく開く", exact: true });
+    const recoveryVisible = await recoveryButton.count() === 1;
+    check("a missing conversation offers an explicit way forward", recoveryVisible, await page.evaluate(() => ({ run: currentRunState, ready: connectionReady, thread: selectedThread, workdir: selectedThreadWorkdir(""), panel: document.querySelector(".thread-recovery")?.textContent })));
+    if (recoveryVisible) {
+      await page.locator("#prompt").fill("元の会話に残す下書き");
+      const savedDraftKey = await page.evaluate(() => currentThreadColorKey());
+      const before = await page.evaluate(() => window.__socketUrls.length);
+      try { await recoveryButton.click(); } catch (error) {
+        console.log(JSON.stringify(await page.evaluate(() => ({ view: { run: currentRunState, ready: connectionReady, thread: selectedThread, workdir: selectedThreadWorkdir("") }, log: document.querySelector("#log").innerText, sockets: window.__socketUrls.slice(-3) }))));
+        if (shots) await page.screenshot({ path: path.join(shotsDir, "recovery-failure.png") });
+        throw error;
+      }
+      await settled("codex", "mini-codex");
+      const created = await page.evaluate(() => window.__socketUrls.slice(-1)[0]);
+      const requested = new URL(created);
+      check("recovery opens only the chosen machine, AI and original folder", requested.origin === origin.replace("http:", "ws:")
+        && requested.searchParams.get("provider") === "codex" && requested.searchParams.get("workdir") === "/fixture/mini"
+        && requested.searchParams.get("fresh") === "1" && !requested.searchParams.has("thread"), created);
+      check("one recovery click creates exactly one fresh conversation", await page.evaluate(before => window.__socketUrls.slice(before).filter(value => new URL(value).searchParams.get("fresh") === "1").length, before) === 1);
+      check("the original conversation's draft remains saved", await page.evaluate(key => threadDrafts[key], savedDraftKey) === "元の会話に残す下書き");
+      check("recovery controls disappear once the new conversation opens", await page.locator(".thread-recovery").count() === 0);
+      await page.evaluate(() => selectThread("missing", { thread: { provider: "codex" }, workdir: "/fixture/mini" }));
+      await page.waitForFunction(() => currentRunState === "error");
+      check("returning to the original missing conversation restores its draft", await page.locator("#prompt").inputValue() === "元の会話に残す下書き");
+      await page.evaluate(() => addEntry("error", "元の会話を開けません"));
+      check("recovery controls remain visible alongside the actual failure message", await recoveryButton.isVisible());
+      await page.evaluate(() => setRunState("ready"));
+      check("a later idle status cannot hide the failure before the conversation opens", await page.evaluate(() => currentRunState === "error") && await recoveryButton.isVisible());
+      for (const width of [320, 393]) {
+        await page.setViewportSize({ width, height: 852 });
+        const metrics = await page.locator(".thread-recovery").evaluate(el => ({ width: el.clientWidth, scrollWidth: el.scrollWidth, right: el.getBoundingClientRect().right, viewport: innerWidth }));
+        check(`recovery actions fit ${width}px`, metrics.width > 0 && metrics.scrollWidth <= metrics.width + 1 && metrics.right <= width, metrics);
+      }
+      if (shots) await page.screenshot({ path: path.join(shotsDir, `${process.argv.includes("--webkit") ? "webkit" : "chromium"}-recovery.png`) });
+      workspaceFailure = true;
+      await recoveryButton.click();
+      await page.waitForFunction(() => [...document.querySelectorAll(".thread-recovery button")].every(button => !button.disabled));
+      check("an unavailable folder preserves the original selection and draft", (await view()).thread === "missing" && await page.locator("#prompt").inputValue() === "元の会話に残す下書き");
+      workspaceFailure = false;
+      let releaseWorkspace;
+      delayWorkspace = new Promise(resolve => { releaseWorkspace = resolve; });
+      const workspacePending = new Promise(resolve => { workspaceRequested = resolve; });
+      const freshBefore = await page.evaluate(() => window.__socketUrls.filter(value => new URL(value).searchParams.has("fresh")).length);
+      await recoveryButton.click();
+      await Promise.race([workspacePending, new Promise((_, reject) => setTimeout(() => reject(new Error("Folder validation did not start")), 4000))]);
+      check("repeated recovery clicks are disabled during folder validation", await recoveryButton.isDisabled());
+      await page.evaluate(() => selectThread("mini-codex", { thread: { provider: "codex" }, workdir: "/fixture/mini" }));
+      await settled("codex", "mini-codex");
+      releaseWorkspace();
+      delayWorkspace = null;
+      await page.waitForTimeout(100);
+      check("a late folder validation cannot replace a newly selected conversation", (await view()).thread === "mini-codex"
+        && await page.evaluate(() => window.__socketUrls.filter(value => new URL(value).searchParams.has("fresh")).length) === freshBefore);
+
+      await page.goto(`${origin}/?provider=codex&thread=unknown-folder`);
+      const pickFolder = page.getByRole("button", { name: "フォルダを選んで新しく開く", exact: true });
+      await pickFolder.waitFor();
+      await pickFolder.click();
+      check("an unknown original folder requires explicit folder selection", await page.locator("#newSessionDialog").evaluate(el => el.open) && (await view()).thread === "unknown-folder");
+      await page.keyboard.press("Escape");
+    }
 
     if (checks.find(c => c.name.startsWith("a previously poisoned"))?.ok) {
       let release;

@@ -1239,6 +1239,7 @@ let threadListRequestId = 0;
 let hiddenProjects = [];
 let liveTurnActive = false;
 let connectionReady = false;
+const threadOpenFailures = new Set();
 let pendingSubmission = null;
 let pendingSubmissionTimer = null;
 let lastHistorySignature = "";
@@ -1866,6 +1867,10 @@ function updateInterruptButton() {
 
 function setRunState(state, label) {
   if (!runState || !runStateLabel) return;
+  if (state === "ready" && !connectionReady && threadOpenFailures.has(currentThreadColorKey())) {
+    state = "error";
+    label = "会話を開けません";
+  }
   const nextLabel = label || runStateText[state] || state;
   currentRunState = state;
   if (terminalRunStates.has(state)) interruptRequestPending = false;
@@ -3199,14 +3204,58 @@ function addStatusGroupItem(text) {
 // An empty thread used to be an empty scroll area: most of the screen blank,
 // with nothing saying whether that was the state of the chat or a failure to
 // load it. Removed again the moment anything real is appended.
+function syncThreadRecoveryActions() {
+  const existing = log.querySelector(".thread-recovery");
+  if (!selectedThread || connectionReady || (currentRunState !== "error" && !threadOpenFailures.has(currentThreadColorKey()))) {
+    existing?.remove();
+    return;
+  }
+  const target = { threadId: selectedThread, bridgeId: activeBridgeId, provider: currentThreadProvider(), workdir: selectedThreadWorkdir("") };
+  const signature = JSON.stringify(target);
+  if (existing?.dataset.target === signature) return;
+  existing?.remove();
+  const panel = document.createElement("div");
+  panel.className = "thread-recovery";
+  panel.dataset.target = signature;
+  const hint = document.createElement("p");
+  hint.textContent = "元の会話と下書きを残して、履歴のない新しい会話を開けます。";
+  const actions = document.createElement("div");
+  const find = document.createElement("button");
+  find.type = "button";
+  find.textContent = "履歴を探す";
+  find.addEventListener("click", () => { setSidebarVisible(true); loadThreads({ background: true }).catch(() => {}); });
+  const create = document.createElement("button");
+  create.type = "button";
+  create.textContent = target.workdir ? "同じフォルダで新しく開く" : "フォルダを選んで新しく開く";
+  const isCurrent = () => selectedThread === target.threadId && activeBridgeId === target.bridgeId
+    && currentThreadProvider() === target.provider && selectedThreadWorkdir("") === target.workdir && !connectionReady;
+  create.addEventListener("click", async () => {
+    if (create.disabled || !isCurrent()) return;
+    if (!target.workdir) { showNewSessionPicker(); return; }
+    create.disabled = true;
+    try {
+      const result = await apiPost("/api/workspaces", { path: target.workdir }, { bridgeId: target.bridgeId });
+      if (!isCurrent()) return;
+      if (result.workspace?.path !== target.workdir) throw new Error("元のフォルダを確認できませんでした。フォルダを選び直してください。");
+      await startNewThread({ workdir: target.workdir, bridgeId: target.bridgeId, provider: target.provider });
+    } catch (error) {
+      if (isCurrent()) showToast(error.message);
+    } finally { create.disabled = false; }
+  });
+  actions.append(find, create);
+  panel.append(hint, actions);
+  log.appendChild(panel);
+}
+
 function syncLogEmptyState() {
   if (!log) return;
+  syncThreadRecoveryActions();
   const existing = log.querySelector(".log-empty");
   // A collapsed "作業ログ" group is bookkeeping, not conversation. A thread that
   // has only that is exactly the screen this is for: one grey row at the top and
   // the rest of the height blank.
   const hasConversation = [...log.children].some(
-    (child) => child !== existing && !child.classList.contains("status"),
+    (child) => child !== existing && !child.classList.contains("status") && !child.classList.contains("thread-recovery"),
   );
   if (hasConversation) {
     existing?.remove();
@@ -3214,7 +3263,8 @@ function syncLogEmptyState() {
     return;
   }
   log.classList.add("has-empty-state");
-  const emptyState = currentRunState === "error" ? "error" : selectedThread && !connectionReady ? "loading" : "empty";
+  const failed = currentRunState === "error" || (!connectionReady && threadOpenFailures.has(currentThreadColorKey()));
+  const emptyState = failed ? "error" : selectedThread && !connectionReady ? "loading" : "empty";
   if (existing?.dataset.state === emptyState) {
     log.appendChild(existing);
     return;
@@ -3432,6 +3482,7 @@ function setWorkspaceMeta(meta = {}) {
 
 function setReady(ready) {
   connectionReady = ready;
+  if (ready) threadOpenFailures.delete(currentThreadColorKey());
   const bridgeState = getBridgeState(activeBridgeId);
   bridgeState.connected = ready;
   bridgeState.lastEventAt = Date.now();
@@ -7023,6 +7074,10 @@ async function refreshSelectedThread() {
     if (await recoverSelectedThreadProvider(threadId, provider, bridgeId)) return;
     if (!isCurrent()) return;
     const message = error.message || String(error);
+    if (!connectionReady && /thread not loaded:|no rollout found for thread id/i.test(message)) {
+      threadOpenFailures.add(currentThreadColorKey());
+      setRunState("error", "会話を開けません");
+    }
     if (message !== lastThreadRefreshError) {
       lastThreadRefreshError = message;
       addStatus(`チャット更新を読めませんでした: ${message}`);
@@ -7034,6 +7089,7 @@ async function refreshSelectedThread() {
 
 function showMissingSelectedThread(threadId) {
   if (threadId && selectedThread !== threadId) return;
+  threadOpenFailures.add(currentThreadColorKey());
   const signature = `missing:${activeBridgeId}:${threadId}`;
   if (lastThreadRefreshError !== signature) {
     addStatus("この Mac で元の会話を確認できません。一覧で保存先の Mac と会話を選び直してください。表示中の会話と下書きは保持しています。");
@@ -9296,6 +9352,7 @@ function connect({ preserveHistory = false, freshThread = false, workdir = "" } 
       return;
     }
     if (msg.type === "error") {
+      if (!connectionReady && selectedThread) threadOpenFailures.add(currentThreadColorKey());
       if (msg.retryable === false) {
         suppressedSocketReconnects.add(socket);
         if (reconnectTimer) window.clearTimeout(reconnectTimer);
