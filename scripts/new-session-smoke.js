@@ -28,25 +28,49 @@ async function run() {
       localStorage.setItem("codexPhoneBridgeTokens:v1", JSON.stringify({ air: "fixture-token" }));
       localStorage.setItem("codexPhoneReasoning", "high");
       window.__sessionSockets = [];
+      window.__freshSessions = new Map();
       class MockWebSocket extends EventTarget {
         constructor(address) {
           super();
           this.readyState = 0;
           const url = new URL(address);
           window.__sessionSockets.push(String(address));
+          window.__lastSessionSocket = this;
           setTimeout(() => {
             if (this.readyState === 3) return;
             this.readyState = 1;
             this.dispatchEvent(new Event("open"));
             const fresh = url.searchParams.get("fresh") === "1";
+            if (fresh && window.__rejectFreshWorkdir) {
+              window.__rejectFreshWorkdir = false;
+              this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ type: "error", code: "invalid_new_session_workdir", retryable: false, text: "選んだ作業場所を使えません。" }) }));
+              this.readyState = 3;
+              this.dispatchEvent(new Event("close"));
+              return;
+            }
+            const requestId = url.searchParams.get("newSessionId");
+            const freshId = window.__freshSessions.get(requestId) || `fresh-${window.__sessionSockets.length}`;
+            if (fresh && requestId) window.__freshSessions.set(requestId, freshId);
+            if (fresh && window.__dropFreshReady) {
+              window.__dropFreshReady = false;
+              this.readyState = 3;
+              this.dispatchEvent(new Event("close"));
+              return;
+            }
             const provider = url.searchParams.get("provider");
             const cwd = url.searchParams.get("workdir") || `/Users/${url.port === "45999" ? "air" : "mini"}/project`;
-            this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({
-              type: "ready", provider, threadId: fresh ? `fresh-${window.__sessionSockets.length}` : url.searchParams.get("thread") || "original",
+            const ready = new MessageEvent("message", { data: JSON.stringify({
+              type: "ready", provider, threadId: fresh ? freshId : url.searchParams.get("thread") || "original",
               model: provider === "claude" ? "sonnet" : "gpt-5", workdir: cwd, workspaceLocation: cwd,
               threadTitle: fresh ? "新しいチャット" : "前のチャット", clients: 1, run: { state: "ready" },
               history: fresh ? [] : [{ type: "user", text: "保存しておく会話" }, { type: "assistant", text: "前の返答" }],
-            }) }));
+            }) });
+            if (fresh && window.__holdFreshReady) {
+              window.__holdFreshReady = false;
+              window.__releaseFreshReady = () => this.dispatchEvent(ready);
+              return;
+            }
+            this.dispatchEvent(ready);
           }, 20);
         }
         send() {}
@@ -160,6 +184,10 @@ async function run() {
       await page.screenshot({ path: path.join(directory, `new-session-${engine.name()}.png`) });
     }
     const postsBeforeStart = posts.length;
+    const socketsBeforeStart = await page.evaluate(() => {
+      window.__dropFreshReady = true;
+      return window.__sessionSockets.length;
+    });
     await page.locator("#createNewSession").evaluate(button => { button.click(); button.click(); });
     await page.waitForFunction(() => !document.querySelector("#newSessionDialog").open && connectionReady && selectedThread.startsWith("fresh-"));
     assert.equal(posts.length, postsBeforeStart + 1, "double taps only start once");
@@ -169,9 +197,25 @@ async function run() {
     assert.equal(socket.searchParams.get("workdir"), target);
     assert.equal(socket.searchParams.get("provider"), "codex", "selection survives Air's Claude default");
     assert.equal(socket.searchParams.get("fresh"), "1");
+    const creationSockets = await page.evaluate(start => window.__sessionSockets.slice(start), socketsBeforeStart);
+    assert.equal(creationSockets.length, 2, "lost ready reconnects once");
+    const firstCreation = new URL(creationSockets[0]);
+    assert.ok(firstCreation.searchParams.get("newSessionId"), "new creation has a stable request id");
+    assert.equal(socket.searchParams.get("newSessionId"), firstCreation.searchParams.get("newSessionId"), "retry resumes the same creation");
+    assert.equal(socket.searchParams.get("workdir"), firstCreation.searchParams.get("workdir"));
     assert.equal(socket.searchParams.has("thread"), false);
     assert.ok(!(await page.locator("#log").textContent()).includes("保存しておく会話"));
     assert.equal(await page.evaluate(() => localStorage.getItem("codexPhoneReasoning")), "high");
+    const createdThread = await page.evaluate(() => selectedThread);
+    await page.evaluate(() => {
+      window.__lastSessionSocket.readyState = 3;
+      window.__lastSessionSocket.dispatchEvent(new Event("close"));
+    });
+    await page.waitForFunction(() => connectionReady);
+    const resumedSocket = new URL(await page.evaluate(() => window.__sessionSockets.at(-1)));
+    assert.equal(resumedSocket.searchParams.get("thread"), createdThread);
+    assert.equal(resumedSocket.searchParams.has("fresh"), false, "ready clears new-session intent");
+    assert.equal(resumedSocket.searchParams.has("newSessionId"), false);
     await page.waitForFunction(() => !threadSwitchBusy);
     await page.evaluate(async (bridgeId) => { await selectThread("original", { bridgeId, workdir: "/Users/mini/project", thread: { provider: "codex" } }); }, before.bridge);
     await page.waitForFunction(() => connectionReady && selectedThread === "original");
@@ -190,6 +234,27 @@ async function run() {
     assert.equal(new URL(await page.evaluate(() => window.__sessionSockets.at(-1))).searchParams.get("workdir"), "/Users/mini/新しいプロジェクト");
 
     await page.waitForFunction(() => !threadSwitchBusy);
+    await page.evaluate(() => { window.__holdFreshReady = true; });
+    await page.evaluate(() => startNewThread({ workdir: "/Users/mini/pending", provider: "claude", bridgeId: activeBridgeId }));
+    await page.waitForFunction(() => Boolean(window.__releaseFreshReady));
+    assert.equal(await page.evaluate(() => connectionReady), false, "cannot send before new-session ready");
+    await page.evaluate(() => selectThread("original", { workdir: "/Users/mini/project", bridgeId: activeBridgeId, thread: { provider: "claude" } }));
+    await page.waitForFunction(() => connectionReady && selectedThread === "original");
+    await page.evaluate(() => window.__releaseFreshReady());
+    assert.equal(await page.evaluate(() => selectedThread), "original", "late ready cannot undo an explicit session selection");
+    await page.evaluate(() => connect({ preserveHistory: true }));
+    await page.waitForFunction(() => connectionReady);
+    assert.equal(new URL(await page.evaluate(() => window.__sessionSockets.at(-1))).searchParams.has("newSessionId"), false);
+
+    await page.evaluate(() => { window.__rejectFreshWorkdir = true; });
+    await page.evaluate(() => startNewThread({ workdir: "/Users/mini/removed", provider: "claude", bridgeId: activeBridgeId }));
+    await page.waitForFunction(() => document.querySelector("#log").textContent.includes("選んだ作業場所を使えません"));
+    const socketsAfterRefusal = await page.evaluate(() => window.__sessionSockets.length);
+    await page.waitForTimeout(1250);
+    assert.equal(await page.evaluate(() => window.__sessionSockets.length), socketsAfterRefusal, "invalid folder does not trigger a reconnect loop");
+    assert.equal(await page.evaluate(() => selectedThread), "", "no default conversation was opened");
+    await page.evaluate(() => selectThread("original", { workdir: "/Users/mini/project", bridgeId: activeBridgeId, thread: { provider: "claude" } }));
+    await page.waitForFunction(() => connectionReady && !threadSwitchBusy);
     await openPicker();
     const beforeCancel = await sessionState();
     let releasePost;

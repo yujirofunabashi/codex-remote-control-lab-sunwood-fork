@@ -1068,6 +1068,7 @@ function wsUrlForBridge(entry = activeBridge(), provider = currentThreadProvider
   target.searchParams.set("provider", provider || "codex");
   if (threadId) target.searchParams.set("thread", threadId);
   if (options.fresh) target.searchParams.set("fresh", "1");
+  if (options.fresh && options.newSessionId) target.searchParams.set("newSessionId", options.newSessionId);
   if (options.workdir) target.searchParams.set("workdir", options.workdir);
   if (Object.prototype.hasOwnProperty.call(options, "serviceTier") && options.serviceTier !== undefined) {
     target.searchParams.set("serviceTier", options.serviceTier || "standard");
@@ -8922,7 +8923,15 @@ function connect({ preserveHistory = false, freshThread = false, workdir = "" } 
     return;
   }
   const provider = currentThreadProvider();
+  const connectionState = getBridgeState(bridgeId);
+  connectionState.pendingNewSessions ||= {};
+  if (selectedThread) delete connectionState.pendingNewSessions[provider];
+  else if (freshThread) {
+    connectionState.pendingNewSessions[provider] = { id: clientMessageId(), workdir: connectionWorkdir(workdir) };
+  }
+  const pendingNewSession = connectionState.pendingNewSessions[provider];
   closeSocket({ suppressReconnect: true });
+  setReady(false);
   liveTurnActive = false;
   liveOutputGroup = "";
   setRunState("connecting");
@@ -8931,7 +8940,7 @@ function connect({ preserveHistory = false, freshThread = false, workdir = "" } 
     renderHistory([]);
   }
   updateSelectedThreadHeading();
-  let targetWorkdir = connectionWorkdir(workdir);
+  let targetWorkdir = pendingNewSession?.workdir || connectionWorkdir(workdir);
   if (!workdir && selectedThread && targetWorkdir) {
     const selectedWorkdir = selectedThreadWorkdir();
     if (selectedWorkdir && selectedWorkdir !== targetWorkdir) {
@@ -8944,7 +8953,8 @@ function connect({ preserveHistory = false, freshThread = false, workdir = "" } 
   }
   ws = new WebSocket(
     wsUrlForBridge(bridge, provider, selectedThread, {
-      fresh: freshThread && !selectedThread,
+      fresh: Boolean(pendingNewSession) && !selectedThread,
+      newSessionId: pendingNewSession?.id,
       workdir: targetWorkdir,
       serviceTier: provider === "codex" ? selectedServiceTier || "standard" : undefined,
     }),
@@ -8977,6 +8987,7 @@ function connect({ preserveHistory = false, freshThread = false, workdir = "" } 
       return;
     }
     if (msg.type === "ready") {
+      if (msg.threadId) delete connectionState.pendingNewSessions[provider];
       setReady(true);
       setActiveProvider(msg.provider || "codex");
       // After the provider, because an empty list explains itself differently
@@ -9133,6 +9144,12 @@ function connect({ preserveHistory = false, freshThread = false, workdir = "" } 
       return;
     }
     if (msg.type === "error") {
+      if (msg.retryable === false) {
+        suppressedSocketReconnects.add(socket);
+        if (reconnectTimer) window.clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+        setReady(false);
+      }
       releasePendingSubmission("送信に失敗しました。");
       showBridgeError(msg.text || "エラー");
       updateThreadNavigation();
