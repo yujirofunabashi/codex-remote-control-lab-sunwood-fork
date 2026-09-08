@@ -22,7 +22,8 @@ function codeFiles(root) {
       if (entry.isDirectory()) { walk(name); continue; }
       if (!entry.isFile()) continue;
       if (relative === "scripts" && /(?:\.test|[-.]smoke)\.[cm]?js$/.test(entry.name)) continue;
-      if (/\.(?:[cm]?js|sh|html|css|json|webmanifest|svg|png|ico|woff2?)$/.test(entry.name)) files.push(name);
+      if (relative === "scripts" && /^test_lab_.*\.py$/.test(entry.name)) continue;
+      if (/\.(?:[cm]?js|py|sh|html|css|json|webmanifest|svg|png|ico|woff2?)$/.test(entry.name)) files.push(name);
     }
   }
   for (const directory of ["public", "scripts"]) walk(directory);

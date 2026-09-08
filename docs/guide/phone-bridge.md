@@ -84,6 +84,24 @@ npm run phone
 
 In this mode, OCdex does not start a new app-server. It uses the app-server behind the socket. If Codex Desktop opens the same headless app-server as a Remote Connection, the Desktop remote view and OCdex browser subscribe to the same thread event stream.
 
+### Isolated Windows lab connection (prepared; hardware verification pending)
+
+A separate adapter can list an isolated Windows-hosted Linux lab beside Air and mini. It is **not** a Windows desktop or unrestricted Windows file browser. See the [Japanese setup and boundary reference](../ja/guide/phone-bridge.md#windows-lab).
+
+- `scripts/start-lab-bridge.js` serves the existing UI protocol and persists conversations, assigned request IDs and cached files on the trusted relay.
+- `scripts/lab_host.py` polls that relay from Windows. It verifies the existing VM/network guard and exchanges framed data over the existing named-pipe serial console. It opens no inbound Windows listener and copies no fleet credentials into the guest.
+- `scripts/lab_guest.py` permits only confined folder browsing, bounded text reads, artifact indexing, explicit AI turns, interruption and shutdown. Symlinks, hidden paths, outside paths, special files and multiply linked file reads are rejected.
+
+Launch the relay manually with `npm run phone:lab -- /absolute/path/.phone-lab.local.json`. This owner-readable-only local file requires `id`, `targetHost`, `host`, `port`, `workRoot`, `model`, `effort`, `stateFile`, independent random `phoneToken` and `workerToken`, and exact `allowedOrigins`. Bind only to loopback or the relay's Tailscale IP. An HTTPS UI needs a private HTTPS proxy; do not expose a public tunnel. The ordinary phone command does not activate a lab.
+
+Provision only after confirming that the exact VM is stopped/disconnected and no other experiment owns its current medium. `build_lab_seed.py` accepts a dedicated instance ID, the verified network layout and an explicit non-secret guest config. It emits `user-data`, `meta-data` and `network-config`; package these using the existing lab's NoCloud media procedure. It does not recreate users, auth or disks. Pin the original Windows/guest guard hashes, new guest source and seed hash. The Windows config requires `relayUrl`, `workerToken`, `stateFile`, `guardHelper`, `guardSha256`, `seed`, `seedSha256`, `previousSeed` and `guestSha256`; run `python -B lab_host.py --config <private-config>` manually as the VM administrator. Register only the relay URL and **phone** credential in the existing fleet UI. Never register or send the worker credential to the guest.
+
+The selected model/effort and workspace-write/never policy are fixed for this connection without overwriting the owner's usual preferences. No uploads, arbitrary terminal commands, paid-credit fallback, publication or actual spending are provided. Native CLI conversations resume, but a delivered request keeps the same durable ID through reconnects and is never rerun after an uncertain guest restart. Unleased requests expire after 60 seconds. Offline views show cached acquisition timestamps rather than claiming live access.
+
+Each guest turn runs as the ordinary lab user in a hardened transient systemd service, with a 600-second execution limit. The host disconnects its guarded network on completion and has a separate 660-second response watchdog. The guest management receiver shuts down after 30 minutes. This receiver starts with a manually booted VM; it does not enqueue an AI turn. No Windows scheduled task or unattended AI invocation is installed.
+
+`npm run test:lab` verifies confinement, protocol authorization, idempotency and durable result handling. `npm run smoke:lab` exercises the real UI/relay in Chromium and WebKit with a simulated Windows peer. Neither is hardware deployment evidence. Verify guest provisioning, actual AI edits/tests, old evidence preservation and a stopped/disconnected VM separately before calling the connection delivered. Passing a test never grants external or financial approval.
+
 ## Useful Environment Variables
 
 ```bash

@@ -51,6 +51,11 @@
           </button>
         </div>
         <div class="bridge-build-notice" id="bridgeBuildNotice" role="status" hidden></div>
+        <section id="labControls" class="lab-controls" aria-label="Windows実験室" hidden>
+          <strong id="labStateLabel" role="status"></strong>
+          <small id="labObservedAt"></small>
+          <div><button type="button" id="labStart">実験室を起動</button><button type="button" id="labShutdown">実験室を停止</button></div>
+        </section>
         <div class="sidebar-connections" id="sidebarConnections">
           <section class="fleet-sidebar" aria-label="接続先">
             <button type="button" class="fleet-current" id="fleetDashboardButton" data-opens-bridge-fleet aria-haspopup="dialog" aria-expanded="false">
@@ -554,9 +559,9 @@
         <h2 id="newSessionTitle">新規セッション</h2>
         <button type="button" id="closeNewSession" aria-label="新規セッションを閉じる">×</button>
       </header>
-      <p id="newSessionHelp">Macとフォルダを選んで開始します。まだチャットがないフォルダも選べます。</p>
+      <p id="newSessionHelp">パソコンとフォルダを選んで開始します。まだチャットがないフォルダも選べます。</p>
       <div class="new-session-selects">
-        <label>使用するMac<select id="newSessionMachine" class="settings-select"></select></label>
+        <label>使用するパソコン<select id="newSessionMachine" class="settings-select"></select></label>
         <label>使用するAI<select id="newSessionProvider" class="settings-select"><option value="codex">Codex</option><option value="claude">Claude</option></select></label>
       </div>
       <div class="workspace-browser">

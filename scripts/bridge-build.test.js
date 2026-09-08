@@ -104,3 +104,14 @@ test("missing repository or an external source symlink stays unknown, not falsel
   assert.equal(sourceSnapshot(root).available, false);
   assert.equal(sourceSnapshot(path.join(root, "public")).available, false);
 });
+
+test("guest and host Python source count in build identity; lab tests do not", t => {
+  const root = fixture(t);
+  const tracker = createBuildTracker(root, { cacheMs: 0 });
+  const before = tracker.status();
+  fs.writeFileSync(path.join(root, "scripts", "test_lab_guest.py"), "# test only\n");
+  assert.equal(tracker.status().serverFingerprint, before.serverFingerprint);
+  fs.writeFileSync(path.join(root, "scripts", "lab_guest.py"), "# guest controller\n");
+  assert.notEqual(tracker.status().serverFingerprint, before.serverFingerprint);
+  assert.equal(tracker.status().restartRequired, true);
+});

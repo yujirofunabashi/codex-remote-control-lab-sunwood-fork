@@ -22,3 +22,7 @@ CLAUDE.md
 .uploads/
 output/playwright/
 .phone-codex-models.json
+.phone-lab*.json
+.phone-lab-runtime/
+output/lab-bridge/
+__pycache__/

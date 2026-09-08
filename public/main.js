@@ -46,6 +46,12 @@ const expandPromptButton = document.querySelector("#expandPromptButton");
 const accessButton = document.querySelector("#accessButton");
 const modelButton = document.querySelector("#modelButton");
 const modelMenu = document.querySelector("#modelMenu");
+const labControls = document.querySelector("#labControls");
+const labStateLabel = document.querySelector("#labStateLabel");
+const labObservedAt = document.querySelector("#labObservedAt");
+const labStart = document.querySelector("#labStart");
+const labShutdown = document.querySelector("#labShutdown");
+const labOperationPending = new Set();
 const rateLimitList = document.querySelector("#rateLimitList");
 const voiceButton = document.querySelector("#voiceButton");
 const fileInput = document.querySelector("#fileInput");
@@ -2118,6 +2124,8 @@ function providerSupportsReasoning() {
 // The bridge validates it again, because `claude --effort` and the app-server
 // both accept an unknown value and quietly ignore it.
 function effortForSubmission() {
+  const lab = activeLabInfo();
+  if (lab) return lab.effort;
   const provider = currentThreadProvider();
   if (!provider) return undefined;
   const choices = reasoningChoicesForModel(provider, selectedModel);
@@ -2244,6 +2252,14 @@ function renderReasoningChoices() {
 }
 
 function updateModelButton() {
+  const lab = activeLabInfo();
+  modelButton.disabled = Boolean(lab);
+  if (lab) {
+    modelButton.textContent = `${lab.model}・${reasoningDisplayLabel(lab.effort)}（実験用固定）`;
+    modelButton.title = "実験室では確認済みの設定を使います。普段の設定は変更しません。";
+    closeModelMenu();
+    return;
+  }
   const showReasoning = providerSupportsReasoning();
   // Rendering is not a user choice. Startup and reconnect initially have only
   // fallback levels; persisting their clamp permanently lost max/ultra. Keep
@@ -5381,7 +5397,48 @@ function renderBuildNotice(entries) {
   bridgeBuildNotice.hidden = !message;
 }
 
+function activeLabInfo() {
+  const info = getBridgeState(activeBridgeId).info;
+  return info?.capabilities?.lab ? info : null;
+}
+
+function renderLabControls() {
+  if (!labControls) return;
+  const info = activeLabInfo();
+  labControls.hidden = !info;
+  accessButton.disabled = Boolean(info);
+  accessButton.textContent = info ? "実験フォルダ内のみ" : accessMode.label;
+  addButton.disabled = Boolean(info);
+  updateModelButton();
+  if (!info) return;
+  const state = getBridgeState(activeBridgeId);
+  const lab = state.status?.lab || info.lab || {};
+  const busy = labOperationPending.has(activeBridgeId) || Boolean(lab.pendingOperation);
+  labStateLabel.textContent = lab.label || "実験室の状態を確認中";
+  labObservedAt.textContent = `${lab.observedAt ? `Windows確認: ${new Date(lab.observedAt).toLocaleString("ja-JP")}` : "Windowsの状態は未取得"}。${lab.ready ? "専用の作業フォルダだけを操作できます。" : "結果は保存済みの表示です。"}`;
+  labStart.disabled = busy || !lab.hostOnline || lab.vmState !== "off";
+  labShutdown.disabled = busy || !lab.ready || (state.status?.bridges || []).some(bridge => ["running", "streaming", "interrupting", "disconnected"].includes(bridge.run?.state));
+}
+
+async function requestLabOperation(operation) {
+  const bridgeId = activeBridgeId;
+  if (!activeLabInfo() || labOperationPending.has(bridgeId)) return;
+  labOperationPending.add(bridgeId);
+  renderLabControls();
+  try {
+    await apiPost(`/api/lab/${operation}`, {}, { bridgeId });
+    showToast(operation === "start" ? "実験室へ起動を依頼しました。準備には数分かかります。" : "実験室へ停止を依頼しました。停止確認までお待ちください。");
+    await refreshBridgeState(bridgeId, { force: true });
+  } catch (error) {
+    showToast(error.message, "error");
+  } finally {
+    labOperationPending.delete(bridgeId);
+    renderLabControls();
+  }
+}
+
 function renderFleet() {
+  renderLabControls();
   const entries = bridgeRegistry.bridges || [];
   const active = activeBridge();
   const activeState = getBridgeState(activeBridgeId);
@@ -6650,6 +6707,10 @@ async function runTerminalCommand(command) {
 
 function switchThreadProvider(provider, { reload = true } = {}) {
   const nextProvider = normalizeProviderName(provider) || activeProvider;
+  if (activeLabInfo() && nextProvider !== "codex") {
+    showToast("Windows実験室はCodex用です。Claudeの会話はAirまたはminiから選んでください。");
+    return;
+  }
   const previousProvider = currentThreadProvider();
   saveDraftForActiveThread();
   if (nextProvider === previousProvider) {
@@ -6921,12 +6982,15 @@ function showMissingSelectedThread(threadId) {
 }
 
 async function loadArtifacts() {
+  const bridgeId = activeBridgeId;
   if (!effectiveBridgeToken(activeBridge())) return;
   try {
-    const result = await apiGet("/api/artifacts");
+    const result = await apiGet("/api/artifacts", { bridgeId });
+    if (bridgeId !== activeBridgeId) return;
     renderArtifactIndex(result.data || []);
     getBridgeState(activeBridgeId).artifactItems = artifactItems;
   } catch (error) {
+    if (bridgeId !== activeBridgeId) return;
     addEntry("error", `ファイル一覧を読めませんでした: ${error.message}`);
   }
 }
@@ -7099,7 +7163,10 @@ function setNewSessionStarting(starting) {
   newSessionStarting = starting;
   for (const control of newSessionDialog.querySelectorAll("select, input, #newSessionHome, #newSessionBrowse")) control.disabled = starting;
   newSessionUp.disabled = starting || !newSessionFolder?.parent;
-  createNewSession.disabled = starting || !newSessionFolder;
+  createNewSession.disabled = starting || !newSessionFolder || newSessionFolder.readOnly === true;
+  const lab = getBridgeState(newSessionMachine.value).info?.capabilities?.lab;
+  newSessionProvider.disabled = starting || Boolean(lab);
+  if (lab) newSessionProvider.value = "codex";
 }
 
 async function browseNewSessionFolder(targetPath = "") {
@@ -7107,6 +7174,9 @@ async function browseNewSessionFolder(targetPath = "") {
   invalidateNewSessionFolder();
   const seq = newSessionBrowseSeq;
   const bridgeId = newSessionMachine.value;
+  const lab = getBridgeState(bridgeId).info?.capabilities?.lab;
+  newSessionProvider.disabled = Boolean(lab);
+  if (lab) newSessionProvider.value = "codex";
   const entry = bridgeById(bridgeId);
   const machine = entry ? shortMachineName(entry, getBridgeState(bridgeId)) || bridgeDisplayLabel(entry, bridgeId) : "";
   const stillCurrent = () => newSessionDialog.open && seq === newSessionBrowseSeq && newSessionMachine.value === bridgeId;
@@ -7117,7 +7187,7 @@ async function browseNewSessionFolder(targetPath = "") {
   newSessionStatus.classList.remove("error");
   newSessionStatus.textContent = "フォルダを読み込み中…";
   try {
-    if (!entry || !effectiveBridgeToken(entry)) throw new Error("このMacの接続を確認してください。");
+    if (!entry || !effectiveBridgeToken(entry)) throw new Error("このパソコンの接続を確認してください。");
     const result = await apiGet(`/api/workspaces/browse${targetPath ? `?path=${encodeURIComponent(targetPath)}` : ""}`, { bridgeId });
     if (!stillCurrent()) return;
     if (!result.path || !Array.isArray(result.entries)) throw new Error("フォルダを取得できませんでした。「ホーム」から選び直してください。");
@@ -7125,7 +7195,7 @@ async function browseNewSessionFolder(targetPath = "") {
     newSessionPath.value = result.path;
     newSessionLocation.textContent = `${machine} · ${result.displayPath || result.path}`;
     newSessionUp.disabled = !result.parent;
-    createNewSession.disabled = false;
+    createNewSession.disabled = result.readOnly === true;
     for (const entry of result.entries) {
       const row = document.createElement("button");
       row.type = "button";
@@ -7142,10 +7212,10 @@ async function browseNewSessionFolder(targetPath = "") {
     if (!result.entries.length) {
       const empty = document.createElement("div");
       empty.className = "workspace-browser-empty";
-      empty.textContent = "この中にフォルダはありません。このフォルダで開始できます。";
+      empty.textContent = result.readOnly ? "保存済みのフォルダ表示です。実験室を起動すると開始できます。" : "この中にフォルダはありません。このフォルダで開始できます。";
       newSessionFolders.appendChild(empty);
     }
-    newSessionStatus.textContent = "表示中のフォルダで新しいチャットを開きます。";
+    newSessionStatus.textContent = result.readOnly ? `実験室は未接続です。保存済みの表示${result.fetchedAt ? `（${new Date(result.fetchedAt).toLocaleString("ja-JP")}取得）` : ""}のため、起動後に選び直してください。` : "表示中のフォルダで新しいチャットを開きます。";
   } catch (error) {
     if (!stillCurrent()) return;
     newSessionStatus.classList.add("error");
@@ -7176,7 +7246,7 @@ function showNewSessionPicker() {
 
 async function createSessionFromPicker() {
   const folder = newSessionFolder;
-  if (newSessionStarting || !folder || folder.bridgeId !== newSessionMachine.value) return;
+  if (newSessionStarting || !folder || folder.readOnly || folder.bridgeId !== newSessionMachine.value) return;
   const seq = newSessionBrowseSeq;
   const provider = newSessionProvider.value;
   const stillCurrent = () => newSessionDialog.open && seq === newSessionBrowseSeq;
@@ -8429,6 +8499,7 @@ async function showStatus() {
 }
 
 async function showArtifact(path) {
+  const bridgeId = activeBridgeId;
   showRightPanel();
   setActivePanelTab("artifacts");
   artifactTitle.textContent = "ファイル";
@@ -8444,10 +8515,12 @@ async function showArtifact(path) {
     <p>読み込み中...</p>
   `;
   try {
-    const result = await apiGet(`/api/file?path=${encodeURIComponent(path)}`);
+    const result = await apiGet(`/api/file?path=${encodeURIComponent(path)}`, { bridgeId });
+    if (activeBridgeId !== bridgeId || activeArtifactPath !== path) return;
     setArtifactPreview(result);
     artifactPreview.classList.remove("hidden");
   } catch (error) {
+    if (activeBridgeId !== bridgeId || activeArtifactPath !== path) return;
     artifactPreview.innerHTML = `
       <div class="artifact-preview-header">
         <div class="artifact-preview-title">${escapeHtml(path)}</div>
@@ -8477,8 +8550,9 @@ function setArtifactPreview(result) {
     artifactPreview.appendChild(gallery);
     return;
   }
-  artifactPreview.innerHTML = `${header}${
-    isMarkdown ? renderMarkdown(result.text, { allowHtml: true, headingOffset: 0 }) : `<pre><code>${escapeHtml(result.text)}</code></pre>`
+  const freshness = result.lab ? `<p class="lab-file-freshness">${result.stale ? "保存済みの表示・現在の内容は未確認" : "実験室から取得"}${result.fetchedAt ? `（${escapeHtml(new Date(result.fetchedAt).toLocaleString("ja-JP"))}）` : ""}</p>` : "";
+  artifactPreview.innerHTML = `${header}${freshness}${
+    isMarkdown ? renderMarkdown(result.text, { allowHtml: !result.lab, headingOffset: 0 }) : `<pre><code>${escapeHtml(result.text)}</code></pre>`
   }`;
 }
 
@@ -8969,6 +9043,12 @@ function connect({ preserveHistory = false, freshThread = false, workdir = "" } 
     if (!isCurrentSocket()) return;
     lastWsMessageAt = Date.now();
     const msg = JSON.parse(event.data);
+    if (msg.lab) {
+      const state = getBridgeState(bridgeId);
+      state.status = { ...state.status, lab: msg.lab };
+      renderLabControls();
+    }
+    if (msg.type === "labState" || msg.type === "pong") return;
     // The bridge tags session events as well as owning the socket. Keep a
     // tagged event from a different chat out of the current page.
     if (msg.type !== "ready" && msg.threadId && msg.threadId !== selectedThread) return;
@@ -9226,11 +9306,11 @@ composer.addEventListener("submit", (event) => {
         text: text || "添付ファイルを確認してください。",
         attachments: attachmentsToSend,
         options: {
-          model: selectedModel || undefined,
-          serviceTier: currentThreadProvider() === "codex" ? selectedServiceTier || null : undefined,
+          model: activeLabInfo()?.model || selectedModel || undefined,
+          serviceTier: activeLabInfo() ? "standard" : currentThreadProvider() === "codex" ? selectedServiceTier || null : undefined,
           effort: effortForSubmission(),
-          approvalPolicy: accessMode.approvalPolicy,
-          sandboxMode: accessMode.sandboxMode,
+          approvalPolicy: activeLabInfo() ? "never" : accessMode.approvalPolicy,
+          sandboxMode: activeLabInfo() ? "workspace-write" : accessMode.sandboxMode,
         },
       }),
     );
@@ -9608,12 +9688,15 @@ fileInput.addEventListener("change", async () => {
   }
 });
 accessButton.addEventListener("click", () => {
+  if (activeLabInfo()) return;
   const index = accessModes.findIndex((candidate) => candidate.label === accessMode.label);
   accessMode = accessModes[(index + 1) % accessModes.length];
   accessButton.textContent = accessMode.label;
   updateTerminalHeader();
   addStatus(`権限を ${accessMode.label} に切り替えました。次の送信から反映します。`);
 });
+labStart?.addEventListener("click", () => requestLabOperation("start"));
+labShutdown?.addEventListener("click", () => requestLabOperation("shutdown"));
 modelButton.addEventListener("click", toggleModelMenu);
 voiceButton.addEventListener("click", startVoiceInput);
 modelMenu.addEventListener("click", (event) => {
