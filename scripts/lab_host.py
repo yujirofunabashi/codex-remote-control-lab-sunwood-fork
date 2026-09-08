@@ -366,12 +366,19 @@ class HostAgent:
 
     def run(self):
         print("Windows lab connection started. No credentials are printed.", flush=True)
+        connected = False
         try:
             while True:
                 try:
                     self.tick()
+                    if not connected:
+                        print("Relay connected. Keep this window open; VM and AI start require separate requests.", flush=True)
+                        connected = True
                     delay = 1
                 except (OSError, ValueError, RuntimeError, urllib.error.URLError):
+                    if connected:
+                        print("Relay connection unconfirmed. Retrying; no task is duplicated.", flush=True)
+                    connected = False
                     delay = 3
                 time.sleep(delay)
         finally:
