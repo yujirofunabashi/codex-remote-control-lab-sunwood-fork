@@ -120,6 +120,60 @@ async function run() {
       return { sameEntry: before === assistantEntry, text: assistantEntry.markdownSource };
     });
     assert.deepEqual(resumedStream, { sameEntry: true, text: "Partial continuation" });
+
+    const staleLists = await page.evaluate(async () => {
+      const originalGet = apiGet;
+      const owner = activeBridgeId;
+      const before = threadCache;
+      const provider = currentThreadProvider();
+      const otherState = getBridgeState("list-race-other");
+      const oldError = otherState.threadsError;
+      const outcomes = [];
+      try {
+        for (const fail of [false, true]) {
+          let finish;
+          apiGet = () => new Promise((resolve, reject) => { finish = fail ? reject : resolve; });
+          const loading = loadThreads({ provider, background: true });
+          activeBridgeId = "list-race-other";
+          finish(fail ? new Error("old host failed") : { provider, activeProvider: provider, data: [{ id: "wrong-host-chat", cwd: "/tmp/wrong" }] });
+          await loading;
+          outcomes.push(threadCache === before && otherState.threadsError === oldError);
+          activeBridgeId = owner;
+        }
+        let finishOlder;
+        apiGet = () => new Promise(resolve => { finishOlder = resolve; });
+        const older = loadThreads({ provider, background: true });
+        apiGet = async () => ({ provider, activeProvider: provider, data: [{ id: "newest-list", name: "New list", cwd: "/tmp/project" }] });
+        await loadThreads({ provider, background: true });
+        finishOlder({ provider, activeProvider: provider, data: [{ id: "stale-list", cwd: "/tmp/wrong" }] });
+        await older;
+        outcomes.push(threadCache.some(t => t.id === "newest-list") && !threadCache.some(t => t.id === "stale-list"));
+        return outcomes;
+      } finally { apiGet = originalGet; activeBridgeId = owner; threadCache = before; }
+    });
+    assert.deepEqual(staleLists, [true, true, true], "late lists and failures cannot cross machines or replace a newer list");
+
+    const reconnect = await page.evaluate(() => {
+      const id = "reconnect-saved";
+      selectedThread = id;
+      selectedThreadByProvider.set(currentThreadProvider(), id);
+      threadCache = [{ id, provider: currentThreadProvider(), cwd: "/tmp/original-project" }];
+      workspaceFollowsSelectedThread = false;
+      initialUrlThreadPending = false;
+      currentWorkspace.workspaceLocation = "/tmp/wrong-project";
+      connect({ preserveHistory: true });
+      const url = new URL(window.__mockWebSocketUrls.at(-1));
+      return { keptId: selectedThread === id && url.searchParams.get("thread") === id, workdir: url.searchParams.get("workdir") };
+    });
+    assert.deepEqual(reconnect, { keptId: true, workdir: "/tmp/original-project" });
+    const missing = await page.evaluate(() => {
+      selectedThread = "missing-saved";
+      promptInput.value = "keep this draft";
+      const socketCount = window.__mockWebSocketUrls.length;
+      showMissingSelectedThread(selectedThread);
+      return { id: selectedThread, draft: promptInput.value, newConnections: window.__mockWebSocketUrls.length - socketCount };
+    });
+    assert.deepEqual(missing, { id: "missing-saved", draft: "keep this draft", newConnections: 0 });
     console.log(`${engine.name()}: Codex/Claude copy buttons preserve owning host, clipboard and selection; fit 320/390/430px; missing ownership and old cached helpers fail closed`);
   } finally {
     await browser?.close();

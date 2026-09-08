@@ -20,6 +20,7 @@ function historySyncRequests(threadId, workdir, limit = 30) {
         sortKey: "updated_at",
         sortDirection: "desc",
         archived: false,
+        sourceKinds: ["cli", "vscode", "appServer"],
         cwd: workdir,
         useStateDbOnly: false,
       },

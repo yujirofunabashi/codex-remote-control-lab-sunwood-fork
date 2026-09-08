@@ -1225,6 +1225,7 @@ let liveOutputGroup = "";
 let statusGroup = null;
 let reconnectTimer = null;
 let threadCache = [];
+let threadListRequestId = 0;
 // Which project folders the sidebar is keeping out of the list. Kept on the
 // bridge rather than in this browser: it is a property of the machine's folders,
 // and the same choice should hold from any phone.
@@ -4454,7 +4455,7 @@ function createThreadListItem(thread, options = {}) {
       event.stopPropagation();
       try {
         await copyTextToClipboard(resumeCommand);
-        showToast("再開コマンドをコピーしました。Air・mini どちらの Mac のターミナルでも使えます。");
+        showToast("再開コマンドをコピーしました。Mac の「ターミナル」アプリに貼り付けてください。Codex の入力欄には貼り付けません。");
       } catch (error) {
         // Without a clipboard there is still something useful to do: show the
         // command so it can be read off the screen.
@@ -6695,10 +6696,14 @@ async function loadThreads({ background = false, provider = "" } = {}) {
     return;
   }
   const previousThreadCache = threadCache;
+  const requestedBridgeId = activeBridgeId;
+  const requestId = ++threadListRequestId;
+  const isCurrentRequest = () => requestedBridgeId === activeBridgeId && requestId === threadListRequestId;
   const requestedProvider = normalizeProviderName(provider || threadProvider);
   const path = requestedProvider ? `/api/threads?provider=${encodeURIComponent(requestedProvider)}` : "/api/threads";
   try {
     const result = await apiGet(path);
+    if (!isCurrentRequest() || (requestedProvider && requestedProvider !== currentThreadProvider())) return;
     if (result.activeProvider) adoptBridgeProvider(result.activeProvider);
     const resultProvider = normalizeProviderName(result.provider || requestedProvider || activeProvider) || currentThreadProvider();
     if (requestedProvider && requestedProvider !== currentThreadProvider()) return;
@@ -6719,7 +6724,6 @@ async function loadThreads({ background = false, provider = "" } = {}) {
     if (pendingUrlThread && pendingUrlWorkdir) {
       initialUrlThreadPending = false;
       workspaceFollowsSelectedThread = true;
-      await switchToBridgeForWorkdir(pendingUrlWorkdir, { reconnect: false, followThreadWorkdir: true });
       selectedThread = pendingUrlThread.id;
       selectedThreadByProvider.set(resultProvider, selectedThread);
     }
@@ -6749,6 +6753,7 @@ async function loadThreads({ background = false, provider = "" } = {}) {
     showInitialSwipeHint();
     lastThreadListError = "";
   } catch (error) {
+    if (!isCurrentRequest() || (requestedProvider && requestedProvider !== currentThreadProvider())) return;
     const message = error.message || String(error);
     // A background poll writes one status line the first time and then goes
     // quiet, which is right for the transcript and wrong for the sidebar: the
@@ -6871,15 +6876,18 @@ function isActiveBridgeThread(thread = {}) {
 async function refreshSelectedThread() {
   if (!selectedThread || liveTurnActive || selectedThreadRefreshActive) return;
   const provider = currentThreadProvider();
-  const query = new URLSearchParams({ thread: selectedThread, provider });
+  const bridgeId = activeBridgeId;
+  const threadId = selectedThread;
+  const isCurrent = () => bridgeId === activeBridgeId && threadId === selectedThread && provider === currentThreadProvider();
+  const query = new URLSearchParams({ thread: threadId, provider });
   const workdir = currentRequestWorkdir();
   if (workdir) query.set("workdir", workdir);
   selectedThreadRefreshActive = true;
   try {
     const result = await apiGet(`/api/thread?${query.toString()}`);
-    if (result.threadId !== selectedThread) return;
+    if (!isCurrent() || liveTurnActive || result.threadId !== threadId) return;
     if (result.missing) {
-      resetMissingSelectedThread(result.threadId);
+      showMissingSelectedThread(result.threadId);
       return;
     }
     renderHistoryIfChanged(result.history || []);
@@ -6889,6 +6897,7 @@ async function refreshSelectedThread() {
     }
     lastThreadRefreshError = "";
   } catch (error) {
+    if (!isCurrent()) return;
     const message = error.message || String(error);
     if (message !== lastThreadRefreshError) {
       lastThreadRefreshError = message;
@@ -6899,23 +6908,16 @@ async function refreshSelectedThread() {
   }
 }
 
-function resetMissingSelectedThread(threadId) {
+function showMissingSelectedThread(threadId) {
   if (threadId && selectedThread !== threadId) return;
-  selectedThreadByProvider.delete(currentThreadProvider());
-  selectedThread = "";
-  initialUrlThreadPending = false;
-  lastHistorySignature = "";
-  renderHistory([]);
-  setThreadHeading("新しいチャット");
-  updateUrlThread();
-  renderThreadList();
-  restoreDraftForCurrentThread();
-  applyCurrentThreadAccent();
-  renderTerminalTranscript();
-  addStatus("選択中のチャットが見つからないため、新しいチャットに戻しました。");
+  const signature = `missing:${activeBridgeId}:${threadId}`;
+  if (lastThreadRefreshError !== signature) {
+    addStatus("この Mac で元の会話を確認できません。一覧で保存先の Mac と会話を選び直してください。表示中の会話と下書きは保持しています。");
+  }
+  lastThreadRefreshError = signature;
   closeSocket({ suppressReconnect: true });
   setReady(false);
-  connect();
+  setRunState("error", "元の会話を確認できません");
 }
 
 async function loadArtifacts() {
@@ -8929,17 +8931,12 @@ function connect({ preserveHistory = false, freshThread = false, workdir = "" } 
     renderHistory([]);
   }
   updateSelectedThreadHeading();
-  const targetWorkdir = connectionWorkdir(workdir);
+  let targetWorkdir = connectionWorkdir(workdir);
   if (!workdir && selectedThread && targetWorkdir) {
     const selectedWorkdir = selectedThreadWorkdir();
     if (selectedWorkdir && selectedWorkdir !== targetWorkdir) {
-      selectedThread = "";
-      initialUrlThreadPending = false;
-      selectedThreadByProvider.delete(provider);
-      updateUrlThread();
-      updateSelectedThreadHeading();
-      restoreDraftForCurrentThread();
-      renderThreadList();
+      targetWorkdir = selectedWorkdir;
+      workspaceFollowsSelectedThread = true;
     }
   }
   if (targetWorkdir && !workdir) {

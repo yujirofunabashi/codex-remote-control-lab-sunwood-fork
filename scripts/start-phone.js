@@ -33,6 +33,7 @@ const { servedHttpsEndpoint, tailscaleServeStatus } = require("./remote-url");
 const { defaultCodexAppServerPort, settingEnvKeysForSlot, slotEnvKey, slotSettingValue } = require("./phone-slot-settings");
 const { slashCommandCatalog } = require("./slash-commands");
 const { findLiveBridge, readThreadSnapshot } = require("./thread-read");
+const { isUnavailableHistoryError, emptyCodexThreadWorkdir } = require("./codex-empty-thread");
 const { latestAssistantQuestion, idleRunStateFromHistory } = require("./question-state");
 
 const root = path.resolve(__dirname, "..");
@@ -3253,8 +3254,13 @@ class SharedBridge {
     this.emit("status", { text: statusText });
   }
 
-  fallbackToNewThread(error) {
-    this.emit("status", { text: `既存threadが見つからないため新しいthreadを開始します: ${error.message}` });
+  recoverEmptyThread(thread) {
+    if (thread?.id !== this.requestedThreadId) return false;
+    const originalWorkdir = emptyCodexThreadWorkdir(thread);
+    if (!originalWorkdir) return false;
+    try { this.workdir = validateWorkdir(originalWorkdir); } catch { return false; }
+    debugLog("codex.resume.empty", { threadId: thread.id, workdir: this.workdir });
+    this.emit("status", { text: "この会話はまだメッセージが送信されていません。元のフォルダで入力画面を開き直します。" });
     this.requestedThreadId = null;
     const previousKey = this.bridgeKey;
     if (bridges.get(previousKey) === this) bridges.delete(previousKey);
@@ -3262,6 +3268,13 @@ class SharedBridge {
     this.bridgeKey = bridgeMapKey(this.provider, this.baseBridgeKey);
     bridges.set(this.bridgeKey, this);
     this.requestNewThread("新しいthreadを開始中...");
+    return true;
+  }
+
+  failStartup(text) {
+    this.startupFailed = true;
+    this.setBridgeRunState("error", "会話を開けません", null);
+    this.emit("error", { text });
   }
 
   bindUpstream() {
@@ -3276,7 +3289,6 @@ class SharedBridge {
       }
       const id = this.request("thread/resume", {
         threadId: this.requestedThreadId,
-        cwd: this.workdir,
       });
       this.pending.set(id, "thread/resume");
       this.emit("status", { text: "既存threadを再開中..." });
@@ -3291,20 +3303,35 @@ class SharedBridge {
       // Server requests and client requests use separate id namespaces.
       const pendingMethod = msg.method ? undefined : this.pending.get(msg.id);
 
+      if (pendingMethod === "thread/read:resume-recovery") {
+        this.pending.delete(msg.id);
+        if (!msg.error && this.recoverEmptyThread(msg.result?.thread)) return;
+        this.failStartup("この会話の履歴を開けませんでした。会話は切り替えていません。一覧から元の会話を選び直してください。");
+        return;
+      }
+
       if (pendingMethod === "thread/start" || pendingMethod === "thread/resume") {
         this.pending.delete(msg.id);
         if (msg.error) {
           const compact = compactCodexError(msg.error.message || JSON.stringify(msg.error));
           const error = new Error(compact.text);
-          if (pendingMethod === "thread/resume" && isMissingThreadError(error)) {
-            this.fallbackToNewThread(error);
+          debugLog("codex.resume.failed", { method: pendingMethod, threadId: this.requestedThreadId, error: msg.error.message });
+          if (pendingMethod === "thread/resume" && isUnavailableHistoryError(error)) {
+            const id = this.request("thread/read", { threadId: this.requestedThreadId, includeTurns: false });
+            this.pending.set(id, "thread/read:resume-recovery");
             return;
           }
-          this.startupFailed = true;
-          this.emit(compact.retrying ? "status" : "error", { text: compact.text });
+          this.failStartup(compact.text);
           return;
         }
         this.threadId = msg.result.thread.id;
+        const resumedWorkdir = msg.result.cwd || msg.result.thread.cwd;
+        if (resumedWorkdir) {
+          try { this.workdir = validateWorkdir(resumedWorkdir); } catch {
+            this.failStartup("この会話の作業フォルダを開けません。元のフォルダがこの Mac にあるか確認してください。");
+            return;
+          }
+        }
         this.model = msg.result.model || this.model;
         this.startupFailed = false;
         this.promoteBridgeKey();
@@ -4995,7 +5022,9 @@ function getBridge(threadId, provider = agentProvider, connectionId = crypto.ran
   // built fresh from the transcript. That one reports the session idle - 前回
   // 完了・送信できます - while the turn it should have been watching goes on
   // streaming into the first, which no longer has a client.
-  const sessionOwnsWorkdir = requestedProvider === "claude" && Boolean(threadId);
+  // Existing Codex sessions also own their folder. A stale browser hint must
+  // neither create a duplicate connection nor replace one doing active work.
+  const sessionOwnsWorkdir = Boolean(threadId);
   const bridgeHasActiveWork = (bridge) => Boolean(typeof bridge?.hasActiveWork === "function" && bridge.hasActiveWork());
   const bridgeNeedsReplacement = (bridge) =>
     !sessionOwnsWorkdir &&
@@ -5457,6 +5486,12 @@ function mergeThreadListData(remoteThreads = [], localThreads = []) {
       preview: thread.preview === thread.id && existing?.preview ? existing.preview : thread.preview,
     };
     if (existing) {
+      // Keep the stored title stable: reconnecting must not rename a familiar
+      // conversation to its last short follow-up (e.g. "continue").
+      if (existing.name && existing.name !== existing.id) {
+        merged.name = existing.name;
+        merged.displayTitle = existing.displayTitle || existing.name;
+      }
       copyThreadContextFields(merged, existing, canonicalThreadContextFields);
       const existingTimestamp = threadListTimestamp(existing);
       const localActivityAt = threadListTimestamp({ updatedAt: thread.localActivityAt || 0 });
@@ -5482,6 +5517,7 @@ async function codexThreadListPayload(requestedProvider) {
     sortKey: "updated_at",
     sortDirection: "desc",
     archived: false,
+    sourceKinds: ["cli", "vscode", "appServer"],
     useStateDbOnly: false,
   });
   const remoteData = Array.isArray(result.data) ? result.data.map((thread) => ({ ...thread, provider: requestedProvider })) : result.data;
@@ -6007,15 +6043,10 @@ async function main() {
         return;
       }
       try {
-        const targetWorkdir = url.searchParams.get("workdir") ? validateWorkdir(url.searchParams.get("workdir")) : workdir;
         const snapshot = await readThreadSnapshot({
           threadId,
-          liveBridge:
-            findBridgeByThreadId(threadId, requestedProvider, { workdir: targetWorkdir }) ||
-            findLiveBridge(bridges, threadId, { workdir: targetWorkdir }),
+          liveBridge: findBridgeByThreadId(threadId, requestedProvider) || findLiveBridge(bridges, threadId),
           request: appServerRequest,
-          model: modelForProvider(requestedProvider),
-          workdir: targetWorkdir,
           historyFromThread,
         });
         sendJson(res, 200, { provider: requestedProvider, activeProvider: requestedProvider, ...snapshot });

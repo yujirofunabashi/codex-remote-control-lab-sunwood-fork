@@ -13,6 +13,15 @@ test("mergeThreadListData includes live local Codex threads missing from remote 
   );
 });
 
+test("reconnecting keeps the stored title instead of the last short follow-up", () => {
+  const [thread] = mergeThreadListData(
+    [{ id: "saved", name: "Project planning", updatedAt: 1000 }],
+    [{ id: "saved", name: "Continue", displayTitle: "Continue", updatedAt: 2000, localActivityAt: 2000 }],
+  );
+  assert.equal(thread.name, "Project planning");
+  assert.equal(thread.displayTitle, "Project planning");
+});
+
 test("mergeThreadListData dedupes live threads and preserves remote title when local title is only the id", () => {
   const merged = mergeThreadListData(
     [{ id: "thread-1", name: "Readable remote title", preview: "Readable preview", updatedAt: 1000, provider: "codex" }],

@@ -7,7 +7,7 @@ const path = require("node:path");
 const net = require("node:net");
 const http = require("node:http");
 const { spawn, execFileSync } = require("node:child_process");
-const { once } = require("node:events");
+const { once, EventEmitter } = require("node:events");
 const { WebSocket, WebSocketServer } = require("ws");
 
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -54,7 +54,8 @@ async function client(url) {
 }
 
 async function main() {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "codex-handoff-"));
+  const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "codex-handoff-")));
+  const originalHomedir = os.homedir;
   const home = path.join(directory, "codex-home");
   const project = path.join(directory, "project");
   fs.mkdirSync(home);
@@ -111,7 +112,7 @@ async function main() {
   const connections = [];
   const tmuxSocket = path.join(directory, "tmux.sock");
   const tmux = (...args) => execFileSync("tmux", ["-S", tmuxSocket, "-f", "/dev/null", ...args], { env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-  let proxy, terminalStarted = false;
+  let proxy, recovery, terminalStarted = false;
   try {
     let phone;
     for (let attempt = 0; attempt < 100; attempt++) {
@@ -122,11 +123,49 @@ async function main() {
     }
     assert.ok(phone, `app-server did not start: ${serverLog}`);
     connections.push(phone);
-    const { thread } = await phone.request("thread/start", { cwd: project, model: "handoff-test" });
-    assert.ok(thread.id);
-    const first = await phone.request("turn/start", { threadId: thread.id, input: [{ type: "text", text: "Phone fixture input" }] });
-    const firstDone = await phone.waitFor("turn/completed", (params) => params.turn.id === first.turn.id);
-    assert.equal(firstDone.turn.status, "completed", JSON.stringify(firstDone.turn.error));
+    const { thread: original } = await phone.request("thread/start", { cwd: project, model: "handoff-test" });
+    assert.ok(original.id);
+    // Materialize the header, but never send a user message to this record.
+    try { await phone.request("thread/read", { threadId: original.id, includeTurns: true }); } catch (error) {
+      assert.match(error.message, /list_turns is not supported yet|not materialized yet/);
+    }
+    const originalText = fs.readFileSync(original.path, "utf8");
+    process.env.CODEX_APP_SERVER_URL = endpoint;
+    process.env.CODEX_WORKDIR = project;
+    process.env.CODEX_MODEL = "handoff-test";
+    process.env.PHONE_AGENT_PROVIDER_DEFAULT = "codex";
+    process.env.PHONE_NOTIFY_EVENTS = "0";
+    process.env.CODEX_HISTORY_SYNC = "0";
+    // Scope the bridge's home-folder validation to this disposable fixture.
+    os.homedir = () => directory;
+    const { getBridge } = require("./start-phone");
+    for (const key of Object.keys(process.env)) {
+      if (/^PHONE_(NOTIFY|NTFY|PUSHOVER|DISCORD)_/.test(key)) process.env[key] = "";
+    }
+    recovery = getBridge(original.id, "codex", "empty-recovery-fixture", { workdir: directory });
+    const browser = new EventEmitter();
+    browser.readyState = WebSocket.OPEN;
+    const browserEvents = [];
+    browser.send = (data) => browserEvents.push(JSON.parse(data));
+    recovery.addClient(browser);
+    for (let attempt = 0; attempt < 200 && !recovery.ready; attempt++) {
+        if (recovery.startupFailed) throw new Error(JSON.stringify(browserEvents));
+        await pause(50);
+    }
+    assert.ok(recovery.ready, `empty recovery failed: ${JSON.stringify(browserEvents)}`);
+    assert.notEqual(recovery.threadId, original.id);
+    assert.equal(recovery.workdir, project, "the stored folder wins over a wrong browser hint");
+    assert.equal(getBridge(recovery.threadId, "codex", "stale-folder-fixture", { workdir: directory }), recovery,
+      "a stale folder hint reuses the same conversation connection");
+    assert.equal(fs.readFileSync(original.path, "utf8"), originalText, "the empty original is preserved");
+    assert.ok(browserEvents.some(event => event.type === "status" && event.text.includes("まだメッセージが送信されていません")));
+    assert.ok(!browserEvents.some(event => event.type === "error"));
+    recovery.prompt("Phone fixture input");
+    for (let attempt = 0; attempt < 200 && !recovery.history.some(entry => entry.type === "assistant" && entry.text.includes("Handoff fixture response.")); attempt++) await pause(50);
+    assert.ok(recovery.history.some(entry => entry.type === "assistant" && entry.text.includes("Handoff fixture response.")), `first message failed: ${JSON.stringify(browserEvents).slice(-3000)}; ${serverLog}`);
+    const { thread } = await phone.request("thread/resume", { threadId: recovery.threadId });
+    assert.equal(thread.turns.length, 1);
+    const first = { turn: thread.turns[0] };
 
     // Observe the real CLI's resume response while forwarding to the same
     // server the phone already owns. No transcript or credentials are logged.
@@ -198,16 +237,18 @@ async function main() {
     const restored = (await reopenedPhone.request("thread/resume", { threadId: thread.id })).thread;
     assert.equal(restored.id, thread.id);
     assert.equal(restored.turns.length, 3);
-    console.log("Real Codex: phone input -> terminal input -> terminal exit -> phone input/reconnect retains one thread and its three turns; local fake model only");
+    console.log("Real Codex: verified empty-session recovery preserves its original file/folder; phone -> terminal -> phone retains one conversation and three turns; local fake model only");
     for (const upstream of upstreams) upstream.close();
   } finally {
+    recovery?.dispose();
+    os.homedir = originalHomedir;
     for (const connection of connections) connection.close();
     if (terminalStarted) { try { tmux("kill-server"); } catch {} }
     if (proxy) {
       for (const ws of proxy.clients) ws.terminate();
       proxy.close();
     }
-    if (server.exitCode === null) {
+    if (server.exitCode === null && server.signalCode === null) {
       const stopped = once(server, "exit");
       server.kill("SIGTERM");
       await deadline(stopped, "test server cleanup", 5000);

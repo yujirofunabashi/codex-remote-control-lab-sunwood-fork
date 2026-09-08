@@ -1,3 +1,5 @@
+const { isUnavailableHistoryError, emptyCodexThreadWorkdir } = require("./codex-empty-thread");
+
 function liveBridgeSnapshot(bridge, threadId) {
   if (!bridge) return null;
   const matchesThread = bridge.threadId === threadId || bridge.requestedThreadId === threadId;
@@ -34,7 +36,7 @@ function findLiveBridge(bridges, threadId, options = {}) {
   return null;
 }
 
-async function readThreadSnapshot({ threadId, liveBridge, request, model, workdir, historyFromThread }) {
+async function readThreadSnapshot({ threadId, liveBridge, request, historyFromThread }) {
   const liveSnapshot = liveBridgeSnapshot(liveBridge, threadId);
   if (liveSnapshot) return liveSnapshot;
 
@@ -46,14 +48,17 @@ async function readThreadSnapshot({ threadId, liveBridge, request, model, workdi
     });
     thread = result.thread || result;
   } catch (readError) {
-    const result = await request("thread/resume", {
-      threadId,
-      model,
-      cwd: workdir,
-      approvalPolicy: "on-request",
-      sandbox: "workspace-write",
-    });
-    thread = result.thread || result;
+    // A GET must never resume a thread with this bridge's default folder or
+    // overwrite its model/permissions. Inspect only verified empty records.
+    if (!isUnavailableHistoryError(readError)) throw readError;
+    try {
+      const result = await request("thread/read", { threadId, includeTurns: false });
+      const metadata = result.thread || result;
+      if (metadata.id === threadId && emptyCodexThreadWorkdir(metadata)) {
+        return { threadId, history: [], empty: true, source: "empty-thread" };
+      }
+    } catch { /* Keep the original history error; no recovery has been proven. */ }
+    throw readError;
   }
 
   return {

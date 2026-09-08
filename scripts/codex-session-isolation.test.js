@@ -256,7 +256,23 @@ test("joining a terminal's conversation preserves its model and permission choic
   own.upstream.send = () => {};
   own.upstream.emit("open");
   assert.deepEqual(requests.find((request) => request.method === "thread/resume").params,
-    { threadId: "shared", cwd: own.workdir });
+    { threadId: "shared" });
+});
+
+test("a missing conversation is inspected and fails without starting a replacement", () => {
+  const own = bridge("missing", null);
+  own.threadId = null;
+  own.ready = false;
+  own.pending.set(7, "thread/resume");
+  const requests = [];
+  own.request = (method, params) => { requests.push({ method, params }); return 8; };
+  deliver(own, { id: 7, error: { message: "no rollout found for thread id missing" } });
+  assert.deepEqual(requests, [{ method: "thread/read", params: { threadId: "missing", includeTurns: false } }]);
+  deliver(own, { id: 8, error: { message: "no rollout found for thread id missing" } });
+  assert.equal(own.requestedThreadId, "missing");
+  assert.equal(own.startupFailed, true);
+  assert.equal(own.runState.state, "error");
+  assert.equal(requests.length, 1);
 });
 
 test("an approval answered on the terminal disappears from the phone", () => {

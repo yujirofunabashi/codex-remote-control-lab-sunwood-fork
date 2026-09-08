@@ -26,6 +26,7 @@ test("historySyncRequests warms thread body and scan-backed list metadata", () =
         sortKey: "updated_at",
         sortDirection: "desc",
         archived: false,
+        sourceKinds: ["cli", "vscode", "appServer"],
         cwd: "/tmp/demo",
         useStateDbOnly: false,
       },
