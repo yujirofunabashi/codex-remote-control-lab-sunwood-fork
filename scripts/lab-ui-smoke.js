@@ -17,6 +17,7 @@ async function run() {
   app.server.listen(0, "127.0.0.1");
   await once(app.server, "listening");
   const labOrigin = `http://127.0.0.1:${app.server.address().port}`;
+  config.allowedOrigins.push(labOrigin);
   const root = config.workRoot;
   const airOrigin = "http://127.0.0.1:45999";
   let vmState = "off", aiEnabled = false, runningJob = null, runCount = 0;
@@ -130,6 +131,24 @@ async function run() {
     await page.locator("#prompt").press("Control+Enter");
     assert.equal(await page.locator("#prompt").inputValue(), "専用フォルダ内の検査をしてください");
     assert.equal(runCount, 0);
+    // A first-time connection has no token during its initial artifact fetch.
+    // Use only visible controls after entering the key, without a reload or
+    // directly calling loadArtifacts/showArtifact from the test.
+    const recoveredPage = await browser.newPage({ viewport: { width: 1440, height: 1000 }, serviceWorkers: "block" });
+    recoveredPage.setDefaultTimeout(10000);
+    try {
+      await recoveredPage.goto(labOrigin);
+      await recoveredPage.getByRole("textbox", { name: "接続キー", exact: true }).fill(config.phoneToken);
+      await recoveredPage.getByRole("button", { name: "保存して接続", exact: true }).click();
+      await recoveredPage.waitForFunction(() => document.querySelector("#labStateLabel").textContent.includes("AI作業は準備中"));
+      await recoveredPage.locator("#artifactsTab").click();
+      await recoveredPage.locator("#artifactList").getByRole("button", { name: /report\.md/ }).click();
+      await recoveredPage.waitForFunction(() => document.querySelector("#artifactPreview").textContent.includes("実験室から取得"));
+      assert.ok(await recoveredPage.locator("#send").isDisabled());
+      assert.equal(runCount, 0);
+    } finally {
+      await recoveredPage.close();
+    }
     await page.evaluate(async () => { await loadArtifacts(); await showArtifact("/home/agent-lab/work/example/report.md"); });
     assert.match(await page.locator("#artifactPreview").textContent(), /実験室から取得/);
     await page.evaluate(() => setMainView("chat"));

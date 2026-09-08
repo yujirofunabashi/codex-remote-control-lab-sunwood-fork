@@ -6984,14 +6984,18 @@ function showMissingSelectedThread(threadId) {
   setRunState("error", "元の会話を確認できません");
 }
 
-async function loadArtifacts() {
+async function loadArtifacts({ preserveView = false } = {}) {
   const bridgeId = activeBridgeId;
   if (!effectiveBridgeToken(activeBridge())) return;
   try {
     const result = await apiGet("/api/artifacts", { bridgeId });
     if (bridgeId !== activeBridgeId) return;
-    renderArtifactIndex(result.data || []);
+    artifactItems = result.data || [];
     getBridgeState(activeBridgeId).artifactItems = artifactItems;
+    // A tab-triggered refresh may finish after the owner opens another panel
+    // or a file. Update the cached index without replacing that newer view.
+    if (preserveView && (activeReviewTab !== "artifacts" || currentPanelTabName() !== "artifacts" || activeArtifactPath)) return;
+    renderArtifactIndex(artifactItems);
   } catch (error) {
     if (bridgeId !== activeBridgeId) return;
     addEntry("error", `ファイル一覧を読めませんでした: ${error.message}`);
@@ -7595,7 +7599,10 @@ function showReviewCenter(tabName = activeReviewTab) {
   if (activeReviewTab === "diff") renderReviewDiff();
   if (activeReviewTab === "tests") renderReviewTests();
   if (activeReviewTab === "terminal") renderReviewTerminal();
-  if (activeReviewTab === "artifacts") renderArtifactIndex(artifactItems);
+  if (activeReviewTab === "artifacts") {
+    renderArtifactIndex(artifactItems);
+    loadArtifacts({ preserveView: true });
+  }
   if (activeReviewTab === "actions") renderReviewActions();
 }
 
