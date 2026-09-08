@@ -48,6 +48,16 @@ test("findLiveBridge filters by requested workdir when provided", () => {
   assert.equal(findLiveBridge(bridges, "thread-123", { workdir: "/tmp/missing" }), null);
 });
 
+test("findLiveBridge never supplies the other provider's history for a matching id", () => {
+  const claude = { provider: "claude", threadId: "shared-id", ready: true, history: [{ type: "assistant", text: "Claude only" }] };
+  const codex = { provider: "codex", requestedThreadId: "shared-id", ready: false };
+  const bridges = new Map([["shared-id", claude]]);
+  assert.equal(findLiveBridge(bridges, "shared-id", { provider: "codex" }), null);
+  bridges.set("codex:shared-id", codex);
+  assert.equal(findLiveBridge(bridges, "shared-id", { provider: "codex" }), codex);
+  assert.equal(findLiveBridge(bridges, "shared-id", { provider: "claude" }), claude);
+});
+
 test("readThreadSnapshot does not call app-server for a live bridge thread", async () => {
   let calls = 0;
   const snapshot = await readThreadSnapshot({

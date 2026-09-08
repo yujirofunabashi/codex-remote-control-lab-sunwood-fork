@@ -28,10 +28,11 @@ function bridgeMatchesWorkdir(bridge, targetWorkdir = "") {
 
 function findLiveBridge(bridges, threadId, options = {}) {
   if (!bridges || !threadId) return null;
+  const matchesProvider = bridge => !options.provider || bridge?.provider === options.provider;
   const direct = bridges.get?.(threadId);
-  if (direct && bridgeMatchesWorkdir(direct, options.workdir)) return direct;
+  if (direct && matchesProvider(direct) && bridgeMatchesWorkdir(direct, options.workdir)) return direct;
   for (const bridge of bridges.values?.() || []) {
-    if ((bridge.threadId === threadId || bridge.requestedThreadId === threadId) && bridgeMatchesWorkdir(bridge, options.workdir)) return bridge;
+    if (matchesProvider(bridge) && (bridge.threadId === threadId || bridge.requestedThreadId === threadId) && bridgeMatchesWorkdir(bridge, options.workdir)) return bridge;
   }
   return null;
 }

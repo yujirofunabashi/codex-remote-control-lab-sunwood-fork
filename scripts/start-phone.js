@@ -6128,7 +6128,7 @@ async function main() {
       try {
         const snapshot = await readThreadSnapshot({
           threadId,
-          liveBridge: findBridgeByThreadId(threadId, requestedProvider) || findLiveBridge(bridges, threadId),
+          liveBridge: findBridgeByThreadId(threadId, requestedProvider) || findLiveBridge(bridges, threadId, { provider: requestedProvider }),
           request: appServerRequest,
           historyFromThread,
         });

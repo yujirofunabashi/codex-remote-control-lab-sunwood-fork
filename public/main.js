@@ -1893,6 +1893,7 @@ function setRunState(state, label) {
   renderFleet();
   renderThreadList();
   refreshReviewCenterIfOpen();
+  syncLogEmptyState();
 }
 
 function applyServerRunState(run = {}) {
@@ -3213,19 +3214,22 @@ function syncLogEmptyState() {
     return;
   }
   log.classList.add("has-empty-state");
-  if (existing) {
+  const emptyState = currentRunState === "error" ? "error" : selectedThread && !connectionReady ? "loading" : "empty";
+  if (existing?.dataset.state === emptyState) {
     log.appendChild(existing);
     return;
   }
+  existing?.remove();
   const empty = document.createElement("div");
   empty.className = "log-empty";
+  empty.dataset.state = emptyState;
   const title = document.createElement("strong");
-  title.textContent = "まだやり取りはありません";
+  title.textContent = emptyState === "error" ? "会話を読み込めませんでした" : emptyState === "loading" ? "会話を読み込み中…" : "まだやり取りはありません";
   const lead = document.createElement("p");
-  lead.textContent = "下の入力欄から依頼を送ると、ここに応答が表示されます。";
+  lead.textContent = emptyState === "error" ? "履歴を表示できていません。会話が空になったことを示すものではありません。" : emptyState === "loading" ? "保存済みの会話を確認しています。" : "下の入力欄から依頼を送ると、ここに応答が表示されます。";
   const hint = document.createElement("p");
   hint.className = "log-empty-hint";
-  hint.textContent = "よく使う依頼は、入力欄の上のボタンから選べます。";
+  hint.textContent = emptyState === "error" ? "一覧で、会話を保存したMacとAIを確認して選び直してください。" : emptyState === "loading" ? "下書きはそのまま保持しています。" : "よく使う依頼は、入力欄の上のボタンから選べます。";
   empty.append(title, lead, hint);
   log.appendChild(empty);
 }
@@ -6009,6 +6013,7 @@ function captureActiveBridgeState() {
   const state = getBridgeState(activeBridgeId);
   state.threadCache = threadCache;
   state.selectedThread = selectedThread;
+  state.selectedThreads = Object.fromEntries(selectedThreadByProvider);
   state.hiddenProjects = hiddenProjects;
   state.pendingApproval = pendingApproval;
   state.artifactItems = artifactItems;
@@ -6026,18 +6031,28 @@ function applyActiveBridgeState(bridgeId) {
   const view = bridgeViewState[bridgeId] || {};
   threadCache = Array.isArray(state.threadCache) ? state.threadCache : [];
   hiddenProjects = Array.isArray(state.hiddenProjects) ? state.hiddenProjects : [];
-  selectedThread = state.selectedThread || view.selectedThread || "";
-  const launchProvider = bridgeId === launchProviderBridgeId ? initialProviderParam : "";
+  // The icon seeds the provider once. A later return to this Mac must restore
+  // the provider/thread pair, never combine a Claude id with the Codex icon.
+  const launchProvider = !state.viewInitialized && bridgeId === launchProviderBridgeId ? initialProviderParam : "";
+  const selections = { ...view.selectedThreads, ...state.selectedThreads };
+  const savedProvider = normalizeProviderName(view.provider);
+  if (savedProvider && !Object.prototype.hasOwnProperty.call(selections, savedProvider)) selections[savedProvider] = view.selectedThread || "";
+  if (state.viewInitialized && state.threadProvider) selections[state.threadProvider] = state.selectedThread || "";
   activeProvider = normalizeProviderName(launchProvider || state.activeProvider || view.provider || state.info?.provider || "codex") || "codex";
   threadProvider = normalizeProviderName(launchProvider || state.threadProvider || view.provider || activeProvider) || activeProvider;
   threadProviderExplicit = Boolean(launchProvider || state.threadProviderExplicit || view.provider);
+  selectedThread = initialUrlThreadPending ? params.get("thread") || "" : selections[threadProvider] || "";
+  state.viewInitialized = true;
   pendingApproval = state.pendingApproval || null;
   artifactItems = Array.isArray(state.artifactItems) ? state.artifactItems : [];
   Object.assign(currentWorkspace, state.currentWorkspace || {});
   workspaceFollowsSelectedThread = Boolean(state.workspaceFollowsSelectedThread);
   token = effectiveBridgeToken(activeBridge()) || "";
   selectedThreadByProvider.clear();
-  if (selectedThread && threadProvider) selectedThreadByProvider.set(threadProvider, selectedThread);
+  for (const provider of ["codex", "claude"]) {
+    if (typeof selections[provider] === "string") selectedThreadByProvider.set(provider, selections[provider]);
+  }
+  selectedThreadByProvider.set(threadProvider, selectedThread);
   // The composer's model and its menu follow the Mac being switched to: its
   // remembered model, and the models that Mac's account actually has.
   adoptModelChoices(state.info?.modelChoices);
@@ -6938,6 +6953,46 @@ function isActiveBridgeThread(thread = {}) {
   return !thread.bridgeId || thread.bridgeId === activeBridgeId;
 }
 
+// Old view records could pair an id with the wrong AI. Correct that only after
+// the same Mac returns real history for that exact id under the other provider.
+// Missing/empty replies are not ownership evidence and never start a new chat.
+const threadProviderRecoveries = new Map();
+async function recoverSelectedThreadProvider(threadId, provider, bridgeId) {
+  if (!threadId || connectionReady) return false;
+  const socket = ws;
+  const isCurrent = () => activeBridgeId === bridgeId && selectedThread === threadId && currentThreadProvider() === provider && ws === socket && !connectionReady;
+  if (!isCurrent()) return false;
+  const key = JSON.stringify([bridgeId, provider, threadId]);
+  if (threadProviderRecoveries.has(key)) return threadProviderRecoveries.get(key);
+  const recovery = (async () => {
+    const other = provider === "codex" ? "claude" : "codex";
+    let result;
+    try {
+      result = await apiGet(`/api/thread?${new URLSearchParams({ thread: threadId, provider: other })}`, { bridgeId });
+    } catch { return false; }
+    if (!isCurrent() || result.provider !== other || result.threadId !== threadId || result.missing
+      || !result.history?.some(entry => entry.type === "user" || entry.type === "assistant")) return false;
+    const previousDraftKey = currentThreadColorKey();
+    await selectThread(threadId, { bridgeId, thread: { id: threadId, provider: other } });
+    if (activeBridgeId !== bridgeId || selectedThread !== threadId || currentThreadProvider() !== other) return false;
+    migrateThreadScopedState(previousDraftKey, currentThreadColorKey());
+    restoreDraftForCurrentThread();
+    if (selectedThreadByProvider.get(provider) === threadId) selectedThreadByProvider.delete(provider);
+    const state = getBridgeState(bridgeId);
+    state.sessionRuns.delete(`${provider}:${threadId}`);
+    state.sessionTitles.delete(`${provider}:${threadId}`);
+    threadCache = threadCache.filter(thread => thread.id !== threadId || thread.provider !== provider);
+    state.threadCache = threadCache;
+    sessionActivityRecords = sessionActivityRecords.filter(item => item.bridgeId !== bridgeId || item.provider !== provider || item.threadId !== threadId);
+    saveSessionActivity();
+    updateUrlThread();
+    showToast(`元の会話を確認し、${providerLabel(other)} に接続し直しました。`);
+    return true;
+  })();
+  threadProviderRecoveries.set(key, recovery);
+  try { return await recovery; } finally { threadProviderRecoveries.delete(key); }
+}
+
 async function refreshSelectedThread() {
   if (!selectedThread || liveTurnActive || selectedThreadRefreshActive) return;
   const provider = currentThreadProvider();
@@ -6952,6 +7007,8 @@ async function refreshSelectedThread() {
     const result = await apiGet(`/api/thread?${query.toString()}`);
     if (!isCurrent() || liveTurnActive || result.threadId !== threadId) return;
     if (result.missing) {
+      if (await recoverSelectedThreadProvider(threadId, provider, bridgeId)) return;
+      if (!isCurrent()) return;
       showMissingSelectedThread(result.threadId);
       return;
     }
@@ -6962,6 +7019,8 @@ async function refreshSelectedThread() {
     }
     lastThreadRefreshError = "";
   } catch (error) {
+    if (!isCurrent()) return;
+    if (await recoverSelectedThreadProvider(threadId, provider, bridgeId)) return;
     if (!isCurrent()) return;
     const message = error.message || String(error);
     if (message !== lastThreadRefreshError) {
@@ -7014,7 +7073,10 @@ function updateUrlThread() {
   history.replaceState(null, "", next);
   const state = getBridgeState(activeBridgeId);
   state.selectedThread = selectedThread;
-  bridgeViewState[activeBridgeId] = { ...(bridgeViewState[activeBridgeId] || {}), selectedThread, provider: currentThreadProvider() };
+  selectedThreadByProvider.set(currentThreadProvider(), selectedThread);
+  state.selectedThreads = Object.fromEntries(selectedThreadByProvider);
+  state.threadProvider = currentThreadProvider();
+  bridgeViewState[activeBridgeId] = { ...(bridgeViewState[activeBridgeId] || {}), selectedThread, provider: currentThreadProvider(), selectedThreads: state.selectedThreads };
   updateActiveBridgeStorage();
 }
 
@@ -9246,6 +9308,7 @@ function connect({ preserveHistory = false, freshThread = false, workdir = "" } 
       }
       releasePendingSubmission("送信に失敗しました。");
       showBridgeError(msg.text || "エラー");
+      if (!connectionReady && selectedThread) recoverSelectedThreadProvider(selectedThread, provider, bridgeId).catch(() => {});
       updateThreadNavigation();
       return;
     }
