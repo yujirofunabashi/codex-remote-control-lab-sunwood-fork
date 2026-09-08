@@ -3987,6 +3987,13 @@ class ClaudeBridge {
     this.bridgeKey = bridgeMapKey(this.provider, baseBridgeKey);
     this.clients = new Set();
     this.threadId = requestedThreadId || `claude:${crypto.randomUUID()}`;
+    // The id handed to the phone before a real Claude session id exists. A new
+    // chat has none until its first turn finishes, so `ready` carries this
+    // `claude:<uuid>` and the phone stores it as the selected thread. Kept here
+    // so a reconnect that dials back with it resolves to this same bridge -
+    // even after promoteBridgeKey has moved `threadId` onto the real session id
+    // - instead of building an empty second bridge under a `claude:<uuid>` key.
+    this.provisionalThreadId = requestedThreadId ? "" : this.threadId;
     this.claudeSessionId = requestedThreadId && !requestedThreadId.startsWith("claude:") ? requestedThreadId : null;
     this.activeTurnId = null;
     this.createdAt = Date.now();
@@ -5006,6 +5013,17 @@ class ClaudeBridge {
 
 function getBridge(threadId, provider = agentProvider, connectionId = crypto.randomUUID(), options = {}) {
   const requestedProvider = normalizeProvider(provider);
+  // A new-session request that cannot be honoured is final: the same request id
+  // against the same folder will keep failing, so the phone must be told to stop
+  // retrying it rather than reconnect on the timer with the id it is holding.
+  // Defined here rather than at module scope so the resolver unit test, which
+  // runs this function's source in isolation, has it in scope.
+  const newSessionError = (message, code = "new_session_unavailable") => {
+    const error = new Error(message);
+    error.retryable = false;
+    error.code = code;
+    return error;
+  };
   // Claude honours this too now. While the sidebar showed only the active
   // workdir, the per-project "new chat" button could only ever mean the folder
   // the bridge was already in; listing every project made it a real request.
@@ -5015,15 +5033,28 @@ function getBridge(threadId, provider = agentProvider, connectionId = crypto.ran
   // Keep creation ownership on the bridge itself: its map key is promoted to
   // the real thread id before the browser necessarily receives ready.
   const newSessionId = !threadId && bridgeOptions.fresh ? String(options.newSessionId || "") : "";
-  if (newSessionId && !/^[A-Za-z0-9_-]{1,128}$/.test(newSessionId)) throw new Error("Invalid new session id");
+  if (newSessionId && !/^[A-Za-z0-9_-]{1,128}$/.test(newSessionId)) throw newSessionError("Invalid new session id", "invalid_new_session_id");
   if (newSessionId) {
     for (const bridge of bridges.values()) {
       if (bridge.provider !== requestedProvider || bridge.newSessionId !== newSessionId) continue;
       if (!bridgeMatchesWorkdir({ bridgeWorkdir: bridge.newSessionWorkdir, targetWorkdir: requestedWorkdir || workdir })) {
-        throw new Error("New session workdir changed; start a separate session");
+        throw newSessionError("New session workdir changed; start a separate session", "new_session_workdir_changed");
       }
-      if (typeof bridge.isReusable === "function" && !bridge.isReusable()) throw new Error("New session unavailable; start a separate session");
+      if (typeof bridge.isReusable === "function" && !bridge.isReusable()) throw newSessionError("New session unavailable; start a separate session");
       return bridge;
+    }
+  }
+  // A Claude session names itself only after its first turn finishes; until then
+  // the bridge answers to the provisional `claude:<uuid>` it put in `ready`, and
+  // that is what the phone dials back with. Its own key logic would look this id
+  // up as `claude:claude:<uuid>`, miss, and build an empty second bridge while
+  // the first still holds the conversation - so resolve it to the live bridge by
+  // its provisional (or already-promoted) id first. Real session ids never carry
+  // the `claude:` prefix, so this cannot shadow a resumed session.
+  if (threadId && requestedProvider === "claude" && String(threadId).startsWith("claude:")) {
+    for (const bridge of bridges.values()) {
+      if (bridge.provider !== "claude") continue;
+      if (bridge.threadId === threadId || bridge.provisionalThreadId === threadId) return bridge;
     }
   }
   // A Claude session already names its own directory, and the bridge reads it
@@ -5040,8 +5071,13 @@ function getBridge(threadId, provider = agentProvider, connectionId = crypto.ran
   // neither create a duplicate connection nor replace one doing active work.
   const sessionOwnsWorkdir = Boolean(threadId);
   const bridgeHasActiveWork = (bridge) => Boolean(typeof bridge?.hasActiveWork === "function" && bridge.hasActiveWork());
+  // A bridge a phone is connected to is not a stale hint to clean up: evicting
+  // it drops that phone's live socket and can kill a new session mid-creation.
+  // So a folder mismatch may replace only a bridge nobody is on.
+  const bridgeHasClients = (bridge) => Boolean(bridge?.clients && bridge.clients.size > 0);
   const bridgeNeedsReplacement = (bridge) =>
     !sessionOwnsWorkdir &&
+    !bridgeHasClients(bridge) &&
     shouldReplaceBridgeForWorkdir({
       bridgeWorkdir: bridge?.workdir || workdir,
       targetWorkdir: requestedWorkdir,
@@ -5056,7 +5092,14 @@ function getBridge(threadId, provider = agentProvider, connectionId = crypto.ran
   if (!threadId && !bridgeOptions.fresh) {
     for (const [key, bridge] of bridges.entries()) {
       if (bridge.provider !== requestedProvider) continue;
-      if (bridge.requestedThreadId) continue;
+      // Only a bridge that has not yet started a conversation is a candidate for
+      // this "new chat, no folder named" request. A bridge created from the
+      // sidebar's "+" keeps requestedThreadId null even after it owns a real
+      // thread, so match on threadId too: without this, a no-thread reconnect
+      // (a provider tab, a Mac switch, a plain reload with nothing selected)
+      // would join that "+" conversation, or - in another folder - dispose the
+      // very bridge whose phone is watching it.
+      if (bridge.requestedThreadId || bridge.threadId) continue;
       if (bridgeNeedsReplacement(bridge)) {
         if (typeof bridge.dispose === "function") bridge.dispose();
         bridges.delete(key);
@@ -5132,7 +5175,22 @@ async function bindBrowser(browser, phoneToken, threadId, provider = agentProvid
     browser.close();
     return;
   }
-  const bridge = resolveBridge(threadId, requestedProvider, crypto.randomUUID(), { ...options, workdir: requestedWorkspace.workdir });
+  let bridge;
+  try {
+    bridge = resolveBridge(threadId, requestedProvider, crypto.randomUUID(), { ...options, workdir: requestedWorkspace.workdir });
+  } catch (error) {
+    // A new-session request that cannot be honoured carries retryable:false so
+    // the phone drops the held request instead of dialling back on the timer
+    // with the same id, which is what produced a once-a-second reconnect loop.
+    if (browser.readyState === WebSocket.OPEN) {
+      const payload = { type: "error", text: error.message };
+      if (error.retryable === false) payload.retryable = false;
+      if (error.code) payload.code = error.code;
+      browser.send(JSON.stringify(payload));
+      browser.close();
+    }
+    return;
+  }
   bridge.addClient(browser);
   if (requestedWorkspace.problem) {
     // Say it rather than quietly working somewhere else than the phone shows.

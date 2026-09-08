@@ -9239,6 +9239,10 @@ function connect({ preserveHistory = false, freshThread = false, workdir = "" } 
         if (reconnectTimer) window.clearTimeout(reconnectTimer);
         reconnectTimer = null;
         setReady(false);
+        // Drop the held new-session request too. Suppressing this socket alone
+        // stopped the immediate loop, but the request id stayed on the bridge
+        // state, so the next resume dialled fresh with it and failed again.
+        if (connectionState.pendingNewSessions) delete connectionState.pendingNewSessions[provider];
       }
       releasePendingSubmission("送信に失敗しました。");
       showBridgeError(msg.text || "エラー");

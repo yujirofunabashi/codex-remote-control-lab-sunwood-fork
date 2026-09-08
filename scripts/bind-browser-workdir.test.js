@@ -105,3 +105,38 @@ for (const provider of ["codex", "claude"]) {
     assert.equal(browser.closeCalls, 1);
   });
 }
+
+// A resolver that refuses a new-session request (its bridge is gone, or the
+// request id was reused against another folder) must reach the phone as a
+// non-retryable error so it stops dialling back with the same id.
+test("a refused new session is reported as non-retryable and closes the socket", async () => {
+  const browser = new FakeBrowser();
+  await bindBrowser(browser, "private-token", null, "codex", { fresh: true, newSessionId: "r", workdir: os.homedir() }, {
+    async ensureCodexServerRunning() {},
+    getBridge() {
+      const error = new Error("New session unavailable; start a separate session");
+      error.retryable = false;
+      error.code = "new_session_unavailable";
+      throw error;
+    },
+  });
+  assert.equal(browser.messages[0]?.type, "error");
+  assert.equal(browser.messages[0]?.retryable, false);
+  assert.equal(browser.messages[0]?.code, "new_session_unavailable");
+  assert.match(browser.messages[0]?.text || "", /New session unavailable/);
+  assert.equal(browser.closeCalls, 1);
+});
+
+// A generic resolver failure still reaches the phone, but without the
+// non-retryable flag - an ordinary transient error should be retried.
+test("an unlabelled resolver error is reported without a retryable flag", async () => {
+  const browser = new FakeBrowser();
+  await bindBrowser(browser, "private-token", "some-thread", "claude", { workdir: os.homedir() }, {
+    async ensureCodexServerRunning() {},
+    getBridge() { throw new Error("transient upstream hiccup"); },
+  });
+  assert.equal(browser.messages[0]?.type, "error");
+  assert.equal(browser.messages[0]?.retryable, undefined);
+  assert.equal(browser.messages[0]?.code, undefined);
+  assert.equal(browser.closeCalls, 1);
+});
