@@ -67,6 +67,7 @@ async function main() {
       window.WebSocket = MockWebSocket;
       localStorage.setItem("codexPhoneBridgeRegistry:v1", JSON.stringify({ version: 1, bridges: [{ id: "air", label: "Air", baseUrl: airOrigin, rememberToken: true }] }));
       localStorage.setItem("codexPhoneBridgeTokens:v1", JSON.stringify({ air: "fixture-token" }));
+      localStorage.setItem("codexPhonePwaInstallHint:v1", "dismissed");
     }, { airOrigin, fixtures: { mini: state.mini, air: state.air } });
     await page.route("**/api/**", async (route) => {
       const url = new URL(route.request().url());
@@ -121,6 +122,11 @@ async function main() {
     assert.match(await page.locator("#sessionActivityList").textContent(), /許可待ち/);
     const listStates = () => page.locator(".session-activity-row").evaluateAll((rows) => rows.map((row) => row.dataset.state));
     assert.deepEqual(await listStates(), ["question", "approval", "error", "done", "running"]);
+    assert.ok(await page.locator("#sessionActivityDialog p").evaluate((hint) => getComputedStyle(hint).whiteSpace === "normal" && hint.scrollWidth <= hint.clientWidth), "the dismiss instructions must not be truncated");
+    if (process.argv.includes("--shots")) {
+      fs.mkdirSync(path.join(root, "output/playwright"), { recursive: true });
+      await page.locator("#sessionActivityDialog").screenshot({ path: path.join(root, "output/playwright/session-status-list.png") });
+    }
     // Reorder existing rows when a task needs attention while the list is open.
     state.mini[0].run = { state: "error", updatedAt: 150 };
     await page.evaluate(() => refreshFleet({ force: true }));
@@ -131,6 +137,45 @@ async function main() {
     await page.evaluate(() => refreshFleet({ force: true }));
     assert.deepEqual(await listStates(), ["question", "approval", "error", "done", "running"]);
     await page.locator("#closeSessionActivity").click();
+    // Clear the exact stale completion/error scenario without opening either
+    // conversation, changing the draft or sending anything to a bridge.
+    const dismissFor = (machine, provider, threadId) => byKey(machine, provider, threadId).locator("..").locator(".session-activity-dismiss");
+    await page.locator("#prompt").fill("片づけ前の下書き");
+    const selectionBefore = await page.evaluate(() => ({ thread: selectedThread, provider: currentThreadProvider(), bridge: activeBridgeId, sockets: window.__socketUrls.length }));
+    const recordsBefore = await page.evaluate(() => sessionActivityRecords.map(({ key, threadId, workdir, title, status }) => ({ key, threadId, workdir, title, status })));
+    assert.equal(await page.locator("#sessionActivityItems .session-activity-dismiss:visible").count(), 2);
+    const targetSize = await dismissFor("mini", "codex", "finished").boundingBox();
+    assert.ok(targetSize.width >= 44 && targetSize.height >= 44, "dismiss must be a separate finger-sized target");
+    await dismissFor("mini", "codex", "finished").tap();
+    assert.equal(await summaryCount("done").count(), 0);
+    await page.locator("#sessionActivityCount").click();
+    const errorDismiss = page.locator('.session-activity-row[data-state="error"]').locator("..").locator(".session-activity-dismiss");
+    await errorDismiss.focus();
+    await errorDismiss.press("Enter");
+    assert.deepEqual(await listStates(), ["question", "approval", "running"]);
+    assert.equal(await page.locator("#sessionActivityList .session-activity-dismiss:visible").count(), 0);
+    assert.ok(await page.locator("#sessionActivityList").evaluate((list) => list.contains(document.activeElement)), "focus stays in the open list after dismissal");
+    await page.locator("#closeSessionActivity").click();
+    assert.deepEqual(await page.evaluate(() => ({ thread: selectedThread, provider: currentThreadProvider(), bridge: activeBridgeId, sockets: window.__socketUrls.length })), selectionBefore);
+    assert.deepEqual(await page.evaluate(() => sessionActivityRecords.map(({ key, threadId, workdir, title, status }) => ({ key, threadId, workdir, title, status }))), recordsBefore);
+    assert.equal(await page.locator("#prompt").inputValue(), "片づけ前の下書き");
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.waitForFunction(() => connectionReady && document.querySelectorAll(".session-activity-chip").length === 3);
+    await page.evaluate(() => refreshFleet({ force: true }));
+    assert.deepEqual(await summary(), ["返信待ち 1", "許可待ち 1", "処理中 1"]);
+    assert.equal(await page.locator("#prompt").inputValue(), "片づけ前の下書き");
+    if (process.argv.includes("--shots")) {
+      fs.mkdirSync(path.join(root, "output/playwright"), { recursive: true });
+      await page.evaluate(() => setSidebarVisible(false));
+      await page.waitForFunction(() => document.querySelector(".sidebar").getBoundingClientRect().right <= 1);
+      await page.screenshot({ path: path.join(root, "output/playwright/session-status-cleared.png") });
+    }
+    state.mini[1].run.updatedAt = 110;
+    state.air[1].run.updatedAt = 110;
+    await page.evaluate((fixtures) => { window.__runStates = fixtures; }, { mini: state.mini, air: state.air });
+    await page.evaluate(() => refreshFleet({ force: true }));
+    assert.equal(await summaryCount("done").textContent(), "未確認完了 1");
+    assert.equal(await summaryCount("error").textContent(), "エラー 1");
     // Every status total stays inside the viewport even when conversations
     // overflow horizontally. This is the original missed-attention scenario.
     for (const width of [320, 390, 520, 1024]) {
@@ -146,6 +191,7 @@ async function main() {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.evaluate(() => setSidebarVisible(false));
     if (process.argv.includes("--shots")) {
+      await page.waitForFunction(() => document.querySelector(".sidebar").getBoundingClientRect().right <= 1);
       fs.mkdirSync(path.join(root, "output/playwright"), { recursive: true });
       await page.locator("#sessionActivityItems").evaluate((element) => { element.scrollLeft = 0; });
       await page.screenshot({ path: path.join(root, "output/playwright/session-status-strip-mobile.png") });
@@ -213,8 +259,13 @@ async function main() {
     for (const machine of ["mini", "air"]) for (const item of state[machine]) item.run = { state: "ready", updatedAt: 500 };
     await page.evaluate(() => refreshFleet({ force: true }));
     assert.equal(await page.locator("#sessionActivityStrip").isVisible(), false);
+    state.mini[0].run = { state: "error", updatedAt: 600 };
+    await page.evaluate(() => refreshFleet({ force: true }));
+    await dismissFor("mini", "codex", "shared").click();
+    assert.equal(await page.locator("#sessionActivityStrip").isVisible(), false);
+    assert.ok(await page.locator("#prompt").evaluate((input) => input === document.activeElement));
     assert.deepEqual(errors, []);
-    console.log("Session strip verified: visible mixed-state counts at 320–1024px, attention-first list updates, identity, orbit, reduced motion, stable scroll, full titles, question classification/correction, completion acknowledgement, provider/Mac navigation, offline safety and empty state.");
+    console.log("Session strip verified: persistent completion/error dismissal, touch/keyboard targets, retained conversations/drafts, new-event reappearance, visible mixed-state counts at 320–1024px, attention-first list updates, identity, orbit, reduced motion, stable scroll, full titles, question classification/correction, completion acknowledgement, provider/Mac navigation, offline safety and empty state.");
   } finally {
     await browser?.close();
     await new Promise((resolve) => server.close(resolve));

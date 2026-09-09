@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { sessionActivityKey, sessionActivityStatus, reconcileSessionActivity, visibleSessionActivity, acknowledgeSessionActivity } = require("../public/phone-ui-utils");
+const { sessionActivityKey, sessionActivityStatus, reconcileSessionActivity, visibleSessionActivity, acknowledgeSessionActivity, dismissSessionActivity } = require("../public/phone-ui-utils");
 
 function observation(state, options = {}) {
   return { bridgeId: "mini", machineKey: "mini", machineLabel: "mini", provider: "codex", threadId: "one", run: { state, updatedAt: 100 }, ...options };
@@ -74,4 +74,68 @@ test("a new observed run clears acknowledgement even without a server completion
   records = reconcileSessionActivity(records, [observation("running")]);
   records = reconcileSessionActivity(records, [observation("done", { run: { state: "done" } })], { now: 2 });
   assert.equal(visibleSessionActivity(records).length, 1);
+});
+
+test("dismissing old errors and completions survives polling, missing observations and reload without deleting the conversation", () => {
+  for (const state of ["done", "error"]) {
+    let records = reconcileSessionActivity([], [observation(state)]);
+    const original = records[0];
+    records = dismissSessionActivity(records, original.key);
+    assert.equal(visibleSessionActivity(records).length, 0);
+    assert.equal(records.length, 1);
+    assert.equal(records[0].threadId, original.threadId);
+    assert.equal(records[0].status, state);
+    records = reconcileSessionActivity(JSON.parse(JSON.stringify(records)), []);
+    records = reconcileSessionActivity(records, [observation("ready")]);
+    records = reconcileSessionActivity(records, [observation(state)]);
+    assert.equal(visibleSessionActivity(records).length, 0);
+    records = reconcileSessionActivity(records, [observation(state, { run: { state, updatedAt: 200 } })]);
+    assert.equal(visibleSessionActivity(records).length, 1, "a new event must be visible even if its running state was missed");
+  }
+});
+
+test("dismissal cannot hide running work, questions, approvals or connection trouble", () => {
+  for (const state of ["running", "question", "approval", "offline", "interrupted"]) {
+    const records = reconcileSessionActivity([], [observation(state)]);
+    assert.deepEqual(dismissSessionActivity(records, records[0].key), records);
+    assert.equal(visibleSessionActivity(records).length, 1);
+  }
+});
+
+test("dismissal stays scoped to Mac, provider and conversation and rearms after a new run", () => {
+  const observations = [observation("error"), observation("error", { provider: "claude" }), observation("error", { bridgeId: "air", machineKey: "air" })];
+  let records = reconcileSessionActivity([], observations);
+  records = dismissSessionActivity(records, records[0].key);
+  assert.equal(visibleSessionActivity(records).length, 2);
+  records = reconcileSessionActivity(records, [observation("running")]);
+  assert.equal(visibleSessionActivity(records).length, 3);
+  records = reconcileSessionActivity(records, [observation("error")]);
+  assert.equal(visibleSessionActivity(records).length, 3);
+});
+
+test("legacy stored notices and timestamp-free errors can be dismissed without changing their ordinals", () => {
+  const legacy = reconcileSessionActivity([], [observation("error")])[0];
+  delete legacy.notice;
+  delete legacy.dismissedNotice;
+  let records = reconcileSessionActivity([legacy], [observation("error", { run: { state: "error" } })]);
+  records = dismissSessionActivity(records, records[0].key);
+  records = reconcileSessionActivity(records, [observation("error", { run: { state: "error" } })]);
+  assert.equal(visibleSessionActivity(records).length, 0);
+  assert.equal(records[0].ordinal, legacy.ordinal);
+  records = reconcileSessionActivity(records, [observation("error", { run: { state: "error", turnId: "new-turn" } })]);
+  assert.equal(visibleSessionActivity(records).length, 1);
+});
+
+test("legacy notices whose server watcher has expired can still be dismissed", () => {
+  for (const state of ["done", "error"]) {
+    const legacy = reconcileSessionActivity([], [observation(state)])[0];
+    delete legacy.notice;
+    delete legacy.dismissedNotice;
+    let records = reconcileSessionActivity([legacy], []);
+    records = dismissSessionActivity(records, legacy.key);
+    records = reconcileSessionActivity(JSON.parse(JSON.stringify(records)), []);
+    assert.equal(visibleSessionActivity(records).length, 0);
+    assert.equal(records[0].key, legacy.key);
+    assert.equal(records[0].status, state);
+  }
 });

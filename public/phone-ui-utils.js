@@ -60,6 +60,11 @@
       const completion = status === "done"
         ? String(observation.run?.turnId || observation.run?.updatedAt || (old?.status === "done" && old.completion) || options.now || Date.now())
         : old?.completion || "";
+      // Dismiss an event, not its conversation: polling/reloads keep it hidden,
+      // while another result or an observed new run makes attention visible again.
+      const notice = status === "done" ? JSON.stringify(["done", completion])
+        : status === "error" ? JSON.stringify(["error", observation.run?.turnId || "", observation.run?.updatedAt || "", observation.run?.label || ""])
+        : old?.notice || "";
       const next = {
         key, group, ordinal,
         bridgeId: observation.bridgeId,
@@ -71,6 +76,8 @@
         workdir: observation.workdir || old?.workdir || "",
         status, completion,
         acknowledged: status === "running" ? "" : old?.acknowledged || "",
+        notice,
+        dismissedNotice: status === "running" ? "" : old?.dismissedNotice || "",
       };
       // An idle reconnect or an expired watcher is not evidence that the
       // owner has read the completed answer.
@@ -81,11 +88,27 @@
   }
 
   function visibleSessionActivity(records = []) {
-    return records.filter((item) => item.status !== "idle" && !(item.status === "done" && item.acknowledged === item.completion));
+    return records.filter((item) => item.status !== "idle"
+      && !(item.status === "done" && item.acknowledged === item.completion)
+      && !(canDismissSessionActivity(item) && item.notice && item.dismissedNotice === item.notice));
   }
 
   function acknowledgeSessionActivity(records = [], key = "") {
     return records.map((item) => item.key === key && item.status === "done" ? { ...item, acknowledged: item.completion } : item);
+  }
+
+  function canDismissSessionActivity(item = {}) {
+    return item.status === "done" || item.status === "error";
+  }
+
+  function dismissSessionActivity(records = [], key = "") {
+    return records.map((item) => {
+      if (item.key !== key || !canDismissSessionActivity(item)) return item;
+      // Older browser records may outlive their server watcher, so no new
+      // observation is guaranteed to supply the event identifier for them.
+      const notice = item.notice || JSON.stringify([item.status, item.completion || ""]);
+      return { ...item, notice, dismissedNotice: notice };
+    });
   }
 
   function safeJsonParse(value, fallback, options = {}) {
@@ -1217,6 +1240,8 @@
     reconcileSessionActivity,
     visibleSessionActivity,
     acknowledgeSessionActivity,
+    canDismissSessionActivity,
+    dismissSessionActivity,
     sortThreadsForInbox,
     limitThreadList,
     prioritizeSelectedThread,

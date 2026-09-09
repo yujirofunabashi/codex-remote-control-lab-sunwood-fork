@@ -5730,14 +5730,17 @@ async function openSessionActivity(item) {
 }
 
 function renderSessionActivityButtons(container, items, expanded = false) {
-  const existing = new Map(Array.from(container.children).map((button) => [button.dataset.sessionKey, button]));
+  const existing = new Map(Array.from(container.children).map((entry) => [entry.dataset.sessionKey, entry]));
   const currentKey = currentSessionActivityKey();
   // Keep the horizontal shortcuts stable; the full list puts attention first.
   const ordered = expanded ? [...items].sort((a, b) => sessionActivityOrder.indexOf(a.status) - sessionActivityOrder.indexOf(b.status)) : items;
   for (const [index, item] of ordered.entries()) {
-    let button = existing.get(item.key);
-    if (!button) {
-      button = document.createElement("button");
+    let entry = existing.get(item.key);
+    if (!entry) {
+      entry = document.createElement("div");
+      entry.className = expanded ? "session-activity-item expanded" : "session-activity-item";
+      entry.dataset.sessionKey = item.key;
+      const button = document.createElement("button");
       button.type = "button";
       button.className = expanded ? "session-activity-row" : "session-activity-chip";
       button.dataset.sessionKey = item.key;
@@ -5755,9 +5758,22 @@ function renderSessionActivityButtons(container, items, expanded = false) {
         const current = sessionActivityRecords.find((record) => record.key === button.dataset.sessionKey);
         if (current) openSessionActivity(current);
       });
-      container.append(button);
+      const dismiss = document.createElement("button");
+      dismiss.type = "button";
+      dismiss.className = "session-activity-dismiss";
+      dismiss.textContent = "×";
+      dismiss.addEventListener("click", () => {
+        sessionActivityRecords = uiUtils.dismissSessionActivity(sessionActivityRecords, entry.dataset.sessionKey);
+        saveSessionActivity();
+        renderSessionActivity();
+        if (sessionActivityStrip.hidden) document.querySelector("#prompt")?.focus({ preventScroll: true });
+        showToast("表示を片づけました。会話は一覧から開けます。");
+      });
+      entry.append(button, dismiss);
+      container.append(entry);
     }
     existing.delete(item.key);
+    const button = entry.firstElementChild;
     const ordinal = item.ordinal <= 20 ? String.fromCodePoint(0x245f + item.ordinal) : String(item.ordinal);
     const name = `${item.provider === "claude" ? "Claude" : "Codex"} ${item.machineLabel}${ordinal}`;
     const label = `${name}：${sessionActivityLabels[item.status]}。${item.title}`;
@@ -5767,13 +5783,20 @@ function renderSessionActivityButtons(container, items, expanded = false) {
     button.title = label;
     button.querySelector(".session-activity-name").textContent = name;
     button.querySelector(".session-activity-symbol").textContent = ({ done: "✓", question: "?", approval: "?", error: "!", offline: "!", interrupted: "−" })[item.status] || "";
+    const dismiss = entry.querySelector(".session-activity-dismiss");
+    dismiss.hidden = !uiUtils.canDismissSessionActivity(item);
+    dismiss.setAttribute("aria-label", `${name}の${sessionActivityLabels[item.status]}表示を片づける（会話は残ります）`);
+    dismiss.title = "この表示を片づける（会話は残ります）";
     if (expanded) button.querySelector(".session-activity-detail").textContent = `${sessionActivityLabels[item.status]} · ${item.title}`;
     const position = container.children[index];
-    if (position !== button) container.insertBefore(button, position || null);
+    if (position !== entry) container.insertBefore(entry, position || null);
   }
-  for (const button of existing.values()) {
-    if (button === document.activeElement) sessionActivityCount.focus({ preventScroll: true });
-    button.remove();
+  for (const entry of existing.values()) {
+    if (entry.contains(document.activeElement)) {
+      const next = Array.from(container.children).find((item) => !existing.has(item.dataset.sessionKey));
+      (next?.querySelector("button") || document.querySelector(expanded ? "#closeSessionActivity" : "#prompt"))?.focus({ preventScroll: true });
+    }
+    entry.remove();
   }
 }
 
