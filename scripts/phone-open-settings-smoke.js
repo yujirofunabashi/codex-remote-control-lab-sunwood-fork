@@ -103,7 +103,7 @@ async function main() {
       const headers = { "access-control-allow-origin": origin, "access-control-allow-credentials": "true", "access-control-allow-headers": "content-type, authorization, x-phone-token" };
       const reply = (json, status = 200) => route.fulfill({ json, status, headers });
       if (route.request().method() === "OPTIONS") return route.fulfill({ status: 204, headers });
-      if (["/api/info", "/api/bridge/info"].includes(url.pathname)) return reply({ provider: "claude", providers: ["codex", "claude"], model: "sonnet", workdir: cwd, cwd, machineLabel: machine === "mini" ? "mini" : "Air", shell: { main: `/main.js?v=${version}` } });
+      if (["/api/info", "/api/bridge/info"].includes(url.pathname)) return reply({ provider: "claude", providers: ["codex", "claude"], model: "sonnet", workdir: cwd, cwd, machineLabel: machine === "mini" ? "mini" : "Air", operationContext: { version: 1 }, shell: { main: `/main.js?v=${version}` } });
       if (url.pathname === "/api/threads") return reply({ provider, activeProvider: provider, data: [{ id: `${machine}-${provider}`, name: `${machine} ${provider}`, provider, cwd }], hiddenProjects: [] });
       if (url.pathname === "/api/thread") {
         const id = url.searchParams.get("thread");
@@ -136,6 +136,9 @@ async function main() {
     await settled("codex", "mini-codex");
     check("the operator picker never opens or notifies on startup", !(await page.locator("#operationContextDialog").evaluate(el => el.open)) && await page.locator("#toastStack").innerText() === "");
     check("an unregistered Mac does not claim Air or mini as the operator", await page.locator("#operationContextButton").innerText() === "操作元 ?");
+    await page.evaluate(() => { delete getBridgeState(activeBridgeId).info.operationContext; renderOperationContext(); });
+    check("an older bridge never advertises receipt of operator context", await page.locator("#operationContextButton").isHidden());
+    await page.evaluate(() => { getBridgeState(activeBridgeId).info.operationContext = { version: 1 }; renderOperationContext(); });
     await page.locator("#prompt").fill("名札を開いても残す下書き");
     await page.locator("#operationContextButton").click();
     if (shots) await page.screenshot({ path: path.join(shotsDir, `${process.argv.includes("--webkit") ? "webkit" : "chromium"}-operation-picker.png`) });

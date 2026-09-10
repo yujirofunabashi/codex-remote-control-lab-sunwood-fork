@@ -386,7 +386,7 @@ The terminal key row does not expose unauthenticated raw shell execution. `$` in
 
 ### Operator context badge {#operation-context}
 
-The small operator badge beside the header's connection picker opens a one-click choice such as direct Air, direct mini, or Air viewing mini through screen sharing. The selection stays in this browser; switching conversations, providers, or execution machines does not change it. The execution machine supplies its own identity separately. No setup dialog, reminder, toast, or notification opens automatically, and an unconfigured operator never blocks submission.
+The small operator badge beside the header's connection picker opens a one-click choice such as direct Air, direct mini, or Air viewing mini through screen sharing. It appears only when the connected bridge advertises support. The selection stays in this browser; switching conversations, providers, or execution machines does not change it. The execution machine supplies its own identity separately. No setup dialog, reminder, toast, or notification opens automatically, and an unconfigured operator never blocks submission.
 
 A Mac browser cannot distinguish Air from mini or identify the physical operator. Browser detection describes only the screen's device family. User-selected operator and screen-sharing information is explicitly advisory and expires after 12 hours; select the badge again when the operating route changes. Expiry returns the operator to unknown without interrupting work.
 

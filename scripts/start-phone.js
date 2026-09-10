@@ -767,6 +767,7 @@ function bridgeInfoPayload() {
     codexUrl,
     codexSocketPath: codexSocketPath || null,
     machineLabel: phoneMachineLabel || null,
+    operationContext: { version: 1 },
     workdir,
     cwd: workdir,
     repoRoot,
@@ -5736,6 +5737,7 @@ async function main() {
         codexSocketPath: codexSocketPath || null,
         managedCodexServer,
         tokenRequired: true,
+        operationContext: { version: 1 },
       });
       return;
     }

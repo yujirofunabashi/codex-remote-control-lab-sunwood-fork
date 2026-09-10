@@ -15,7 +15,7 @@ function renderOperationContext() {
   if (!operationContextUtils || !operationContextButton) return;
   const context = operationContextForSubmission();
   // Lab tasks do not use either Mac provider's prompt transport yet.
-  operationContextButton.hidden = Boolean(activeLabInfo());
+  operationContextButton.hidden = Boolean(activeLabInfo()) || getBridgeState(activeBridgeId).info?.operationContext?.version !== 1;
   operationContextButton.textContent = operationContextUtils.badge(context);
   operationContextButton.dataset.known = String(Boolean(context.operator));
   const executor = shortMachineName(activeBridge(), getBridgeState(activeBridgeId)) || "未確認";
@@ -9599,7 +9599,7 @@ composer.addEventListener("submit", (event) => {
         clientMessageId: submission.id,
         text: text || "添付ファイルを確認してください。",
         attachments: attachmentsToSend,
-        operationContext: operationContextForSubmission(),
+        operationContext: getBridgeState(activeBridgeId).info?.operationContext?.version === 1 ? operationContextForSubmission() : undefined,
         options: {
           model: activeLabInfo()?.model || selectedModel || undefined,
           serviceTier: activeLabInfo() ? "standard" : currentThreadProvider() === "codex" ? selectedServiceTier || null : undefined,
