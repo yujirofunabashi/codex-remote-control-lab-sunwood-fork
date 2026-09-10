@@ -145,7 +145,10 @@ async function main() {
     const recordsBefore = await page.evaluate(() => sessionActivityRecords.map(({ key, threadId, workdir, title, status }) => ({ key, threadId, workdir, title, status })));
     assert.equal(await page.locator("#sessionActivityItems .session-activity-dismiss:visible").count(), 2);
     const targetSize = await dismissFor("mini", "codex", "finished").boundingBox();
-    assert.ok(targetSize.width >= 44 && targetSize.height >= 44, "dismiss must be a separate finger-sized target");
+    assert.ok(targetSize.width >= 24 && targetSize.width <= 28 && targetSize.height >= 24, "dismiss must stay compact and tappable");
+    const capsuleSize = await byKey("mini", "codex", "finished").locator(".session-activity-capsule").boundingBox();
+    const nameSize = await byKey("mini", "codex", "finished").locator(".session-activity-name").boundingBox();
+    assert.ok(targetSize.x >= nameSize.x + nameSize.width && targetSize.x + targetSize.width <= capsuleSize.x + capsuleSize.width, "dismiss must fit inside the capsule without covering its name");
     await dismissFor("mini", "codex", "finished").tap();
     assert.equal(await summaryCount("done").count(), 0);
     await page.locator("#sessionActivityCount").click();

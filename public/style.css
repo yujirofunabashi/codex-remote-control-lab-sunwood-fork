@@ -2310,20 +2310,22 @@ p {
 
 .session-activity-items::-webkit-scrollbar { display: none; }
 
-.session-activity-item { display: flex; align-items: center; flex: 0 0 auto; min-width: 0; }
+.session-activity-item { position: relative; display: flex; align-items: center; flex: 0 0 auto; min-width: 0; }
 .session-activity-item.expanded { border-bottom: 1px solid var(--line); }
 .session-activity-dismiss {
-  flex: 0 0 44px;
-  width: 44px;
-  height: 44px;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 28px;
   padding: 0;
   border: 0;
   border-radius: 50%;
   background: transparent;
   color: var(--muted);
-  font-size: 20px;
+  font-size: 14px;
   line-height: 1;
 }
+.session-activity-item:not(.expanded) .session-activity-dismiss { position: absolute; top: 50%; right: 4px; transform: translateY(-50%); }
+.session-activity-item:not(.expanded).dismissible .session-activity-capsule { padding-right: 30px; }
 .session-activity-dismiss[hidden] { display: none; }
 .session-activity-dismiss:hover { background: var(--line); color: var(--text); }
 .session-activity-dismiss:focus-visible { outline: 2px solid var(--text); outline-offset: -2px; }

@@ -5785,6 +5785,7 @@ function renderSessionActivityButtons(container, items, expanded = false) {
     button.querySelector(".session-activity-symbol").textContent = ({ done: "✓", question: "?", approval: "?", error: "!", offline: "!", interrupted: "−" })[item.status] || "";
     const dismiss = entry.querySelector(".session-activity-dismiss");
     dismiss.hidden = !uiUtils.canDismissSessionActivity(item);
+    entry.classList.toggle("dismissible", !dismiss.hidden);
     dismiss.setAttribute("aria-label", `${name}の${sessionActivityLabels[item.status]}表示を片づける（会話は残ります）`);
     dismiss.title = "この表示を片づける（会話は残ります）";
     if (expanded) button.querySelector(".session-activity-detail").textContent = `${sessionActivityLabels[item.status]} · ${item.title}`;
