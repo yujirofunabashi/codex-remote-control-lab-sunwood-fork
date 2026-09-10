@@ -13,11 +13,11 @@ test("history sync can be disabled with common falsey env values", () => {
   }
 });
 
-test("historySyncRequests warms thread body and scan-backed list metadata", () => {
+test("historySyncRequests refreshes metadata without downloading unbounded tool output", () => {
   assert.deepEqual(historySyncRequests("thread-123", "/tmp/demo", 10), [
     {
       method: "thread/read",
-      params: { threadId: "thread-123", includeTurns: true },
+      params: { threadId: "thread-123", includeTurns: false },
     },
     {
       method: "thread/list",

@@ -1,4 +1,5 @@
 const { isUnavailableHistoryError, emptyCodexThreadWorkdir } = require("./codex-empty-thread");
+const { recentTurnsOptions, withRecentTurns } = require("./codex-history");
 
 function liveBridgeSnapshot(bridge, threadId) {
   if (!bridge) return null;
@@ -45,9 +46,13 @@ async function readThreadSnapshot({ threadId, liveBridge, request, historyFromTh
   try {
     const result = await request("thread/read", {
       threadId,
-      includeTurns: true,
+      includeTurns: false,
     });
     thread = result.thread || result;
+    if (thread.id !== threadId) throw new Error("Codex returned a different conversation");
+    if (emptyCodexThreadWorkdir(thread)) return { threadId, history: [], empty: true, source: "empty-thread" };
+    const page = await request("thread/turns/list", { threadId, ...recentTurnsOptions });
+    thread = withRecentTurns(thread, page);
   } catch (readError) {
     // A GET must never resume a thread with this bridge's default folder or
     // overwrite its model/permissions. Inspect only verified empty records.

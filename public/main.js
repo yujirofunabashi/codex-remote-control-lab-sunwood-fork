@@ -1240,6 +1240,7 @@ let hiddenProjects = [];
 let liveTurnActive = false;
 let connectionReady = false;
 const threadOpenFailures = new Set();
+const threadOpenFailureDetails = new Map();
 let pendingSubmission = null;
 let pendingSubmissionTimer = null;
 let lastHistorySignature = "";
@@ -3211,14 +3212,15 @@ function syncThreadRecoveryActions() {
     return;
   }
   const target = { threadId: selectedThread, bridgeId: activeBridgeId, provider: currentThreadProvider(), workdir: selectedThreadWorkdir("") };
-  const signature = JSON.stringify(target);
+  const failure = threadOpenFailureDetails.get(currentThreadColorKey());
+  const signature = JSON.stringify({ ...target, code: failure?.code });
   if (existing?.dataset.target === signature) return;
   existing?.remove();
   const panel = document.createElement("div");
   panel.className = "thread-recovery";
   panel.dataset.target = signature;
   const hint = document.createElement("p");
-  hint.textContent = "元の会話と下書きを残して、履歴のない新しい会話を開けます。";
+  hint.textContent = failure?.text || "履歴と下書きを残したまま、同じ会話への接続をやり直せます。";
   const actions = document.createElement("div");
   const find = document.createElement("button");
   find.type = "button";
@@ -3229,6 +3231,16 @@ function syncThreadRecoveryActions() {
   create.textContent = target.workdir ? "同じフォルダで新しく開く" : "フォルダを選んで新しく開く";
   const isCurrent = () => selectedThread === target.threadId && activeBridgeId === target.bridgeId
     && currentThreadProvider() === target.provider && selectedThreadWorkdir("") === target.workdir && !connectionReady;
+  const retry = document.createElement("button");
+  retry.type = "button";
+  retry.textContent = "同じ会話に再接続";
+  retry.addEventListener("click", () => {
+    if (retry.disabled || !isCurrent()) return;
+    retry.disabled = true;
+    threadOpenFailures.delete(currentThreadColorKey());
+    threadOpenFailureDetails.delete(currentThreadColorKey());
+    connect({ preserveHistory: true, workdir: target.workdir });
+  });
   create.addEventListener("click", async () => {
     if (create.disabled || !isCurrent()) return;
     if (!target.workdir) { showNewSessionPicker(); return; }
@@ -3242,7 +3254,7 @@ function syncThreadRecoveryActions() {
       if (isCurrent()) showToast(error.message);
     } finally { create.disabled = false; }
   });
-  actions.append(find, create);
+  actions.append(retry, find, create);
   panel.append(hint, actions);
   log.appendChild(panel);
 }
@@ -3482,7 +3494,10 @@ function setWorkspaceMeta(meta = {}) {
 
 function setReady(ready) {
   connectionReady = ready;
-  if (ready) threadOpenFailures.delete(currentThreadColorKey());
+  if (ready) {
+    threadOpenFailures.delete(currentThreadColorKey());
+    threadOpenFailureDetails.delete(currentThreadColorKey());
+  }
   const bridgeState = getBridgeState(activeBridgeId);
   bridgeState.connected = ready;
   bridgeState.lastEventAt = Date.now();
@@ -7037,6 +7052,8 @@ async function recoverSelectedThreadProvider(threadId, provider, bridgeId) {
   const socket = ws;
   const isCurrent = () => activeBridgeId === bridgeId && selectedThread === threadId && currentThreadProvider() === provider && ws === socket && !connectionReady;
   if (!isCurrent()) return false;
+  const failure = threadOpenFailureDetails.get(currentThreadColorKey());
+  if (failure?.code === "thread_writer_conflict" || failure?.code === "codex_payload_too_large") return false;
   const key = JSON.stringify([bridgeId, provider, threadId]);
   if (threadProviderRecoveries.has(key)) return threadProviderRecoveries.get(key);
   const recovery = (async () => {
@@ -9376,7 +9393,10 @@ function connect({ preserveHistory = false, freshThread = false, workdir = "" } 
       return;
     }
     if (msg.type === "error") {
-      if (!connectionReady && selectedThread) threadOpenFailures.add(currentThreadColorKey());
+      if (!connectionReady && selectedThread) {
+        threadOpenFailures.add(currentThreadColorKey());
+        if (msg.code) threadOpenFailureDetails.set(currentThreadColorKey(), { code: msg.code, text: msg.text });
+      }
       if (msg.retryable === false) {
         suppressedSocketReconnects.add(socket);
         if (reconnectTimer) window.clearTimeout(reconnectTimer);
@@ -9389,7 +9409,13 @@ function connect({ preserveHistory = false, freshThread = false, workdir = "" } 
       }
       releasePendingSubmission("送信に失敗しました。");
       showBridgeError(msg.text || "エラー");
-      if (!connectionReady && selectedThread) recoverSelectedThreadProvider(selectedThread, provider, bridgeId).catch(() => {});
+      if (!connectionReady && selectedThread) {
+        if (msg.code === "thread_writer_conflict" || msg.code === "codex_payload_too_large") {
+          // These are known Codex failures, never evidence of another AI's
+          // ownership. Read saved history without resuming or sending input.
+          refreshSelectedThread().catch(() => {});
+        } else recoverSelectedThreadProvider(selectedThread, provider, bridgeId).catch(() => {});
+      }
       updateThreadNavigation();
       return;
     }

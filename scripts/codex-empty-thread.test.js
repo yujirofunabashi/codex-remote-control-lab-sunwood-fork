@@ -48,6 +48,6 @@ test("history inspection handles a verified empty session without a resume or fi
   } });
   assert.equal(snapshot.empty, true);
   assert.deepEqual(snapshot.history, []);
-  assert.deepEqual(calls.map(call => call.method), ["thread/read", "thread/read"]);
+  assert.deepEqual(calls.map(call => call.method), ["thread/read"]);
   assert.equal(fs.readFileSync(f.thread.path, "utf8"), before);
 });

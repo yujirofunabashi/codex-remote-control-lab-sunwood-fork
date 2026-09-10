@@ -10,7 +10,7 @@ function historySyncRequests(threadId, workdir, limit = 30) {
       method: "thread/read",
       params: {
         threadId,
-        includeTurns: true,
+        includeTurns: false,
       },
     },
     {

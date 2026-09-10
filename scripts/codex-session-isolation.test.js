@@ -256,7 +256,50 @@ test("joining a terminal's conversation preserves its model and permission choic
   own.upstream.send = () => {};
   own.upstream.emit("open");
   assert.deepEqual(requests.find((request) => request.method === "thread/resume").params,
-    { threadId: "shared" });
+    { threadId: "shared", excludeTurns: true, initialTurnsPage: { limit: 80, sortDirection: "desc", itemsView: "summary" } });
+});
+
+test("resume hydrates recent summaries in order without receiving full tool output", () => {
+  const own = bridge("shared", null);
+  own.promoteBridgeKey = () => {};
+  own.readyPayload = () => ({ history: own.history, run: own.runPayload() });
+  own.pending.set(7, "thread/resume");
+  deliver(own, { id: 7, result: {
+    thread: { id: "shared", turns: [] },
+    initialTurnsPage: { data: [
+      { id: "active", status: "inProgress", items: [{ type: "userMessage", id: "user", content: [{ type: "text", text: "continue" }] }] },
+      { id: "previous", status: "completed", items: [{ type: "agentMessage", text: "saved answer" }] },
+    ], nextCursor: "older" },
+  } });
+  assert.deepEqual(own.history.map(entry => entry.text), ["saved answer", "continue"]);
+  assert.equal(own.activeTurnId, "active");
+  assert.equal(own.ready, true);
+});
+
+test("an external writer keeps the original conversation and reports actionable recovery", () => {
+  const own = bridge("shared", null);
+  own.ready = false;
+  own.pending.set(7, "thread/resume");
+  own.history = [{ type: "assistant", text: "saved answer" }];
+  own.request = () => assert.fail("a writer conflict must not take over or create a conversation");
+  deliver(own, { id: 7, error: { message: "thread shared already has an active writer" } });
+  const error = own.events.find(event => event.type === "error");
+  assert.equal(error.code, "thread_writer_conflict");
+  assert.equal(error.retryable, false);
+  assert.match(error.text, /同じ会話/);
+  assert.equal(own.requestedThreadId, "shared");
+  assert.equal(own.ready, false);
+  assert.equal(own.history[0].text, "saved answer");
+});
+
+test("an oversized startup response reports an error instead of remaining connecting", () => {
+  const own = bridge("large", null);
+  own.ready = false;
+  own.runState = { state: "connecting" };
+  own.upstream.emit("error", new Error("Max payload size exceeded"));
+  assert.equal(own.startupFailed, true);
+  assert.equal(own.runState.state, "error");
+  assert.equal(own.events.find(event => event.type === "error").code, "codex_payload_too_large");
 });
 
 test("a missing conversation is inspected and fails without starting a replacement", () => {

@@ -244,6 +244,32 @@ async function main() {
       await page.waitForTimeout(100);
       check("a late recovery cannot switch away from the newly selected conversation", (await view()).thread === "mini-codex" && (await view()).provider === "codex", await view());
     }
+    await page.evaluate(() => selectThread("mini-codex", { thread: { provider: "codex" }, workdir: "/fixture/mini" }));
+    await settled("codex", "mini-codex");
+    await page.locator("#prompt").fill("競合中も残す下書き");
+    await page.evaluate(() => {
+      setReady(false);
+      window.__socket.emit({ type: "runState", state: "error", label: "会話を開けません" });
+      window.__socket.emit({ type: "error", code: "thread_writer_conflict", retryable: false,
+        text: "同じ会話を別のCodex画面が使用しています。作業を保存して会話を閉じてから「同じ会話に再接続」を押してください。" });
+    });
+    const reconnect = page.getByRole("button", { name: "同じ会話に再接続", exact: true });
+    await reconnect.waitFor();
+    check("writer conflicts explain what to close before reconnecting", (await page.locator(".thread-recovery").innerText()).includes("別のCodex画面"));
+    check("the recovery instructions wrap instead of hiding the next action", await page.locator(".thread-recovery > p").evaluate(el => getComputedStyle(el).whiteSpace === "normal" && el.scrollWidth <= el.clientWidth + 1));
+    check("a known Codex conflict cannot trigger provider recovery", await page.evaluate(() => recoverSelectedThreadProvider(selectedThread, "codex", activeBridgeId)) === false);
+    check("a conflict preserves both the saved answer and the draft", (await page.locator("#log").innerText()).includes("mini codex の元の回答")
+      && await page.locator("#prompt").inputValue() === "競合中も残す下書き");
+    if (shots) await page.screenshot({ path: path.join(shotsDir, `${process.argv.includes("--webkit") ? "webkit" : "chromium"}-writer-conflict.png`) });
+    const beforeRetry = await page.evaluate(() => window.__socketUrls.length);
+    await reconnect.click();
+    await settled("codex", "mini-codex");
+    const retried = new URL(await page.evaluate(() => window.__socketUrls.at(-1)));
+    check("manual recovery reconnects exactly once to the original machine, AI, thread and folder", await page.evaluate(() => window.__socketUrls.length) === beforeRetry + 1
+      && retried.origin === origin.replace("http:", "ws:") && retried.searchParams.get("thread") === "mini-codex"
+      && retried.searchParams.get("provider") === "codex" && retried.searchParams.get("workdir") === "/fixture/mini" && !retried.searchParams.has("fresh"));
+    check("reconnection preserves the unsent draft without submitting it", await page.locator("#prompt").inputValue() === "競合中も残す下書き");
+    check("successful reconnection clears the recovery panel", await page.locator(".thread-recovery").count() === 0);
     check("no browser JavaScript errors", errors.length === 0, errors);
   } finally {
     await browser.close();

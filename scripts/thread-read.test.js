@@ -3,6 +3,27 @@ const assert = require("node:assert/strict");
 
 const { findLiveBridge, liveBridgeSnapshot, readThreadSnapshot } = require("./thread-read");
 
+test("large stored conversations are read as metadata and recent summaries, never full history", async () => {
+  const calls = [];
+  const snapshot = await readThreadSnapshot({
+    threadId: "large", liveBridge: null,
+    request: async (method, params) => {
+      calls.push({ method, params });
+      if (method === "thread/read") {
+        assert.equal(params.includeTurns, false, "a full response exceeds the WebSocket limit");
+        return { thread: { id: "large", cwd: "/original", turns: [] } };
+      }
+      assert.equal(method, "thread/turns/list");
+      assert.deepEqual(params, { threadId: "large", limit: 80, sortDirection: "desc", itemsView: "summary" });
+      return { data: [{ id: "new" }, { id: "old" }], nextCursor: "older" };
+    },
+    historyFromThread: thread => thread.turns.map(turn => turn.id),
+  });
+  assert.deepEqual(snapshot.history, ["old", "new"]);
+  assert.equal(snapshot.threadId, "large");
+  assert.deepEqual(calls.map(call => call.method), ["thread/read", "thread/turns/list"]);
+});
+
 test("liveBridgeSnapshot returns ready in-memory bridge history", () => {
   assert.deepEqual(
     liveBridgeSnapshot(

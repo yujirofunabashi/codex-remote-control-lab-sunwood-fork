@@ -34,6 +34,7 @@ const { defaultCodexAppServerPort, settingEnvKeysForSlot, slotEnvKey, slotSettin
 const { slashCommandCatalog } = require("./slash-commands");
 const { findLiveBridge, readThreadSnapshot } = require("./thread-read");
 const { isUnavailableHistoryError, emptyCodexThreadWorkdir, hasSavedCodexThread } = require("./codex-empty-thread");
+const { recentTurnsOptions, withRecentTurns } = require("./codex-history");
 const { latestAssistantQuestion, idleRunStateFromHistory } = require("./question-state");
 
 const root = path.resolve(__dirname, "..");
@@ -1705,6 +1706,7 @@ class AppServerRpcClient {
       this.upstream.on("open", () => {
         this.sendRequest("initialize", {
           clientInfo: { name: "codex-phone-bridge-api", title: "Codex Phone Bridge API", version: "0.1.0" },
+          capabilities: { experimentalApi: true },
         })
           .then(() => {
             if (this.upstream?.readyState === WebSocket.OPEN) {
@@ -1938,6 +1940,18 @@ function compactCodexError(raw) {
   const root = parsed && typeof parsed === "object" ? parsed : {};
   const error = root.error && typeof root.error === "object" ? root.error : root;
   const message = String(error.message || root.message || text || "Codex error");
+  if (/already has an active writer/i.test(message)) {
+    return {
+      text: "同じ会話を別のCodex画面が使用しています。そちらで作業を保存して会話を閉じてから「同じ会話に再接続」を押してください。履歴と下書きは残ります。",
+      code: "thread_writer_conflict", retryable: false, retrying: false,
+    };
+  }
+  if (/Max payload size exceeded/i.test(message)) {
+    return {
+      text: "通信データが大きすぎて接続できませんでした。履歴と下書きを残したまま「同じ会話に再接続」で読み込み直せます。繰り返す場合はMac側のアプリの更新が必要です。",
+      code: "codex_payload_too_large", retryable: false, retrying: false,
+    };
+  }
   const info = error.codexErrorInfo || root.codexErrorInfo || {};
   const code = Object.keys(info)[0] || "";
   const additional = String(error.additionalDetails || root.additionalDetails || "");
@@ -3271,13 +3285,15 @@ class SharedBridge {
     return true;
   }
 
-  failStartup(text) {
+  failStartup(text, details = {}) {
     this.startupFailed = true;
+    this.ready = false;
     this.setBridgeRunState("error", "会話を開けません", null);
-    this.emit("error", { text });
+    this.emit("error", { text, ...details });
   }
 
   completeStartup(result) {
+    if (result.initialTurnsPage) result = { ...result, thread: withRecentTurns(result.thread, result.initialTurnsPage) };
     this.threadId = result.thread.id;
     const resumedWorkdir = result.cwd || result.thread.cwd;
     if (resumedWorkdir) {
@@ -3309,6 +3325,7 @@ class SharedBridge {
     this.upstream.on("open", () => {
       this.request("initialize", {
         clientInfo: { name: "codex-phone-bridge", title: "Codex Phone Bridge", version: "0.1.0" },
+        capabilities: { experimentalApi: true },
       });
       this.upstream.send(JSON.stringify({ method: "initialized", params: {} }));
       if (!this.requestedThreadId) {
@@ -3317,6 +3334,8 @@ class SharedBridge {
       }
       const id = this.request("thread/resume", {
         threadId: this.requestedThreadId,
+        excludeTurns: true,
+        initialTurnsPage: { ...recentTurnsOptions },
       });
       this.pending.set(id, "thread/resume");
       this.emit("status", { text: "既存threadを再開中..." });
@@ -3364,7 +3383,7 @@ class SharedBridge {
             this.pending.set(id, "thread/read:resume-recovery");
             return;
           }
-          this.failStartup(compact.text);
+          this.failStartup(compact.text, compact.code ? { code: compact.code, retryable: compact.retryable } : {});
           return;
         }
         if (pendingMethod === "thread/start" && !hasSavedCodexThread(msg.result.thread)) {
@@ -3557,8 +3576,10 @@ class SharedBridge {
       // the close, so a bridge we tore down ourselves fails on the way out. It
       // is not a failure anyone has to hear about.
       if (this.disposing) return;
-      this.emit("error", { text: error.message });
-      if (this.activeTurnId) this.setBridgeRunState("error", "接続エラー", this.activeTurnId);
+      const compact = compactCodexError(error.message);
+      this.ready = false;
+      this.setBridgeRunState("error", "接続エラー", this.activeTurnId || null);
+      this.emit("error", { text: compact.text, ...(compact.code ? { code: compact.code, retryable: compact.retryable } : {}) });
       // A connection lost mid-turn is one event for the reader - the work
       // failed, and this is why - not a "connection lost" message followed by a
       // "failed" message about the same moment. A socket that never opened

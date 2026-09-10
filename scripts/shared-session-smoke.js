@@ -112,7 +112,7 @@ async function main() {
   const connections = [];
   const tmuxSocket = path.join(directory, "tmux.sock");
   const tmux = (...args) => execFileSync("tmux", ["-S", tmuxSocket, "-f", "/dev/null", ...args], { env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-  let proxy, recovery, terminalStarted = false;
+  let proxy, recovery, contender, terminalStarted = false;
   try {
     let phone;
     for (let attempt = 0; attempt < 100; attempt++) {
@@ -166,6 +166,31 @@ async function main() {
     const { thread } = await phone.request("thread/resume", { threadId: recovery.threadId });
     assert.equal(thread.turns.length, 1);
     const first = { turn: thread.turns[0] };
+
+    // A different app-server sharing the same records must not steal this
+    // thread. Reproduce the desktop/phone conflict without real user data.
+    const conflictReserve = net.createServer();
+    conflictReserve.listen(0, "127.0.0.1");
+    await once(conflictReserve, "listening");
+    const conflictEndpoint = `ws://127.0.0.1:${conflictReserve.address().port}`;
+    await new Promise(resolve => conflictReserve.close(resolve));
+    contender = spawn(codex, ["app-server", "--listen", conflictEndpoint], { env, cwd: project, stdio: ["ignore", "ignore", "ignore"] });
+    let conflictingClient;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      try { conflictingClient = await client(conflictEndpoint); break; } catch { await pause(50); }
+    }
+    assert.ok(conflictingClient, "the isolated second app-server started");
+    connections.push(conflictingClient);
+    await assert.rejects(conflictingClient.request("thread/resume", { threadId: thread.id, excludeTurns: true }), error => {
+      assert.match(error.message, /already has an active writer/);
+      const notice = require("./start-phone").compactCodexError(error.message);
+      assert.equal(notice.code, "thread_writer_conflict");
+      assert.equal(notice.retryable, false);
+      return true;
+    });
+    assert.equal(recovery.threadId, thread.id);
+    assert.equal(recovery.ready, true, "the original writer stays usable");
+    console.log("Real Codex: a second writer is rejected without taking over; the phone explains same-conversation recovery");
 
     // Observe the real CLI's resume response while forwarding to the same
     // server the phone already owns. No transcript or credentials are logged.
@@ -248,10 +273,12 @@ async function main() {
       for (const ws of proxy.clients) ws.terminate();
       proxy.close();
     }
-    if (server.exitCode === null && server.signalCode === null) {
-      const stopped = once(server, "exit");
-      server.kill("SIGTERM");
-      await deadline(stopped, "test server cleanup", 5000);
+    for (const child of [contender, server]) {
+      if (child && child.exitCode === null && child.signalCode === null) {
+        const stopped = once(child, "exit");
+        child.kill("SIGTERM");
+        await deadline(stopped, "test server cleanup", 5000);
+      }
     }
     await new Promise((resolve) => model.close(resolve));
     // The CLI wrapper can exit just before its child flushes the isolated

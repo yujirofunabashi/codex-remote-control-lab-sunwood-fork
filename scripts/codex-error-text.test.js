@@ -44,3 +44,18 @@ test("an unrelated failure is passed through as it was", () => {
   const compacted = compact("sandbox denied write to /etc/hosts");
   assert.deepEqual(compacted, { text: "sandbox denied write to /etc/hosts", retrying: false });
 });
+
+test("writer contention describes the original conversation and a manual reconnect", () => {
+  const error = compact("thread original already has an active writer");
+  assert.equal(error.code, "thread_writer_conflict");
+  assert.equal(error.retryable, false);
+  assert.match(error.text, /同じ会話に再接続/);
+  assert.doesNotMatch(error.text, /active writer/);
+});
+
+test("an oversized message is explained without claiming the conversation was lost", () => {
+  const error = compact("Max payload size exceeded");
+  assert.equal(error.code, "codex_payload_too_large");
+  assert.equal(error.retryable, false);
+  assert.match(error.text, /通信データ/);
+});

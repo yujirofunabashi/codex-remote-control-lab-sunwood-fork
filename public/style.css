@@ -2829,6 +2829,14 @@ body.terminal-focus-mode .composer-footer {
   gap: 8px;
 }
 
+.thread-recovery > p {
+  margin-bottom: 8px;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  font-size: inherit;
+}
+
 .thread-recovery button {
   min-height: 44px;
   max-width: 100%;
