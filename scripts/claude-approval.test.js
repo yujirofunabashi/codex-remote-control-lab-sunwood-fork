@@ -233,7 +233,10 @@ test("approval mcp config points Claude at this process's socket without binding
   assert.equal(server.command, process.execPath);
   assert.deepEqual(server.args, [approvalMcpScript]);
   assert.equal(server.env.PHONE_APPROVAL_SOCKET, "/tmp/example.sock");
-  assert.ok(!JSON.stringify(config).includes("port"));
+  // A checkout path may contain "port" (for example "transport"); inspect
+  // the transport settings, not substrings of the executable/script paths.
+  assert.equal(Object.hasOwn(server, "port"), false);
+  assert.equal(server.args.some(arg => /^--port(?:=|$)/.test(arg)), false);
 });
 
 test("concurrent bridges listen on distinct approval sockets", async () => {
