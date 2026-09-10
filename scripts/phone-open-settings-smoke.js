@@ -1,4 +1,4 @@
-// Real UI, mocked machines: never opens a live session or sends a prompt.
+// Real UI, mocked machines: never opens a live session or sends a live prompt.
 // node scripts/phone-open-settings-smoke.js [--webkit] [--shots]
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -41,7 +41,10 @@ async function main() {
     page.on("pageerror", error => errors.push(error.message));
     await page.addInitScript(({ homeId, airOrigin }) => {
       localStorage.setItem("codexPhonePwaInstallHint:v1", "dismissed");
+      Object.defineProperty(navigator, "userAgent", { get: () => "Mozilla/5.0 (Macintosh; Intel Mac OS X)" });
+      Object.defineProperty(navigator, "maxTouchPoints", { get: () => 0 });
       window.__socketUrls = [];
+      window.__fixturePrompts = [];
       class MockWebSocket extends EventTarget {
         constructor(address) {
           super();
@@ -67,7 +70,14 @@ async function main() {
           }, 20);
         }
         emit(payload) { this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(payload) })); }
-        send() { throw new Error("This smoke must never send a prompt"); }
+        send(body) {
+          if (!window.__allowFixturePrompt) throw new Error("Unexpected fixture prompt");
+          const msg = JSON.parse(body);
+          if (msg.type !== "prompt") throw new Error("Unexpected fixture message");
+          window.__fixturePrompts.push(msg);
+          this.emit({ type: "promptAccepted", clientMessageId: msg.clientMessageId });
+          this.emit({ type: "runState", run: { state: "done" } });
+        }
         close() { this.readyState = 3; }
       }
       MockWebSocket.OPEN = 1;
@@ -124,11 +134,54 @@ async function main() {
 
     await page.evaluate(() => selectThread("mini-codex", { thread: { provider: "codex" }, workdir: "/fixture/mini" }));
     await settled("codex", "mini-codex");
+    check("the operator picker never opens or notifies on startup", !(await page.locator("#operationContextDialog").evaluate(el => el.open)) && await page.locator("#toastStack").innerText() === "");
+    check("an unregistered Mac does not claim Air or mini as the operator", await page.locator("#operationContextButton").innerText() === "操作元 ?");
+    await page.locator("#prompt").fill("名札を開いても残す下書き");
+    await page.locator("#operationContextButton").click();
+    if (shots) await page.screenshot({ path: path.join(shotsDir, `${process.argv.includes("--webkit") ? "webkit" : "chromium"}-operation-picker.png`) });
+    await page.locator('[data-operation-preset="air-mini"]').click();
+    check("one selection labels screen sharing without changing the draft", await page.locator("#operationContextButton").innerText() === "操作 Air·共有" && await page.locator("#prompt").inputValue() === "名札を開いても残す下書き");
+    for (const width of [320, 393, 768, 1280]) {
+      await page.setViewportSize({ width, height: 852 });
+      const metrics = await page.evaluate(() => {
+        const header = document.querySelector(".titlebar");
+        const badge = document.querySelector("#operationContextButton");
+        const bridge = document.querySelector("#bridgePill");
+        const before = header.getBoundingClientRect();
+        const badgeRect = badge.getBoundingClientRect();
+        const bridgeRect = bridge.getBoundingClientRect();
+        badge.hidden = true;
+        const withoutBadge = header.getBoundingClientRect().height;
+        badge.hidden = false;
+        return { height: before.height, withoutBadge, width: header.clientWidth, scrollWidth: header.scrollWidth, badgeHeight: badgeRect.height, badgeWidth: badgeRect.width, badgeRight: badgeRect.right, badgeReadable: badge.scrollWidth <= badge.clientWidth, bridgeRight: bridgeRect.right, badgeLeft: badgeRect.left, viewport: innerWidth };
+      });
+      check(`operator badge is readable without another header row or overlap at ${width}px`, metrics.height === metrics.withoutBadge && metrics.scrollWidth <= metrics.width + 1 && metrics.badgeHeight >= 28 && metrics.badgeWidth >= 35 && metrics.badgeReadable && metrics.bridgeRight <= metrics.badgeLeft && metrics.badgeRight <= width, metrics);
+      if (shots && width === 320) await page.screenshot({ path: path.join(shotsDir, `${process.argv.includes("--webkit") ? "webkit" : "chromium"}-operation-320.png`) });
+    }
+    await page.setViewportSize({ width: 393, height: 852 });
+    await page.evaluate(() => { window.__allowFixturePrompt = true; });
+    await page.locator("#composer").evaluate(el => el.requestSubmit());
+    await page.waitForFunction(() => window.__fixturePrompts.length === 1);
+    const message = await page.evaluate(() => window.__fixturePrompts[0]);
+    check("submission keeps user text separate from the selected operator", message.text === "名札を開いても残す下書き" && message.operationContext.operator === "air" && message.operationContext.screen === "mini" && message.operationContext.route === "screen-sharing" && !message.operationContext.executionMachine);
+    await page.evaluate(() => { window.__allowFixturePrompt = false; });
+    await page.goto(`${origin}/?provider=codex&thread=mini-codex`);
+    await settled("codex", "mini-codex");
+    check("the same browser retains the selected route after reload", await page.locator("#operationContextButton").innerText() === "操作 Air·共有");
+    const oldSelection = await page.evaluate(() => operationContextSelection.selectedAt);
+    await page.evaluate(oldSelection => {
+      operationContextSelection.selectedAt = oldSelection - PhoneOperationContext.maxAgeMs - 1;
+      renderOperationContext();
+    }, oldSelection);
+    check("expired operator selections become unknown without a dialog or toast", await page.locator("#operationContextButton").innerText() === "操作元 ?" && !(await page.locator("#operationContextDialog").evaluate(el => el.open)) && await page.locator("#toastStack").innerText() === "");
+    await page.locator("#operationContextButton").click();
+    await page.locator('[data-operation-preset="mini"]').click();
     await page.evaluate(() => switchThreadProvider("claude"));
     await settled("claude", "mini-claude");
     await page.locator("#prompt").fill("未送信の下書き");
     await page.evaluate(() => setActiveBridge("air"));
     await page.waitForFunction(() => connectionReady && activeBridgeId === "air");
+    check("changing execution machine never replaces the operator", await page.locator("#operationContextButton").innerText() === "操作 mini" && (await page.locator("#operationContextButton").getAttribute("title")).includes("実行先: Air"));
     await page.evaluate(homeId => setActiveBridge(homeId), homeId);
     await page.waitForFunction(() => window.__socket.readyState === 1);
     check("returning to mini preserves its chosen AI and conversation", (await view()).provider === "claude" && (await view()).thread === "mini-claude", await view());

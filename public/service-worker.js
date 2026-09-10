@@ -1,9 +1,10 @@
-const CACHE_NAME = "codex-phone-shell-v4";
+const CACHE_NAME = "codex-phone-shell-v5";
 const APP_SHELL = [
   "./",
   "./style.css",
   "./main.js",
   "./phone-ui-utils.js",
+  "./operation-context.js",
   "./site.webmanifest",
   "./favicon.svg",
   "./icon-192.png",

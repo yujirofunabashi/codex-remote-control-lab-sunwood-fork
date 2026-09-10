@@ -60,6 +60,18 @@ test("server edits require a restart until a fresh process captures the new sour
   assert.equal(createBuildTracker(root).status().restartRequired, false);
 });
 
+test("shared operator-context code updates both browser and server build identities", t => {
+  const root = fixture(t);
+  const file = path.join(root, "public", "operation-context.js");
+  fs.writeFileSync(file, "// shared context one\n");
+  const tracker = createBuildTracker(root, { cacheMs: 0 });
+  const before = tracker.status();
+  fs.writeFileSync(file, "// shared context two\n");
+  const after = tracker.status();
+  assert.notEqual(after.clientFingerprint, before.clientFingerprint);
+  assert.equal(after.restartRequired, true, "the bridge caches this shared module too");
+});
+
 test("CSS and helper-only edits change the whole browser build without touching main.js", t => {
   const root = fixture(t);
   const before = sourceSnapshot(root);

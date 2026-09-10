@@ -1,4 +1,64 @@
 const uiUtils = window.CodexPhoneUiUtils || {};
+const operationContextUtils = window.PhoneOperationContext;
+const operationContextButton = document.querySelector("#operationContextButton");
+const operationContextDialog = document.querySelector("#operationContextDialog");
+let operationContextSelection = (() => {
+  try { return JSON.parse(safeReadStorage(localStorage, operationContextUtils?.storageKey, "null")); }
+  catch { return null; }
+})();
+
+function operationContextForSubmission() {
+  return operationContextUtils?.forBrowser(operationContextSelection, navigator) || null;
+}
+
+function renderOperationContext() {
+  if (!operationContextUtils || !operationContextButton) return;
+  const context = operationContextForSubmission();
+  // Lab tasks do not use either Mac provider's prompt transport yet.
+  operationContextButton.hidden = Boolean(activeLabInfo());
+  operationContextButton.textContent = operationContextUtils.badge(context);
+  operationContextButton.dataset.known = String(Boolean(context.operator));
+  const executor = shortMachineName(activeBridge(), getBridgeState(activeBridgeId)) || "未確認";
+  const detail = operationContextUtils.describe(context, executor);
+  operationContextButton.title = `${detail}（操作元は利用者の選択）`;
+  operationContextButton.setAttribute("aria-label", `操作元の名札を設定: ${detail}`);
+  document.querySelector("#operationContextDetail").textContent = detail;
+}
+
+function saveOperationContext(id) {
+  operationContextSelection = operationContextUtils.selectPreset(id);
+  safeWriteStorage(localStorage, operationContextUtils.storageKey, JSON.stringify(operationContextSelection));
+  renderOperationContext();
+  operationContextDialog.close();
+}
+
+operationContextButton?.addEventListener("click", () => {
+  if (!operationContextUtils) return;
+  renderOperationContext();
+  const context = operationContextForSubmission();
+  const container = document.querySelector("#operationContextPresets");
+  container.replaceChildren();
+  for (const preset of operationContextUtils.presets) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = preset.label;
+    button.dataset.operationPreset = preset.id;
+    button.setAttribute("aria-pressed", String(context.operator === preset.operator && context.screen === preset.screen && context.route === preset.route));
+    button.addEventListener("click", () => saveOperationContext(preset.id));
+    container.appendChild(button);
+  }
+  operationContextDialog.showModal();
+});
+document.querySelector("#closeOperationContext")?.addEventListener("click", () => operationContextDialog.close());
+document.querySelector("#clearOperationContext")?.addEventListener("click", () => saveOperationContext(""));
+window.addEventListener("storage", (event) => {
+  if (event.key !== operationContextUtils?.storageKey) return;
+  try { operationContextSelection = JSON.parse(event.newValue); } catch { operationContextSelection = null; }
+  renderOperationContext();
+});
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") renderOperationContext();
+});
 const sessionActivityStrip = document.querySelector("#sessionActivityStrip");
 const sessionActivityItems = document.querySelector("#sessionActivityItems");
 const sessionActivityCount = document.querySelector("#sessionActivityCount");
@@ -5540,6 +5600,7 @@ async function requestLabOperation(operation) {
 
 function renderFleet() {
   renderLabControls();
+  renderOperationContext();
   const entries = bridgeRegistry.bridges || [];
   const active = activeBridge();
   const activeState = getBridgeState(activeBridgeId);
@@ -9538,6 +9599,7 @@ composer.addEventListener("submit", (event) => {
         clientMessageId: submission.id,
         text: text || "添付ファイルを確認してください。",
         attachments: attachmentsToSend,
+        operationContext: operationContextForSubmission(),
         options: {
           model: activeLabInfo()?.model || selectedModel || undefined,
           serviceTier: activeLabInfo() ? "standard" : currentThreadProvider() === "codex" ? selectedServiceTier || null : undefined,

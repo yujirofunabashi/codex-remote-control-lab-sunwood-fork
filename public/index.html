@@ -136,6 +136,7 @@
             <h1 id="threadTitle">新しいチャット</h1>
             <p id="meta">接続準備中</p>
           </div>
+          <div class="bridge-controls">
           <button type="button" class="bridge-pill" id="bridgePill" data-opens-bridge-fleet aria-label="接続先を切り替え" aria-haspopup="dialog">
             <span class="bridge-pill-dot" aria-hidden="true"></span>
             <span class="bridge-pill-main">
@@ -143,6 +144,8 @@
               <small id="bridgePillMeta"><span class="bridge-pill-agent" id="bridgePillAgent"></span> <span id="bridgePillMetaText">:----</span></small>
             </span>
           </button>
+          <button type="button" class="operation-context-button" id="operationContextButton" aria-label="操作元の名札を設定" aria-haspopup="dialog">操作元 ?</button>
+          </div>
           <button type="button" class="thread-position-pill" id="threadPositionPill" aria-label="チャット切替を開く" aria-haspopup="dialog">
             <span id="threadPositionText">--/--</span>
             <span id="threadStateText">接続中</span>
@@ -585,8 +588,17 @@
         <button type="button" id="createNewSession" class="new-session-create" disabled>このフォルダで開始</button>
       </footer>
     </dialog>
+    <dialog id="operationContextDialog" class="operation-context-dialog" aria-labelledby="operationContextHeading">
+      <header><strong id="operationContextHeading">操作元の名札</strong><button type="button" id="closeOperationContext" aria-label="閉じる">×</button></header>
+      <p id="operationContextDetail"></p>
+      <p>いまの操作方法を選ぶと、このブラウザに保存します。場所が変わったら、ここで切り替えてください。</p>
+      <div id="operationContextPresets" class="operation-context-presets"></div>
+      <button type="button" id="clearOperationContext">未確認に戻す</button>
+      <small>選択から12時間後は操作元を未確認として扱います。確認の通知は出さず、AIには通常の回答で名札を復唱しないよう伝えます。</small>
+    </dialog>
     <div id="toastStack" class="toast-stack" aria-live="polite" aria-atomic="true"></div>
     <script src="phone-ui-utils.js"></script>
+    <script src="operation-context.js"></script>
     <script src="main.js"></script>
   </body>
 </html>

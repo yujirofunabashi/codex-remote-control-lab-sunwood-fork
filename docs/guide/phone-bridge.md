@@ -384,6 +384,16 @@ Override the location with `PHONE_CLAUDE_RATE_LIMIT_CACHE_PATH`. Only normalized
 
 The terminal key row does not expose unauthenticated raw shell execution. `$` inserts a safe Codex command-request template, and bridge access remains token protected while the Codex app-server stays bound to localhost.
 
+### Operator context badge {#operation-context}
+
+The small operator badge beside the header's connection picker opens a one-click choice such as direct Air, direct mini, or Air viewing mini through screen sharing. The selection stays in this browser; switching conversations, providers, or execution machines does not change it. The execution machine supplies its own identity separately. No setup dialog, reminder, toast, or notification opens automatically, and an unconfigured operator never blocks submission.
+
+A Mac browser cannot distinguish Air from mini or identify the physical operator. Browser detection describes only the screen's device family. User-selected operator and screen-sharing information is explicitly advisory and expires after 12 hours; select the badge again when the operating route changes. Expiry returns the operator to unknown without interrupting work.
+
+Each browser prompt carries a short, separate model-context fragment with the operator, screen, route, entry point, execution machine, and receipt time. User text, session naming, and displayed history remain unchanged. The model is instructed not to repeat the fragment during ordinary replies or carry an old operator across entry points. Queued prompts retain their own context and receipt time. Client fields accept only fixed device/route vocabulary; client instructions and claimed execution hosts are ignored.
+
+This covers Codex and Claude prompts sent through this app. Codex uses the app-server `additionalContext` application fragment, verified against the generated 0.153.4 protocol; Claude uses `--append-system-prompt`. It does not instrument prompts sent directly from official apps or terminals, or Windows lab tasks. Older Codex app servers need compatibility verification before relying on the fragment.
+
 ## PWA Notes
 
 The normal public `site.webmanifest` is token-free and uses `display: standalone`. A valid protected `/install?token=...` page links to a no-store install manifest whose `start_url` carries the credential in a URL fragment. If Safari already holds the credential from an earlier protected visit, opening the short `/install` URL automatically reloads that protected install page before it is added to the Home Screen. This is necessary because Safari and the installed Home Screen web app have separate storage. On first launch, the app saves the credential in its own local storage and immediately removes the fragment; fragments are never sent to the bridge. Invalid or tokenless install-manifest requests cannot receive a credential-bearing `start_url`. Adding `provider=codex` (or `provider=claude`) to that URL makes the install page, its icon and its manifest use that provider's picture and name, such as `Codex mini`, and keeps the provider in `start_url`, so the icon opens in that provider even on a bridge whose default is the other one.

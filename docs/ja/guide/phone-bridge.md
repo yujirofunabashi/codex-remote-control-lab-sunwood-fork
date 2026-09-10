@@ -360,6 +360,16 @@ statusLine は対話セッションの機能なので、`claude -p`（bridge の
 
 terminal の key row は、認証なしの raw shell 実行口ではありません。`$` は Codex への安全なコマンド実行依頼テンプレートを挿入するだけで、bridge access は引き続き token protected、Codex app-server は localhost bind のままです。
 
+### 操作元の名札 {#operation-context}
+
+ヘッダー（=画面上部）の接続先の隣に、小さな「操作元 ?」を表示します。押して「Airで直接」「miniで直接」「Airからminiの画面」などを選ぶと、「操作 Air」「操作 Air·共有」のような名札になります。選択はこのブラウザ内だけに保存され、会話やAI、接続先のMacを切り替えても手元の設定を勝手に変更しません。実行先は接続先のMacが自分の情報を添えます。
+
+名札は起動時に設定を求める画面を開かず、通知も出しません。選択しなくても依頼を送れます。MacのブラウザからAirとminiや手元の利用者を自動で見分けることはできないため、未設定では手元を未確認として扱います。選択した操作元と画面共有の情報も実測値ではなく、選択から12時間経つと未確認に戻ります。操作方法を変えた場合は名札を押して選び直してください。
+
+自作アプリからの発言ごとに、手元・表示している画面・接続方法・入口・実行先・受信時刻を短い補足としてAIへ渡します。入力した文章、会話名、表示履歴には混ぜず、通常の返答で復唱しないようAIへ伝えます。順番待ちの依頼も発言ごとの操作元と受信時刻を保持します。送信元の指定は固定の選択肢だけを受け取り、命令文や実行先の自己申告は受け取りません。
+
+対象はこのアプリから送るCodex・Claudeへの依頼です。Codexは `additionalContext`（=会話本文と別に渡すアプリの補足情報）に対応するapp-server（=Codexとの通信を受け持つプログラム）が必要で、開発時は0.153.4の生成仕様を確認しています。Claudeは `--append-system-prompt`（=通常の指示に補足を足す起動指定）で渡します。公式アプリやターミナルから直接送った発言、Windows実験室への依頼には、この仕組みから現在の操作元を付与しません。過去の名札を別の入口の現在情報として引き継がないよう、補足の有効範囲も明示しています。
+
 ## PWA 注意
 
 通常公開する `site.webmanifest` は token を含まず、`display: standalone` を使います。有効な protected `/install?token=...` page だけが no-store の install manifest を参照し、その `start_url` は credential を URL fragment で渡します。以前の protected access により Safari に credential が残っていれば、短い `/install` URL を開くだけで、ホーム画面へ追加する前に protected install page へ自動再読込します。Safari とホーム画面 Web App は storage が別であるため、この受け渡しが必要です。初回起動時に Web App 自身の local storage へ保存し、fragment は即時削除します。fragment は bridge へ送信されず、無効または token なしの install-manifest request が credential 付き `start_url` を受け取ることもありません。`/install?token=...&provider=codex` のように `provider` を付けると、install page・アイコン・manifest はその provider の画像と名前（例: `Codex mini`）になり、`start_url` にも `provider` が残るため、そのアイコンはその provider で開きます。Claude 既定の bridge でも Codex 用アイコンを作れます。

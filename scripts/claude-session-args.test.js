@@ -45,6 +45,11 @@ process.env.PHONE_AGENT_PROVIDER_DEFAULT = "claude";
 process.env.CLAUDE_BIN = stubBin;
 process.env.STUB_ARGS_LOG = argsLog;
 process.env.PHONE_SESSION_NAME_PREFIX = "📱";
+process.env.PHONE_NOTIFY_EVENTS = "0";
+for (const key of Object.keys(process.env)) {
+  if (/^PHONE_(NTFY|PUSHOVER|DISCORD)_/.test(key)) process.env[key] = "";
+}
+globalThis.fetch = async () => ({ ok: true, status: 204, text: async () => "" });
 
 const { ClaudeBridge } = require("./start-phone");
 
@@ -125,6 +130,26 @@ test("resuming does not rename, so a title set on the desktop survives", async (
     assert.ok(first.includes("--name"));
     assert.equal(second[second.indexOf("--resume") + 1], "stub-session");
     assert.ok(!second.includes("--name"), "a resumed turn must not overwrite the session title");
+  } finally {
+    bridge.closeApprovalServer();
+  }
+});
+
+test("the operator context is refreshed outside user text on every Claude turn", async () => {
+  fs.writeFileSync(argsLog, "");
+  const { selectPreset } = require("../public/operation-context");
+  const bridge = new ClaudeBridge(null, "operation-context");
+  const client = fakeClient();
+  bridge.clients.add(client);
+  try {
+    bridge.prompt("/help", [], fullAccess, "first", selectPreset("air-mini"));
+    await turnCompleted(client, 1);
+    bridge.prompt("second", [], fullAccess, "second", selectPreset("mini"));
+    await turnCompleted(client, 2);
+    const [first, second] = turns();
+    assert.match(first[first.indexOf("--append-system-prompt") + 1], /手元: Air.*画面共有/);
+    assert.match(second[second.indexOf("--append-system-prompt") + 1], /手元: mini.*経路: 直接/);
+    assert.deepEqual(bridge.history.filter(entry => entry.type === "user").map(entry => entry.text), ["/help", "second"]);
   } finally {
     bridge.closeApprovalServer();
   }

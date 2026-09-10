@@ -36,6 +36,7 @@ const { findLiveBridge, readThreadSnapshot } = require("./thread-read");
 const { isUnavailableHistoryError, emptyCodexThreadWorkdir, hasSavedCodexThread } = require("./codex-empty-thread");
 const { recentTurnsOptions, withRecentTurns } = require("./codex-history");
 const { latestAssistantQuestion, idleRunStateFromHistory } = require("./question-state");
+const operationContext = require("../public/operation-context");
 
 const root = path.resolve(__dirname, "..");
 let bridgeBuildTracker;
@@ -2383,6 +2384,7 @@ function serveIndex(req, res, { includeManifest = true, standalone = true, phone
     .replace(/<link rel="stylesheet" href="style\.css" \/>/, `<link rel="stylesheet" href="${escapeHtmlAttribute(staticAssetHref("style.css"))}" />`)
     .replace(/<script src="main\.js"><\/script>/, `<script src="${escapeHtmlAttribute(staticAssetHref("main.js"))}"></script>`)
     .replace(/<script src="phone-ui-utils\.js"><\/script>/, `<script src="${escapeHtmlAttribute(staticAssetHref("phone-ui-utils.js"))}"></script>`)
+    .replace(/<script src="operation-context\.js"><\/script>/, `<script src="${escapeHtmlAttribute(staticAssetHref("operation-context.js"))}"></script>`)
     .replace(
       /<meta name="apple-mobile-web-app-title" content="[^"]*" \/>/,
       `<meta name="apple-mobile-web-app-title" content="${escapeHtmlAttribute(identity.shortName)}" />`,
@@ -3694,19 +3696,20 @@ class SharedBridge {
     if (!queuedCount) this.emit("status", { text: "中断できる処理はありません。" });
   }
 
-  prompt(text, attachments = [], options = {}, clientMessageId = null) {
+  prompt(text, attachments = [], options = {}, clientMessageId = null, context = null) {
+    context = { ...operationContext.normalize(context), receivedAt: Date.now() };
     if (!this.threadId) {
       this.emit("error", { text: "Thread is not ready yet" });
       return;
     }
     if (this.activeTurnId || this.hasPendingTurnStart()) {
-      this.turnQueue.push({ text, attachments, options, clientMessageId });
+      this.turnQueue.push({ text, attachments, options, clientMessageId, context });
       if (clientMessageId) this.emit("promptAccepted", { clientMessageId, queued: true });
       this.emit("status", { text: `キューに追加しました（${this.turnQueue.length}件待機）` });
       return;
     }
     try {
-      this.startPrompt(text, attachments, options, clientMessageId);
+      this.startPrompt(text, attachments, options, clientMessageId, context);
     } catch (error) {
       this.emit("error", browserOperationError(error, "送信に失敗しました: "));
     }
@@ -3717,7 +3720,7 @@ class SharedBridge {
     try {
       const next = this.turnQueue.shift();
       this.emit("status", { text: `キューから送信中（残り${this.turnQueue.length}件）` });
-      this.startPrompt(next.text, next.attachments, next.options, next.clientMessageId);
+      this.startPrompt(next.text, next.attachments, next.options, next.clientMessageId, next.context);
     } catch (error) {
       this.emit("error", browserOperationError(error, "送信に失敗しました: "));
       this.startNextQueuedTurn();
@@ -3753,7 +3756,7 @@ class SharedBridge {
       });
   }
 
-  startPrompt(text, attachments = [], options = {}, clientMessageId = null) {
+  startPrompt(text, attachments = [], options = {}, clientMessageId = null, context = null) {
     this.interruptRequested = false;
     this.turnStarted = false;
     const input = [{ type: "text", text, text_elements: [] }];
@@ -3778,6 +3781,9 @@ class SharedBridge {
     const params = {
       threadId: this.threadId,
       input,
+      additionalContext: {
+        "phone-operation-context": { kind: "application", value: operationContext.modelContext(context, phoneMachineLabel) },
+      },
     };
     params.model = options.model || this.model;
     // Overrides the reasoning effort for this turn and the ones after it. Left
@@ -4359,15 +4365,16 @@ class ClaudeBridge {
     forceTimer.unref?.();
   }
 
-  prompt(text, attachments = [], options = {}, clientMessageId = null) {
+  prompt(text, attachments = [], options = {}, clientMessageId = null, context = null) {
+    context = { ...operationContext.normalize(context), receivedAt: Date.now() };
     if (this.activeTurnId || this.activeProcess) {
-      this.turnQueue.push({ text, attachments, options, clientMessageId });
+      this.turnQueue.push({ text, attachments, options, clientMessageId, context });
       if (clientMessageId) this.emit("promptAccepted", { clientMessageId, queued: true });
       this.emit("status", { text: `キューに追加しました（${this.turnQueue.length}件待機）` });
       return;
     }
     try {
-      this.startPrompt(text, attachments, options, clientMessageId);
+      this.startPrompt(text, attachments, options, clientMessageId, context);
     } catch (error) {
       this.emit("error", { text: `送信に失敗しました: ${error.message}` });
     }
@@ -4377,23 +4384,23 @@ class ClaudeBridge {
     if (this.activeTurnId || this.activeProcess || !this.turnQueue.length) return;
     const next = this.turnQueue.shift();
     this.emit("status", { text: `キューから送信中（残り${this.turnQueue.length}件）` });
-    this.startPrompt(next.text, next.attachments, next.options, next.clientMessageId);
+    this.startPrompt(next.text, next.attachments, next.options, next.clientMessageId, next.context);
   }
 
-  startPrompt(text, attachments = [], options = {}, clientMessageId = null) {
+  startPrompt(text, attachments = [], options = {}, clientMessageId = null, context = null) {
     const permissionMode = claudePermissionMode(options);
     // Reserve the slot before awaiting so a second prompt still queues.
     this.activeTurnId = `claude-turn:pending:${crypto.randomUUID()}`;
     this.ensureApprovalServer()
-      .then((socketPath) => this.spawnTurn(text, attachments, options, clientMessageId, permissionMode, socketPath))
+      .then((socketPath) => this.spawnTurn(text, attachments, options, clientMessageId, permissionMode, socketPath, context))
       .catch((error) => {
         this.activeTurnId = null;
         this.emit("status", { text: `承認ソケットを準備できなかったため承認なしで実行します: ${error.message}` });
-        this.spawnTurn(text, attachments, options, clientMessageId, permissionMode, null);
+        this.spawnTurn(text, attachments, options, clientMessageId, permissionMode, null, context);
       });
   }
 
-  spawnTurn(text, attachments = [], options = {}, clientMessageId = null, permissionMode = "acceptEdits", approvalSocketPath = null) {
+  spawnTurn(text, attachments = [], options = {}, clientMessageId = null, permissionMode = "acceptEdits", approvalSocketPath = null, context = null) {
     // Kept on the bridge because an approval raised mid-turn has to be able to
     // report the mode it was raised under; フルアクセス behaves differently here.
     this.activePermissionMode = permissionMode;
@@ -4440,6 +4447,8 @@ class ClaudeBridge {
       options.model || this.model,
       "--permission-mode",
       permissionMode,
+      "--append-system-prompt",
+      operationContext.modelContext(context, phoneMachineLabel),
     ];
     const effort = claudeEffortLevel(options);
     if (effort) args.push("--effort", effort);
@@ -5261,7 +5270,7 @@ async function bindBrowser(browser, phoneToken, threadId, provider = agentProvid
       browser.close();
       return;
     }
-    if (msg.type === "prompt") bridge.prompt(msg.text, msg.attachments, msg.options, msg.clientMessageId);
+    if (msg.type === "prompt") bridge.prompt(msg.text, msg.attachments, msg.options, msg.clientMessageId, msg.operationContext);
     if (msg.type === "interrupt") bridge.interrupt();
     if (msg.type === "approval") bridge.approval(msg.request, msg.decision, msg.answers);
   });

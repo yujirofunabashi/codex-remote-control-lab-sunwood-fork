@@ -59,7 +59,9 @@ function sourceSnapshot(root) {
       dirty: Boolean(git(root, ["status", "--porcelain=v1", "--untracked-files=normal"])),
       fingerprint: fingerprint(root, files),
       clientFingerprint: fingerprint(root, files.filter(file => file.startsWith("public/"))),
-      serverFingerprint: fingerprint(root, files.filter(file => !file.startsWith("public/"))),
+      // The operator-context vocabulary is served to browsers and required by
+      // the Node bridge. Updating it must not look like a static-only change.
+      serverFingerprint: fingerprint(root, files.filter(file => !file.startsWith("public/") || file === "public/operation-context.js")),
       upstream,
     };
   } catch {
