@@ -3256,6 +3256,33 @@ function syncThreadRecoveryActions() {
   });
   actions.append(retry, find, create);
   panel.append(hint, actions);
+  if (failure?.code === "thread_writer_conflict") {
+    const help = document.createElement("details");
+    help.className = "thread-handoff-help";
+    const summary = document.createElement("summary");
+    summary.textContent = "公式アプリと切り替えるには";
+    summary.addEventListener("click", () => {
+      if (help.open) return;
+      // Reading the instructions ends input focus, not the draft. Otherwise
+      // the mobile fixed composer can cover the final paragraph and link.
+      promptInput.blur();
+      promptInputFocused = false;
+      updateQuickBarVisibility();
+    });
+    const entry = document.createElement("p");
+    entry.textContent = "公式の /app（同じ会話を公式アプリで開く命令）は、ターミナル内で動くCodexの入力欄に入れます。Macの通常の命令欄や、このスマホの入力欄には入れません。";
+    const limit = document.createElement("p");
+    limit.textContent = "この中継アプリと公式アプリとの往復は未検証です。/appだけで使用権（会話を実行・保存する権利）が解放されるとは限りません。切り替え後もエラーになるときは、再接続を連打せず元の画面で続けてください。";
+    const shared = document.createElement("p");
+    shared.textContent = "スマホとターミナルは、一覧の >_ からコピーした命令で同じ実行元（会話を動かす本体）に接続します。この命令で公式アプリも同じ実行元になるわけではありません。";
+    const docs = document.createElement("a");
+    docs.href = "https://learn.chatgpt.com/docs/developer-commands#continue-in-the-desktop-app-with-app";
+    docs.target = "_blank";
+    docs.rel = "noopener noreferrer";
+    docs.textContent = "公式の引継ぎ手順を見る";
+    help.append(summary, entry, limit, shared, docs);
+    panel.append(help);
+  }
   log.appendChild(panel);
 }
 

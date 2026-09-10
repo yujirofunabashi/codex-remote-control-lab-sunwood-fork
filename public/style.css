@@ -2829,12 +2829,33 @@ body.terminal-focus-mode .composer-footer {
   gap: 8px;
 }
 
-.thread-recovery > p {
+.thread-recovery > p,
+.thread-handoff-help p {
   margin-bottom: 8px;
   overflow: visible;
   text-overflow: clip;
   white-space: normal;
   font-size: inherit;
+}
+
+.thread-handoff-help {
+  margin-top: 12px;
+  line-height: 1.65;
+}
+
+.thread-handoff-help summary {
+  min-height: 44px;
+  padding: 10px 0;
+  cursor: pointer;
+  color: var(--text);
+}
+
+.thread-handoff-help a {
+  display: inline-block;
+  min-height: 44px;
+  padding: 10px 0;
+  color: var(--text);
+  text-decoration: underline;
 }
 
 .thread-recovery button {

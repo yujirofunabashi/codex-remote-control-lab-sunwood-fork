@@ -50,6 +50,9 @@ test("writer contention describes the original conversation and a manual reconne
   assert.equal(error.code, "thread_writer_conflict");
   assert.equal(error.retryable, false);
   assert.match(error.text, /同じ会話に再接続/);
+  assert.match(error.text, /画面を閉じても/);
+  assert.match(error.text, /使用権/);
+  assert.match(error.text, /再接続を繰り返さず/);
   assert.doesNotMatch(error.text, /active writer/);
 });
 

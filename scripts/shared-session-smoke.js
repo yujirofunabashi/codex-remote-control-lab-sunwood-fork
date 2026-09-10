@@ -50,7 +50,12 @@ async function client(url) {
     }
     throw new Error(`Timed out: ${method}`);
   };
-  return { request, waitFor, close: () => ws.close() };
+  return { request, waitFor, close: () => {
+    if (ws.readyState === WebSocket.CLOSED) return Promise.resolve();
+    const closed = once(ws, "close");
+    ws.close();
+    return deadline(closed, "test connection closes");
+  } };
 }
 
 async function main() {
@@ -256,18 +261,79 @@ async function main() {
     assert.equal((await phone.request("thread/resume", { threadId: thread.id })).thread.id, thread.id);
     const back = await phone.request("turn/start", { threadId: thread.id, input: [{ type: "text", text: "Back on phone" }] });
     assert.equal((await phone.waitFor("turn/completed", (params) => params.turn.id === back.turn.id)).turn.status, "completed");
-    phone.close();
+    await phone.close();
     const reopenedPhone = await client(endpoint);
     connections.push(reopenedPhone);
     const restored = (await reopenedPhone.request("thread/resume", { threadId: thread.id })).thread;
     assert.equal(restored.id, thread.id);
     assert.equal(restored.turns.length, 3);
     console.log("Real Codex: verified empty-session recovery preserves its original file/folder; phone -> terminal -> phone retains one conversation and three turns; local fake model only");
-    for (const upstream of upstreams) upstream.close();
+    await Promise.all([...upstreams].map(async upstream => {
+      if (upstream.readyState === WebSocket.CLOSED) return;
+      const closed = once(upstream, "close");
+      upstream.close();
+      await deadline(closed, "terminal proxy detaches");
+    }));
+
+    // Detaching a view is not a writer handoff. Even after the final
+    // subscription is removed, the real server retains the idle thread.
+    const bridgeDetached = once(recovery.upstream, "close");
+    recovery.dispose();
+    await deadline(bridgeDetached, "bridge detaches");
+    const detached = await reopenedPhone.request("thread/unsubscribe", { threadId: thread.id });
+    assert.equal(detached.status, "unsubscribed");
+    assert.ok((await reopenedPhone.request("thread/loaded/list", {})).data.includes(thread.id));
+    await assert.rejects(conflictingClient.request("thread/resume", { threadId: thread.id, excludeTurns: true }),
+      /already has an active writer/);
+    const savedHistory = fs.readFileSync(restored.path, "utf8");
+    const savedTurnIds = restored.turns.map(turn => turn.id);
+    console.log("Real Codex: unsubscribing an idle conversation does not immediately release its writer");
+
+    // Stop only the fixture process this script created, never an operator's
+    // app or daemon. This proves the release prerequisite, not /app or the
+    // official desktop UI's release behavior.
+    const ownerStopped = once(server, "exit");
+    server.kill("SIGTERM");
+    await deadline(ownerStopped, "fixture owner releases its writer", 5000);
+    const transferred = (await conflictingClient.request("thread/resume", { threadId: thread.id })).thread;
+    assert.equal(transferred.id, thread.id);
+    assert.equal(transferred.cwd, project);
+    assert.equal(transferred.path, restored.path);
+    assert.deepEqual(transferred.turns.map(turn => turn.id), savedTurnIds);
+    assert.equal(fs.readFileSync(restored.path, "utf8"), savedHistory, "reopening does not rewrite the saved history");
+
+    tmux("new-window", "-d", "-t", "handoff", "-n", "released", "-c", project,
+      codex, "resume", thread.id, "--remote", conflictEndpoint, "--no-alt-screen");
+    tmux("set-option", "-w", "-t", "handoff:released", "remain-on-exit", "on");
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (tmux("capture-pane", "-p", "-t", "handoff:released").includes("Handoff fixture response.")) break;
+      await pause(100);
+    }
+    assert.ok(tmux("capture-pane", "-p", "-t", "handoff:released").includes("Handoff fixture response."),
+      "the terminal displays the same saved answer after ownership is released");
+    tmux("send-keys", "-t", "handoff:released", "-l", "Terminal after writer release");
+    await pause(500);
+    tmux("send-keys", "-t", "handoff:released", "Enter");
+    const continued = await conflictingClient.waitFor("turn/completed", params => !savedTurnIds.includes(params.turn.id));
+    assert.equal(continued.turn.status, "completed", JSON.stringify(continued.turn.error));
+    const afterRelease = (await conflictingClient.request("thread/resume", { threadId: thread.id })).thread;
+    assert.equal(afterRelease.id, thread.id);
+    assert.equal(afterRelease.cwd, project);
+    assert.deepEqual(afterRelease.turns.slice(0, 3).map(turn => turn.id), savedTurnIds);
+    assert.equal(afterRelease.turns.length, 4);
+    tmux("send-keys", "-t", "handoff:released", "-l", "/exit");
+    await pause(500);
+    tmux("send-keys", "-t", "handoff:released", "Enter");
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (tmux("display-message", "-p", "-t", "handoff:released", "#{pane_dead}").trim() === "1") break;
+      await pause(100);
+    }
+    assert.equal(tmux("display-message", "-p", "-t", "handoff:released", "#{pane_dead_status}").trim(), "0");
+    console.log("Real Codex: after the test-only owner exits, terminal continuation keeps the same ID, folder and original turns; desktop /app remains untested");
   } finally {
     recovery?.dispose();
     os.homedir = originalHomedir;
-    for (const connection of connections) connection.close();
+    await Promise.all(connections.map(connection => connection.close()));
     if (terminalStarted) { try { tmux("kill-server"); } catch {} }
     if (proxy) {
       for (const ws of proxy.clients) ws.terminate();

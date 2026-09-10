@@ -69,7 +69,7 @@ The bridge shares a thread across multiple browser clients. Add `thread=<thread_
 
 For access outside a trusted LAN, do not publish the bridge through an unauthenticated public tunnel or raw port forward. Put trusted access, such as SSH forwarding, a VPN, or a device-authenticated mesh network, in front of it.
 
-For live sync with Codex Desktop itself, connect OCdex to the same headless app-server that Desktop opens through a Remote Connection. The normal local conversation view in Codex Desktop uses a private `stdio` app-server, so there is no public external route for a bridge to inject live UI updates into that local view.
+The normal local Codex Desktop view and this bridge can read the same saved history while using different app-server processes. The verified shared-runtime path connects browser clients and the terminal to the same app-server. Desktop supports [remote connections through SSH](https://learn.chatgpt.com/docs/remote-connections#connect-to-an-ssh-host), but that does not establish that its UI can join this bridge's existing server. Desktop/bridge sharing remains unverified; see [Codex desktop handoff](#codex-desktop-handoff).
 
 For history sync with the normal Desktop view, OCdex refreshes the app-server metadata after each completed turn by calling `thread/read` with `includeTurns: false` and a scan-backed `thread/list`. This avoids downloading the entire transcript for a metadata refresh. It is designed for the Desktop sidebar/history and for reopen/refresh continuity, not live body updates to an already-open normal Desktop thread.
 
@@ -82,7 +82,7 @@ PHONE_TOKEN=demo-test-token \
 npm run phone
 ```
 
-In this mode, OCdex does not start a new app-server. It uses the app-server behind the socket. If Codex Desktop opens the same headless app-server as a Remote Connection, the Desktop remote view and OCdex browser subscribe to the same thread event stream.
+In this mode, OCdex does not start a new app-server. It uses the app-server behind the socket. Verify which server owns that socket and the intended conversation before using it. Merely choosing this path does not connect the normal Desktop view to the bridge or prove live synchronization with it.
 
 ### Isolated Windows lab connection (file access verified; AI execution pending) {#windows-lab}
 
@@ -209,19 +209,21 @@ Reopening a saved empty conversation can still return `list_turns is not support
 
 Existing Codex conversations use `thread/resume` with `excludeTurns: true` and an `initialTurnsPage` of up to 80 recent turns with `itemsView: "summary"`. Read-only history uses a metadata-only `thread/read` followed by `thread/turns/list` with the same options. The phone still displays its latest 80 history entries, in chronological order, without downloading all embedded images and tool output. The stored transcript is unchanged. Both connections enable the experimental API fields supported by Codex 0.153.4.
 
-An `already has an active writer` error means another independently started Codex or desktop process owns the conversation. Finish and save that work, close the owning conversation, then use **同じ会話に再接続 (Reconnect to this conversation)**. If ownership has not been released, the same notice remains; the bridge does not terminate the other process or force a takeover. It retains the selected Mac, AI, conversation, folder and draft, reads saved history without resuming it, and never automatically resends a prompt. This known conflict does not trigger a switch to another AI. Use the shared terminal connection described below to avoid competing writers for future work.
+An `already has an active writer` error means another independently started Codex or desktop process owns the conversation. Finish and save that work, close the owning conversation, then try **同じ会話に再接続 (Reconnect to this conversation)**. Closing a view or finishing a response does not guarantee immediate release: [unsubscribing a thread can leave it loaded for a grace period](https://learn.chatgpt.com/docs/app-server#unsubscribe-from-a-loaded-thread). If the error remains, continue in the owning view rather than repeatedly reconnecting. The bridge does not terminate the other process or force a takeover. It retains the selected Mac, AI, conversation, folder and draft, reads saved history without resuming it, and never automatically resends a prompt. This known conflict does not trigger a switch to another AI. The recovery panel's **公式アプリと切り替えるには (Switching to the official app)** explains the separate desktop path without opening an app or changing the connection.
 
 For other connection failures, **同じ会話に再接続 (Reconnect to this conversation)** also retries the selected conversation while keeping its history and draft. If the original history cannot be found, **履歴を探す (Find history)** opens the list. **同じフォルダで新しく開く (Open a new chat in this folder)** explicitly starts a separate, empty conversation on the same Mac with the same AI and verified folder; the original selection record and draft remain available. This does not restore the missing history. An unknown folder opens the folder picker instead. A later idle status cannot clear the failure before the conversation actually opens.
+
+### Continue the same conversation in a terminal {#terminal-handoff}
 
 The `>_` at the end of each Codex or Claude row copies a command for the Mac's **Terminal application**, not a Codex prompt box. For a conversation with saved messages, it resumes the exact session in its working directory **on the Mac that owns it**, without transferring any transcript. For an unsent empty Codex conversation, send the first message from the phone before using the resume command.
 
 On the owning Mac it starts locally; on the other Mac it connects through SSH. The mini must already have an `air` SSH alias targeting the Air's session owner, and the Air must have a `mini` alias targeting the mini's session owner. Other host types use their hostname as the SSH destination. The generated command checks the hostname again after connecting and stops on a mismatch. Connection failures never fall back to starting an AI on the wrong Mac.
 
-For Codex, the inner command is `codex resume <session-id> --remote <owner-app-server-endpoint>`. It joins the same running app-server as the phone, so both interfaces can show the conversation and continue it without creating a second writer. The endpoint comes from that row's owning bridge, including its slot or local Unix socket; it is never inferred from the phone's address. Closing the terminal leaves the shared server running. Reopen the same chat on the phone to continue; terminal input, active turns, interrupts and resolved approvals are reflected there. An independently started plain `codex` session must finish and close before this shared server can resume it. For future terminal-first work, connect with `codex --remote <owner-app-server-endpoint>` from the project's directory.
+For Codex, the inner command is `codex resume <session-id> --remote <owner-app-server-endpoint>`. It joins the same running app-server as the phone, so both interfaces can show the conversation and continue it without creating a second writer. The endpoint comes from that row's owning bridge, including its slot or local Unix socket; it is never inferred from the phone's address. Closing the terminal leaves the shared server running. Reopen the same chat on the phone to continue; terminal input, active turns, interrupts and resolved approvals are reflected there. A conversation owned by another independently started Codex must finish and release its writer before this shared server can resume it; closing the terminal alone may not stop a shared daemon. For future terminal-first work, connect with `codex --remote <owner-app-server-endpoint>` from the project's directory.
 
 Claude continues to use `claude --resume <session-id>` and its existing transcript watcher; the shared Codex server does not change Claude's execution model. The copied command also includes host selection, changing directory, and the SSH hop when needed. Remote execution uses `zsh -lic` to load the owner's normal CLI environment. The button is withheld until the owning hostname, absolute working directory and valid session ID are known; Codex also requires a confirmed local endpoint. Paste into a real Mac terminal, not the phone's single-command terminal runner. Keep the app-server bound to localhost and use SSH to reach its owning Mac. See the [Codex app-server documentation](https://developers.openai.com/codex/app-server) for remote terminal support.
 
-Run `npm run smoke:handoff` to check the real Codex CLI and both browser engines. It requires `codex` and `tmux` on PATH, creates an isolated test home and terminal, and uses a local fake model without account credentials or external inference requests.
+Run `npm run smoke:handoff` to check the real Codex CLI and both browser engines. It requires `codex` and `tmux` on PATH, creates an isolated test home and terminal, and uses a local fake model without account credentials or external inference requests. The test also verifies that detaching an idle conversation does not immediately release its writer, and that, after only the test-owned server exits, terminal continuation preserves the same ID, folder and earlier turns. This is not a test of the official desktop app or `/app`.
 
 The bridge is served over HTTP, so `navigator.clipboard` is unavailable in some browsers; it falls back to `execCommand`, and then to showing the command in a field you can select by hand.
 
@@ -230,6 +232,18 @@ A session opened from another workdir **runs in the directory it started in**. O
 That includes folders **outside the home directory**, such as an external volume. `validateWorkdir`'s home rule exists to constrain what a phone may ask for over the network; a `cwd` read back out of a transcript is not that — it is where the local `claude` already ran. Falling back there is the real hazard: `git remote -v` then answers for a different repository than the row it was opened from. The workspace shown in the header follows the folder the turn will actually run in.
 
 Each project shows its 6 newest rows (30 in date order); **もっと表示する (残りN件)** opens the rest, and **表示を減らす** puts it back. The expanded state is remembered per device.
+
+### Codex desktop handoff {#codex-desktop-handoff}
+
+The official [`/app` command](https://learn.chatgpt.com/docs/developer-commands#continue-in-the-desktop-app-with-app) opens the current saved Codex chat in the desktop app. Enter it in **Codex's terminal input**, not the shell or the phone prompt. `codex app <path>` is a different command that opens a workspace, not a guarantee of resuming the selected chat.
+
+Desktop-to-terminal round trips and sharing the bridge's server with Desktop are **not verified by this project**. To validate a handoff manually, use a dedicated test conversation after its work finishes:
+
+1. Note its conversation ID, working folder and last answer, then enter `/app` in terminal Codex.
+2. Check that the desktop app shows that same conversation and answer. An opened app or matching project folder alone is not success.
+3. Finish and save any desktop work. After its writer is released, resume the recorded ID from the original folder on the owning Mac using `codex resume <session-id>`. Verify the original history and folder before sending a follow-up. To return to the phone's shared server instead, use its copied `>_` command or **同じ会話に再接続**.
+
+If writer contention remains, stop the handoff and keep working in the original view. Do not delete ownership files, duplicate the conversation, or terminate a user's app to force the test through. `/app` being documented does not prove that it releases ownership or completes a round trip in a particular installed version. Official-app UI testing may require the owner: when automation is blocked by a safety restriction, do not bypass it through another control route.
 
 ### Keeping a project out of the list
 

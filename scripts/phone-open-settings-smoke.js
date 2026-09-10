@@ -251,7 +251,7 @@ async function main() {
       setReady(false);
       window.__socket.emit({ type: "runState", state: "error", label: "会話を開けません" });
       window.__socket.emit({ type: "error", code: "thread_writer_conflict", retryable: false,
-        text: "同じ会話を別のCodex画面が使用しています。作業を保存して会話を閉じてから「同じ会話に再接続」を押してください。" });
+        text: "同じ会話を別のCodex画面が使用しています。作業の完了・保存後、そちらの会話を閉じてから「同じ会話に再接続」を試してください。画面を閉じても使用権が残る場合があります。直らないときは再接続を繰り返さず、元の画面で続けてください。履歴と下書きは残ります。" });
     });
     const reconnect = page.getByRole("button", { name: "同じ会話に再接続", exact: true });
     await reconnect.waitFor();
@@ -260,6 +260,31 @@ async function main() {
     check("a known Codex conflict cannot trigger provider recovery", await page.evaluate(() => recoverSelectedThreadProvider(selectedThread, "codex", activeBridgeId)) === false);
     check("a conflict preserves both the saved answer and the draft", (await page.locator("#log").innerText()).includes("mini codex の元の回答")
       && await page.locator("#prompt").inputValue() === "競合中も残す下書き");
+    const help = page.locator(".thread-handoff-help");
+    check("writer conflicts offer desktop handoff guidance", await help.count() === 1);
+    if (await help.count()) {
+      const beforeHelp = await page.evaluate(() => window.__socketUrls.length);
+      await help.locator("summary").click();
+      const explanation = await help.innerText();
+      check("handoff guidance distinguishes the Codex input from the shell and unverified desktop sharing",
+        explanation.includes("Codexの入力欄") && explanation.includes("/app")
+        && explanation.includes("往復は未検証") && explanation.includes("使用権"));
+      check("handoff guidance links to the official documented command", await help.locator("a").getAttribute("href")
+        === "https://learn.chatgpt.com/docs/developer-commands#continue-in-the-desktop-app-with-app");
+      check("reading handoff guidance leaves the connection, chat and draft alone",
+        await page.evaluate(() => window.__socketUrls.length) === beforeHelp
+        && (await view()).thread === "mini-codex" && await page.locator("#prompt").inputValue() === "競合中も残す下書き");
+      for (const width of [320, 393]) {
+        await page.setViewportSize({ width, height: 852 });
+        check(`expanded handoff instructions fit ${width}px`, await help.evaluate(el => el.scrollWidth <= el.clientWidth + 1
+          && [...el.querySelectorAll("p")].every(p => getComputedStyle(p).whiteSpace === "normal" && p.scrollWidth <= p.clientWidth + 1)));
+      }
+      await help.locator("a").scrollIntoViewIfNeeded();
+      check("the end of the handoff guidance is reachable above the composer", await help.locator("a").evaluate(el => {
+        const rect = el.getBoundingClientRect();
+        return el.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2));
+      }));
+    }
     if (shots) await page.screenshot({ path: path.join(shotsDir, `${process.argv.includes("--webkit") ? "webkit" : "chromium"}-writer-conflict.png`) });
     const beforeRetry = await page.evaluate(() => window.__socketUrls.length);
     await reconnect.click();

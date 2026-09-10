@@ -1942,7 +1942,7 @@ function compactCodexError(raw) {
   const message = String(error.message || root.message || text || "Codex error");
   if (/already has an active writer/i.test(message)) {
     return {
-      text: "同じ会話を別のCodex画面が使用しています。そちらで作業を保存して会話を閉じてから「同じ会話に再接続」を押してください。履歴と下書きは残ります。",
+      text: "同じ会話を別のCodex画面が使用しています。作業の完了・保存後、そちらの会話を閉じてから「同じ会話に再接続」を試してください。画面を閉じても使用権が残る場合があります。直らないときは再接続を繰り返さず、元の画面で続けてください。履歴と下書きは残ります。",
       code: "thread_writer_conflict", retryable: false, retrying: false,
     };
   }
