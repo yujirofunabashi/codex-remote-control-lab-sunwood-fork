@@ -4,15 +4,23 @@ const assert = require("node:assert/strict");
 const { once } = require("node:events");
 const fs = require("node:fs");
 const path = require("node:path");
+const os = require("node:os");
 const { chromium, webkit } = require("playwright");
 const { startServer } = require("./mobile-smoke");
 const { createLabServer } = require("./start-lab-bridge");
 
 async function run() {
   const { server, origin } = await startServer();
+  const progressDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "lab-progress-ui-"));
+  const progressFile = path.join(progressDirectory, "progress.json");
+  const progress = { schema: 1, status: "revision_limit", verifiedAt: Date.now() - 86400000, aiInvocations: 10,
+    sourceSha256: "a".repeat(64), project: "Windows内の収益実験", department: "品質検査",
+    result: "部門の実回答10件を確認。最後の検査は修正待ち。", stopReason: "注文の上限を守れるか未確認。",
+    nextAction: "上限を守る方法を確認し、計画を修正する。", ownerAction: "ありません。" };
+  fs.writeFileSync(progressFile, JSON.stringify(progress), { mode: 0o600 });
   const config = { id: "windows-lab", targetHost: "windows.fixture", host: "127.0.0.1", port: 45251,
     workRoot: "/home/agent-lab/work", model: "gpt-6-astra", effort: "xhigh",
-    phoneToken: "p".repeat(40), workerToken: "w".repeat(40), allowedOrigins: [origin] };
+    phoneToken: "p".repeat(40), workerToken: "w".repeat(40), allowedOrigins: [origin], progressFile };
   const app = createLabServer(config);
   app.server.listen(0, "127.0.0.1");
   await once(app.server, "listening");
@@ -20,7 +28,7 @@ async function run() {
   config.allowedOrigins.push(labOrigin);
   const root = config.workRoot;
   const airOrigin = "http://127.0.0.1:45999";
-  let vmState = "off", aiEnabled = false, runningJob = null, runCount = 0;
+  let vmState = "off", aiEnabled = false, runningJob = null, runCount = 0, observing = true;
   const results = [];
   const finish = (id, data) => app.store.complete(id, { ok: true, data });
   const snapshot = { artifacts: [{ path: `${root}/example/report.md`, size: 30 }], firstPlan: { path: `${root}/first-ai-task-01/PLAN.json`, text: '{"status":"計画の下書き"}', modifiedAt: Date.now() } };
@@ -28,6 +36,7 @@ async function run() {
   app.store.state.folders[root] = { path: root, fetchedAt: Date.now(), entries: [{ name: "example", path: `${root}/example` }] };
   const worker = setInterval(() => {
     try {
+      if (!observing) return;
       app.store.heartbeat({ vmState, guestReady: vmState === "running", aiReady: aiEnabled && vmState === "running" });
       const command = app.store.lease();
       if (!command) return;
@@ -52,6 +61,7 @@ async function run() {
   page.on("pageerror", error => errors.push(error.message));
   try {
     await page.addInitScript(({ airOrigin, labOrigin, token }) => {
+      localStorage.setItem("codexPhonePwaInstallHint:v1", "dismissed");
       localStorage.setItem("codexPhoneBridgeRegistry:v1", JSON.stringify({ version: 1, bridges: [
         { id: "air", label: "Air", baseUrl: airOrigin, rememberToken: true },
         { id: "windows-lab", label: "Windows実験室", baseUrl: labOrigin, rememberToken: true },
@@ -111,6 +121,26 @@ async function run() {
 
     await page.evaluate(() => setActiveBridge("windows-lab"));
     await page.waitForFunction(() => connectionReady && selectedThread === "lab-first-plan");
+    if (await page.evaluate(() => document.body.classList.contains("show-sidebar"))) {
+      await page.locator("#sidebarScrim").click({ position: { x: 380, y: 100 } });
+      await page.waitForFunction(() => document.querySelector("#threadSidebar").getBoundingClientRect().right <= 1);
+    }
+    await page.waitForFunction(() => document.querySelector("#labProgressState").textContent.includes("現在は停止中"));
+    assert.ok(await page.locator("#labProgress").isVisible());
+    assert.match(await page.locator("#labProgressResult").textContent(), /実回答10件/);
+    await page.locator("#labProgress summary").click();
+    assert.match(await page.locator("#labProgressFreshness").textContent(), /実行時刻ではありません/);
+    assert.equal(await page.locator("#labProgressFreshness").evaluate(el => el.scrollWidth <= el.clientWidth), true);
+    assert.match(await page.locator("#labProgressNext").textContent(), /計画を修正/);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    assert.equal(await page.locator("#labProgress").evaluate(el => el.scrollWidth <= el.clientWidth), true);
+    assert.equal(await page.locator("#labProgressResult").evaluate(el => el.getBoundingClientRect().right <= innerWidth), true);
+    if (process.argv.includes("--shots")) {
+      const output = path.join(__dirname, "..", "output", "playwright");
+      fs.mkdirSync(output, { recursive: true });
+      await page.screenshot({ path: path.join(output, "windows-lab-progress.png"), fullPage: true });
+    }
+    await page.locator("#labProgress summary").click();
     await openSidebar();
     assert.ok(await page.locator("#labControls").isVisible());
     assert.match(await page.locator("#labStateLabel").textContent(), /停止中/);
@@ -156,6 +186,7 @@ async function run() {
     await page.waitForFunction(() => getBridgeState(activeBridgeId).status?.lab?.aiReady && !sendButton.disabled);
     await page.locator("#prompt").press("Control+Enter");
     await page.waitForFunction(() => currentRunState === "running" && !pendingSubmission && runStateLabel.textContent === "Windowsで作業中");
+    await page.waitForFunction(() => document.querySelector("#labProgressState").textContent.includes("AIが作業中"));
     assert.equal(runCount, 1);
     // Break only the browser connection while the fake guest keeps running.
     await page.evaluate(() => { ws.close(); });
@@ -171,6 +202,14 @@ async function run() {
     await page.waitForTimeout(80);
     await page.evaluate(async () => { await refreshBridgeState(activeBridgeId, { force: true }); await showArtifact("/home/agent-lab/work/example/report.md"); });
     assert.match(await page.locator("#artifactPreview").textContent(), /保存済みの表示・現在の内容は未確認/);
+    observing = false;
+    app.store.lastHeartbeat = 0;
+    await page.evaluate(() => refreshBridgeState(activeBridgeId, { force: true }));
+    await page.waitForFunction(() => document.querySelector("#labProgressState").textContent.includes("稼働は未確認"));
+    assert.match(await page.locator("#labProgressResult").textContent(), /実回答10件/);
+    fs.writeFileSync(progressFile, JSON.stringify({ ...progress, status: "completed", result: "修正後の検査を完了。" }), { mode: 0o600 });
+    await page.waitForFunction(() => document.querySelector("#labProgressResult").textContent.includes("修正後の検査を完了"));
+    assert.match(await page.locator("#labProgressState").textContent(), /稼働は未確認/);
     if (process.argv.includes("--shots")) {
       const output = path.join(__dirname, "..", "output", "playwright");
       fs.mkdirSync(output, { recursive: true });
@@ -178,6 +217,7 @@ async function run() {
     }
     await page.evaluate(() => setActiveBridge(homeBridgeId));
     await page.waitForFunction(() => connectionReady && selectedThread === "original");
+    assert.equal(await page.locator("#labProgress").isVisible(), false);
     assert.equal(await page.locator("#prompt").inputValue(), "miniの下書き");
     assert.ok(await page.locator("#labControls").isHidden());
     assert.ok(await page.locator("#accessButton").isEnabled());
@@ -190,6 +230,7 @@ async function run() {
     await browser.close();
     await new Promise(resolve => app.server.close(resolve));
     await new Promise(resolve => server.close(resolve));
+    fs.rmSync(progressDirectory, { recursive: true, force: true });
   }
 }
 

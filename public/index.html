@@ -265,6 +265,23 @@
         </dialog>
         <div class="content-grid">
           <section class="conversation" aria-label="会話">
+            <details id="labProgress" class="lab-progress" hidden>
+              <summary>
+                <span class="lab-progress-heading">Windows実験室の進捗 <small>担当・次の作業 ▾</small></span>
+                <strong id="labProgressState" role="status"></strong>
+                <span id="labProgressResult"></span>
+              </summary>
+              <div class="lab-progress-body">
+                <div id="labProgressFreshness" class="lab-progress-freshness"></div>
+                <dl>
+                  <div><dt>案件</dt><dd id="labProgressProject"></dd></div>
+                  <div><dt>担当（最後の記録）</dt><dd id="labProgressDepartment"></dd></div>
+                  <div><dt>停止理由・残る問題</dt><dd id="labProgressStop"></dd></div>
+                  <div><dt>AIの次の作業</dt><dd id="labProgressNext"></dd></div>
+                  <div><dt>あなたがすること</dt><dd id="labProgressOwner"></dd></div>
+                </dl>
+              </div>
+            </details>
             <section id="globalApprovalBanner" class="global-approval-banner hidden" aria-live="polite"></section>
             <div id="logShell" class="log-shell">
               <div id="log" class="log" aria-live="polite"></div>

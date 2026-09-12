@@ -8,6 +8,7 @@ const WebSocket = require("ws");
 const { LabState, labPath, failure } = require("./lab-state");
 const { redactSensitiveText } = require("./debug-log");
 const { createBuildTracker } = require("./bridge-build");
+const { readLabProgress } = require("./lab-progress");
 
 const repository = path.resolve(__dirname, "..");
 const publicDir = path.join(repository, "public");
@@ -63,7 +64,7 @@ function createLabServer(config, { store = new LabState({ file: config.stateFile
     app: { id: config.id, name: "Windows実験室", shortName: "Windows" }, shell,
     build: build.status(),
     capabilities: { threads: true, terminalHistory: false, artifacts: true, approvals: false, fleet: true, lab: true },
-    lab: store.target(), color: "#3f7f4b" });
+    lab: store.target(), projectProgress: readLabProgress(config.progressFile), color: "#3f7f4b" });
   const threadPayload = thread => ({ type: "ready", provider: "codex", threadId: thread.id, threadTitle: thread.name,
     model: config.model, ...workspace(thread.cwd), history: thread.history, run: store.run(thread), clients: clients.get(thread.id)?.size || 1, slashCommands: [], lab: store.target() });
   const emit = (id, message) => {
@@ -116,7 +117,7 @@ function createLabServer(config, { store = new LabState({ file: config.stateFile
         if (req.method === "GET") {
           if (url.pathname === "/api/bridge/info" || url.pathname === "/api/info") return reply(200, info());
           if (url.pathname === "/api/health") return reply(200, { ok: true, ...info() });
-          if (url.pathname === "/api/status") return reply(200, { provider: "codex", ...workspace(config.workRoot), lab: store.target(), bridges: Object.values(store.state.threads).map(thread => ({ threadId: thread.id, provider: "codex", model: config.model, ...workspace(thread.cwd), run: store.run(thread) })) });
+          if (url.pathname === "/api/status") return reply(200, { provider: "codex", ...workspace(config.workRoot), lab: store.target(), projectProgress: readLabProgress(config.progressFile), bridges: Object.values(store.state.threads).map(thread => ({ threadId: thread.id, provider: "codex", model: config.model, ...workspace(thread.cwd), run: store.run(thread) })) });
           if (url.pathname === "/api/threads") return reply(200, { provider: "codex", activeProvider: "codex", data: store.threadRecords(), hiddenProjects: [] });
           if (url.pathname === "/api/thread") { const thread = store.thread(url.searchParams.get("thread")); return reply(200, { provider: "codex", threadId: thread.id, history: thread.history, ...workspace(thread.cwd), lab: store.target() }); }
           if (url.pathname === "/api/workspaces") return reply(200, { data: Object.values(store.state.folders).map(folder => ({ path: folder.path, name: path.posix.basename(folder.path), label: folder.path, group: "Windows実験室", git: false })) });
@@ -214,8 +215,9 @@ function createLabServer(config, { store = new LabState({ file: config.stateFile
     });
   });
   const heartbeat = setInterval(() => {
+    const projectProgress = readLabProgress(config.progressFile);
     for (const [id] of clients) {
-      emit(id, { type: "labState", lab: store.target() });
+      emit(id, { type: "labState", lab: store.target(), projectProgress });
       emit(id, { type: "runState", ...store.run(store.thread(id)) });
     }
   }, 5000);

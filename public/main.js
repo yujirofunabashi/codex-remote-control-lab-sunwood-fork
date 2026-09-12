@@ -111,6 +111,7 @@ const labStateLabel = document.querySelector("#labStateLabel");
 const labObservedAt = document.querySelector("#labObservedAt");
 const labStart = document.querySelector("#labStart");
 const labShutdown = document.querySelector("#labShutdown");
+const labProgress = document.querySelector("#labProgress");
 const labOperationPending = new Set();
 const rateLimitList = document.querySelector("#rateLimitList");
 const voiceButton = document.querySelector("#voiceButton");
@@ -5563,6 +5564,7 @@ function activeLabInfo() {
 function renderLabControls() {
   if (!labControls) return;
   const info = activeLabInfo();
+  renderLabProgress(info);
   labControls.hidden = !info;
   accessButton.disabled = Boolean(info);
   accessButton.textContent = info ? "実験フォルダ内のみ" : accessMode.label;
@@ -5579,6 +5581,32 @@ function renderLabControls() {
   labObservedAt.textContent = `${lab.observedAt ? `Windows確認: ${new Date(lab.observedAt).toLocaleString("ja-JP")}` : "Windowsの状態は未取得"}。${lab.aiReady ? "専用の作業フォルダだけを操作できます。" : lab.ready ? "専用フォルダを閲覧できます。AI作業は承認・実機検証後に有効にします。" : "結果は保存済みの表示です。"}`;
   labStart.disabled = busy || !lab.hostOnline || lab.vmState !== "off";
   labShutdown.disabled = busy || !lab.ready || (state.status?.bridges || []).some(bridge => ["running", "streaming", "interrupting", "disconnected"].includes(bridge.run?.state));
+}
+
+function renderLabProgress(info) {
+  if (!labProgress) return;
+  labProgress.hidden = !info;
+  if (!info) return;
+  const state = getBridgeState(activeBridgeId);
+  const lab = state.status?.lab || info.lab || {};
+  const progress = state.status?.projectProgress || info.projectProgress;
+  const observed = Number(lab.observedAt) || 0;
+  const fresh = state.connected && lab.hostOnline && observed > 0 && Date.now() - observed < 15000;
+  const running = (state.status?.bridges || []).some(bridge => ["running", "streaming", "interrupting"].includes(bridge.run?.state));
+  const set = (id, value) => { document.getElementById(id).textContent = value; };
+  set("labProgressState", !fresh ? "現在の稼働は未確認 · Windowsからの応答なし"
+    : lab.vmState === "off" ? "現在は停止中 · Windowsで確認済み"
+    : lab.ready && running ? "アプリから依頼したAIが作業中"
+    : "Windowsに接続中 · 部門作業の現在状態は未確認");
+  const timestamp = value => new Date(value).toLocaleString("ja-JP");
+  set("labProgressFreshness", `${observed ? `Windowsからの最終応答: ${timestamp(observed)}` : "Windowsからの応答記録はありません"}。${progress?.available ? `成果の記録を確認: ${timestamp(progress.verifiedAt)}（実行時刻ではありません）` : "部門の成果記録は取得できていません"}。${state.connected ? "" : "画面用の接続も切れています。成果は前回取得した表示です。"}`);
+  const available = progress?.available;
+  set("labProgressProject", available ? progress.project : "Windows内の実験");
+  set("labProgressResult", available ? `最後に確認できた成果: ${progress.result}` : "最後の成果: 取得できていません");
+  set("labProgressDepartment", available ? progress.department : "未取得");
+  set("labProgressStop", available ? progress.stopReason : "実行記録が届いていないため、未確認です。");
+  set("labProgressNext", available ? progress.nextAction : "管理側でWindowsの接続と実行記録を確認する。");
+  set("labProgressOwner", available ? progress.ownerAction : "成果の取得を待ってください。作業の再送は不要です。");
 }
 
 async function requestLabOperation(operation) {
@@ -9312,7 +9340,7 @@ function connect({ preserveHistory = false, freshThread = false, workdir = "" } 
     const msg = JSON.parse(event.data);
     if (msg.lab) {
       const state = getBridgeState(bridgeId);
-      state.status = { ...state.status, lab: msg.lab };
+      state.status = { ...state.status, lab: msg.lab, ...(msg.projectProgress ? { projectProgress: msg.projectProgress } : {}) };
       renderLabControls();
     }
     if (msg.type === "labState" || msg.type === "pong") return;

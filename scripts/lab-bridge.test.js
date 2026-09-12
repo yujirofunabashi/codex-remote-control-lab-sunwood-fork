@@ -2,12 +2,15 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const { once } = require("node:events");
 const WebSocket = require("ws");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
 const { createLabServer } = require("./start-lab-bridge");
 const root = "/home/agent-lab/work";
 
-async function fixture(t) {
+async function fixture(t, options = {}) {
   const config = { id: "windows-lab", targetHost: "windows.fixture", host: "127.0.0.1", port: 45251, workRoot: root,
-    phoneToken: "p".repeat(40), workerToken: "w".repeat(40), allowedOrigins: ["http://127.0.0.1:45999"], model: "gpt-6-astra", effort: "xhigh" };
+    phoneToken: "p".repeat(40), workerToken: "w".repeat(40), allowedOrigins: ["http://127.0.0.1:45999"], model: "gpt-6-astra", effort: "xhigh", ...options };
   const app = createLabServer(config);
   app.server.listen(0, "127.0.0.1");
   await once(app.server, "listening");
@@ -42,6 +45,48 @@ test("phone and host credentials, origins and allowed operations stay separate",
   assert.deepEqual(info.modelChoices.codex, [app.config.model]);
   assert.equal(JSON.stringify(info).includes(app.config.workerToken), false);
   assert.equal(JSON.stringify(info).includes(app.config.phoneToken), false);
+});
+
+test("verified project progress is private, refreshes without restart, and never proves live Windows state", async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "lab-progress-"));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const progressFile = path.join(directory, "progress.json");
+  const app = await fixture(t, { progressFile });
+  const status = async () => (await app.request("/api/status")).json();
+  assert.equal((await status()).projectProgress.available, false);
+  const data = { schema: 1, status: "revision_limit", verifiedAt: Date.now() - 86400000, aiInvocations: 10,
+    sourceSha256: "a".repeat(64), project: "実験", department: "品質担当", result: "10件確認・修正待ち",
+    stopReason: "回数上限", nextAction: "原因を修正", ownerAction: "ありません", workerToken: "must-not-leak" };
+  const save = value => fs.writeFileSync(progressFile, JSON.stringify(value), { mode: 0o600 });
+  save(data);
+  const old = await status();
+  assert.equal(old.lab.hostOnline, false);
+  assert.equal(old.lab.vmState, "unknown");
+  assert.equal(old.projectProgress.result, data.result);
+  assert.equal(JSON.stringify(old).includes("must-not-leak"), false);
+  assert.equal(JSON.stringify(old).includes(progressFile), false);
+  assert.equal((await fetch(app.origin + "/api/status")).status, 401);
+  const workerResponse = await app.worker("poll", { target: { vmState: "unknown", guestReady: false } });
+  assert.equal(workerResponse.status, 200);
+  const worker = await workerResponse.json();
+  assert.equal(worker.projectProgress, undefined);
+  save({ ...data, status: "completed", result: "検査を完了" });
+  assert.equal((await status()).projectProgress.result, "検査を完了");
+  assert.equal((await status()).lab.vmState, "unknown");
+  for (const invalid of [{ ...data, verifiedAt: Date.now() + 3600000 }, { ...data, result: "x".repeat(24001) }, { ...data, schema: 2 }]) {
+    save(invalid);
+    assert.equal((await status()).projectProgress.available, false);
+  }
+  fs.writeFileSync(progressFile, "{");
+  assert.equal((await status()).projectProgress.available, false);
+  save(data);
+  fs.chmodSync(progressFile, 0o644);
+  assert.equal((await status()).projectProgress.available, false);
+  fs.chmodSync(progressFile, 0o600);
+  const linked = progressFile + ".link";
+  fs.renameSync(progressFile, linked);
+  fs.symlinkSync(linked, progressFile);
+  assert.equal((await status()).projectProgress.available, false);
 });
 
 test("a saved file/folder remains readable when off but cannot create a session", async t => {
