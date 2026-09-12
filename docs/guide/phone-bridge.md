@@ -11,6 +11,15 @@ npm ci
 npm run phone
 ```
 
+The application pins its Codex dependency to 0.154.0. `npm run version:codex` inspects only that local installation and fails if it is missing, rather than falling back to a global Codex. A `CODEX_BIN` override and an already-running app-server must be checked separately:
+
+```bash
+npm run version:codex
+npm run version:codex:server -- ws://127.0.0.1:45213
+```
+
+The second command sends only the initialization handshake to the existing server; it does not start a service, create or resume a thread, or run AI. Replace the example endpoint with the target bridge's `codexUrl` from its authenticated `/api/info` response. The check requires an explicit loopback WebSocket port and reports an unverified result if the server is unavailable or its runtime version is unknown. Installing a dependency does not replace a running process. Follow the update procedure below for an authorized restart.
+
 To use the UI's restart button — in the sidebar footer beside `設定`, and inside the settings panel — start through a supervised entry point. Restarting exits with code 42 and relies on a supervisor to bring the bridge back, so without one the bridge stays down. Both buttons confirm before they act:
 
 ```bash
