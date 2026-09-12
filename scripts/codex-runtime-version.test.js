@@ -38,21 +38,25 @@ test("runtime inspection reports an older running server without changing it", a
   });
 });
 
-test("runtime inspection recognizes the existing phone bridge API identity", async () => {
-  await withServer(message => ({ id: message.id, result: {
-    userAgent: "codex-phone-bridge-api/0.153.4 (Mac OS 26.6.2; arm64) codex-runtime-version/0.1.0",
-  } }), async url => {
-    const result = await inspectServer(url);
-    assert.equal(result.version, "0.153.4");
-    assert.equal(result.versionConfirmed, true);
+for (const identity of ["codex-phone-bridge-api", "codex-phone-bridge", "codex-remote-control-lab"]) {
+  test(`runtime inspection recognizes the existing ${identity} identity`, async () => {
+    await withServer(message => ({ id: message.id, result: {
+      userAgent: `${identity}/0.153.4 (Mac OS 26.6.2; arm64) codex-runtime-version/0.1.0`,
+    } }), async url => {
+      const result = await inspectServer(url);
+      assert.equal(result.version, "0.153.4");
+      assert.equal(result.versionConfirmed, true);
+    });
   });
-});
+}
 
 test("runtime version must follow an exact recognized leading identity", () => {
   for (const userAgent of [
     "unknown/0.153.4 (Mac OS 26.6.2; arm64) codex-runtime-version/0.1.0",
     "codex-phone-bridge-api (Mac OS 26.6.2; arm64) codex-runtime-version/0.1.0",
     "codex-phone-bridge-api-test/0.153.4 (Mac OS 26.6.2; arm64)",
+    "codex-phone-bridge-test/0.153.4 (Mac OS 26.6.2; arm64)",
+    "codex-remote-control-lab-test/0.153.4 (Mac OS 26.6.2; arm64)",
     "Mac OS 26.6.2; codex-phone-bridge-api/0.153.4",
   ]) {
     assert.equal(serverVersion(userAgent), null);

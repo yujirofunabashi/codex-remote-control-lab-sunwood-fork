@@ -15,8 +15,9 @@ function serverVersion(userAgent) {
   if (typeof userAgent !== "string") return null;
   // Do not substitute the installed dependency or the client's version when
   // the server does not report a recognized Codex runtime identity.
-  // An existing server can retain the phone bridge's first initialized name.
-  const match = userAgent.match(/^(?:codex-phone-bridge-api|codex-runtime-version|codex_cli_rs|codex-cli|codex)\/(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)(?=\s|$)/);
+  // An existing server retains the first initialized name. All three names
+  // used by this app (API, conversation and probe) can identify that runtime.
+  const match = userAgent.match(/^(?:codex-phone-bridge(?:-api)?|codex-remote-control-lab|codex-runtime-version|codex_cli_rs|codex-cli|codex)\/(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)(?=\s|$)/);
   return match ? match[1] : null;
 }
 
