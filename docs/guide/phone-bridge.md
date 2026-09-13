@@ -215,6 +215,10 @@ agy -p '道具やファイルを使わず「起動確認OK」とだけ答えて�
 
 The last command is a real model request, not an installation check. Only a successful response verifies the account/model path. A listed candidate or a version string is insufficient. If the account does not list the pinned model, stop and select an available Gemini model deliberately; the bridge does not fall back to another provider.
 
+On macOS, verify the same user and startup context that the bridge will actually use. Antigravity CLI 1.2.2 was observed to choose file-based token storage when it detects SSH, while desktop sign-in uses the [OS keyring](https://antigravity.google/docs/cli/install/#local-silent-keyring-sign-in). Consequently, `agy models` over SSH can request sign-in even when the desktop CLI is already authenticated.
+
+Before repeating sign-in, check the model list and real response locally or in the bridge's actual startup context. Removing SSH environment indicators alone does not grant keyring access. Do not resolve the difference by copying credentials, widening keyring permissions, or enabling paid fallback. A successful response in that context still does not establish deployment to the running phone bridge.
+
 After verification, select Gemini in the app's AI tabs or new-conversation picker. The phone's trial directory must be inside that machine's user home; do not weaken existing workspace validation to use an external temporary directory. Older bridges and the bounded Windows lab bridge do not advertise Gemini and must not display a usable Gemini choice. Installing a Windows executable alone does not enable the lab's AI execution path. Deploy and verify the affected bridge separately using the existing update procedure.
 
 | Setting | Meaning |
