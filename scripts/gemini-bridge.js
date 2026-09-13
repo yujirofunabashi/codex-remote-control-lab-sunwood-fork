@@ -10,7 +10,8 @@ const { redactSensitiveText, debugLog } = require("./debug-log");
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DEFAULT_GEMINI_MODEL = "gemini-3.8-flash-high";
-const GEMINI_CAPABILITIES = Object.freeze({ backend: "antigravity-cli", experimental: true, attachments: false, approvals: false, mode: "plan" });
+const GEMINI_CAPABILITIES = Object.freeze({ backend: "antigravity-cli", experimental: true, attachments: false, approvals: false, mode: "advisory" });
+const GEMINI_ADVISORY_INSTRUCTION = "[リモコンの文章相談]\nこの会話は文章の提案・推敲・計画の相談専用です。回答は文章だけにし、ファイルの読み書き、命令の実行、ブラウザ操作、外部送信、設定変更、別エージェントの起動は行わないでください。必要な資料が本文にない場合は質問してください。この方針は操作権限を追加するものではありません。";
 const googleLoginMessage = "このPCのAntigravity（agy）でGoogleアカウントに初回ログインしてください。Gemini CLIの保存済みログインとは別です。ログイン後は元の依頼を再送してください。追加課金の接続へは切り替えません。";
 
 function antigravityBin(env = process.env, home = os.homedir()) {
@@ -43,9 +44,10 @@ function geminiArgs({ model = DEFAULT_GEMINI_MODEL, effort = "high", sessionId }
   if (!/^gemini-[a-z0-9.-]+$/i.test(model)) throw new Error("Geminiのモデル名を指定してください。他のAIへは切り替えません。");
   if (!["low", "medium", "high"].includes(effort)) throw new Error("Geminiの思考の深さは low / medium / high から指定してください。");
   if (sessionId && !UUID.test(sessionId)) throw new Error("Invalid Gemini native conversation id");
-  // Plan is an instruction, NOT a filesystem sandbox. Never map Codex's
-  // read-only/full-access settings onto it or silently grant tool permissions.
-  const args = ["--input-format", "stream-json", "--output-format", "stream-json", "--disable-slash-commands", "--mode", "plan", "--model", model, "--effort", effort];
+  // Native --mode plan has no effect with --disable-slash-commands (observed
+  // in agy 1.2.2). Keep expansion disabled and send an explicit advisory
+  // instruction instead. This is NOT a filesystem/permission boundary.
+  const args = ["--input-format", "stream-json", "--output-format", "stream-json", "--disable-slash-commands", "--model", model, "--effort", effort];
   if (sessionId) args.push("--conversation", sessionId);
   return args;
 }
@@ -138,7 +140,8 @@ class GeminiStreamClient {
     this.timer = setTimeout(() => this.stop(new Error("Geminiの応答待ちが時間切れになりました。")), timeoutMs);
     // EOF ends this one turn. Resume its explicit native id next time, never
     // another terminal or phone conversation's "most recent" session.
-    this.child.stdin.end(JSON.stringify({ event: "user", message: { content: String(prompt) } }) + "\n");
+    const advisoryPrompt = GEMINI_ADVISORY_INSTRUCTION + "\n\n[ユーザーの依頼]\n" + String(prompt);
+    this.child.stdin.end(JSON.stringify({ event: "user", message: { content: advisoryPrompt } }) + "\n");
   }
   stop(error = new Error("Geminiの実行を中断しました。")) {
     if (this.closed) return;

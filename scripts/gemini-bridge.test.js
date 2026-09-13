@@ -71,7 +71,8 @@ test("stable phone id, exact UTF-8 stream, canonical result and explicit native 
   assert.equal(restored.threadId, id);
   assert.equal(f.calls[1].args.at(-2), "--conversation");
   assert.equal(f.calls[1].args.at(-1), sessionId);
-  assert.deepEqual(f.calls[1].input, { event: "user", message: { content: "second" } });
+  assert.equal(f.calls[1].input.event, "user");
+  assert.ok(f.calls[1].input.message.content.endsWith("[ユーザーの依頼]\nsecond"));
   assert.equal(f.calls.some(call => call.args.includes("--continue")), false);
   assert.equal(fs.statSync(f.store.file(id)).mode & 0o777, 0o600);
   restored.dispose();
@@ -163,12 +164,31 @@ test("malformed and missing phone ids fail without creating another conversation
 
 test("model and effort are explicit and no permission-escalation flags can leak from other providers", () => {
   const args = geminiArgs({ sandboxMode: "danger-full-access", approvalPolicy: "never" });
-  assert.equal(args[args.indexOf("--mode") + 1], "plan");
+  assert.equal(args.includes("--mode"), false, "native plan mode is disabled by --disable-slash-commands");
+  assert.ok(args.includes("--disable-slash-commands"));
   assert.equal(args[args.indexOf("--model") + 1], DEFAULT_GEMINI_MODEL);
   assert.equal(args[args.indexOf("--effort") + 1], "high");
   assert.equal(args.includes("--dangerously-skip-permissions"), false);
   assert.throws(() => geminiArgs({ model: "claude-sonnet" }), /他のAI/);
   assert.throws(() => geminiArgs({ effort: "max" }), /low/);
+});
+
+test("each turn carries an advisory instruction without claiming native plan mode", async t => {
+  const f = fixture(t);
+  f.bridge.prompt("/model keep this as text");
+  await until(() => !f.bridge.hasActiveWork());
+  f.bridge.prompt("second question");
+  await until(() => !f.bridge.hasActiveWork());
+  for (const call of f.calls) {
+    assert.match(call.input.message.content, /^\[リモコンの文章相談\]/);
+    assert.match(call.input.message.content, /ファイルの読み書き/);
+    assert.match(call.input.message.content, /行わないでください/);
+    assert.ok(call.args.includes("--disable-slash-commands"));
+    assert.equal(call.args.includes("--mode"), false);
+  }
+  assert.ok(f.calls[0].input.message.content.endsWith("[ユーザーの依頼]\n/model keep this as text"));
+  assert.equal(f.bridge.history[0].text, "/model keep this as text");
+  assert.equal(f.bridge.readyPayload().capabilities.mode, "advisory");
 });
 
 test("credit or API settings block execution without changing settings or reading credentials", t => {

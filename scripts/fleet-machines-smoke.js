@@ -318,14 +318,14 @@ async function run() {
     await page.waitForFunction(() => connectionReady && currentThreadProvider() === "gemini");
     await page.waitForTimeout(350); // Let the mobile drawer's close animation settle before the screenshot.
     check("Gemini is named as the chat provider", /Gemini/.test(await page.locator("#bridgePillAgent").innerText()));
-    check("Gemini labels plan mode without pretending to support the other permission modes", await page.locator("#accessButton").isDisabled() && /相談・計画/.test(await page.locator("#accessButton").innerText()) && /厳密な読み取り専用ではなく/.test(await page.locator("#geminiNotice").innerText()));
+    check("Gemini labels text advice without claiming native plan mode or read-only permissions", await page.locator("#accessButton").isDisabled() && /文章相談/.test(await page.locator("#accessButton").innerText()) && /厳密な読み取り専用ではありません/.test(await page.locator("#geminiNotice").innerText()));
     check("Gemini's unavailable attachment button is disabled", await page.locator("#addButton").isDisabled());
     check("Gemini does not inherit Claude's chosen model", /gemini-3.8-flash-high/i.test(await page.locator("#modelButton").innerText()));
     await page.locator("#modelButton").click();
     const geminiDepths = await page.locator("[data-reasoning]").evaluateAll(rows => rows.filter(row => !row.hidden).map(row => row.dataset.reasoning));
     check("Gemini offers only supported reasoning levels", geminiDepths.join(",") === "low,medium,high", geminiDepths.join(","));
     await page.locator("#modelButton").click();
-    if (wantShots) await page.screenshot({ path: path.join(shotsDir, "gemini-plan-mode.png") });
+    if (wantShots) await page.screenshot({ path: path.join(shotsDir, "gemini-advisory-mode.png") });
     await page.locator("#prompt").fill("販売文を読みやすくしてください。");
     await page.locator("#send").click();
     const submitted = await page.evaluate(() => (window.__sentPrompts || []).filter(item => item.type === "prompt").at(-1));

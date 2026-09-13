@@ -5574,8 +5574,8 @@ function renderLabControls() {
   labControls.hidden = !info;
   const gemini = currentThreadProvider() === "gemini";
   accessButton.disabled = Boolean(info) || gemini;
-  accessButton.textContent = info ? "実験フォルダ内のみ" : gemini ? "相談・計画モード" : accessMode.label;
-  accessButton.title = gemini ? "計画を提案するモードです。厳密な読み取り専用ではなく、操作の許可はPC側のAntigravity設定に従います。承認ボタンには未対応です。" : "";
+  accessButton.textContent = info ? "実験フォルダ内のみ" : gemini ? "文章相談（試験）" : accessMode.label;
+  accessButton.title = gemini ? "文章での提案・推敲を依頼します。厳密な読み取り専用ではなく、操作の許可はPC側のAntigravity設定に従います。承認ボタンには未対応です。" : "";
   const geminiNotice = document.querySelector("#geminiNotice");
   if (geminiNotice) geminiNotice.hidden = !gemini;
   addButton.disabled = Boolean(info) || gemini;
