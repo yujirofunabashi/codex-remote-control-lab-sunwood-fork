@@ -81,7 +81,7 @@ function startServer() {
 }
 
 async function mockApi(page) {
-  const state = { airBuild: sharedBuild, airOffline: false };
+  const state = { airBuild: sharedBuild, airOffline: false, gemini: false };
   await page.route("**/*", async (route) => {
     const url = new URL(route.request().url());
     if (!url.pathname.startsWith("/api/")) return route.continue();
@@ -103,6 +103,7 @@ async function mockApi(page) {
           label: air ? "Air Claude" : "mini Claude",
           hostName: air ? "Yujiro-no-MacBook-Air.local" : "minijironoMac-mini.local",
           provider: "claude",
+          providers: air && state.gemini ? ["codex", "claude", "gemini"] : ["codex", "claude"],
           model: air ? "opus" : "sonnet",
           repoRoot: cwd,
           cwd,
@@ -114,6 +115,7 @@ async function mockApi(page) {
       });
     }
     if (url.pathname === "/api/threads") {
+      if (url.searchParams.get("provider") === "gemini") return fulfill({ json: { provider: "gemini", activeProvider: "gemini", data: air && state.gemini ? [{ id: "gemini:11111111-1111-4111-8111-111111111111", name: "Gemini の文章相談", provider: "gemini", cwd: airRepo, updatedAt: Date.now() }] : [] } });
       return fulfill({
         json: { provider: "claude", activeProvider: "claude", data: air ? airThreads : miniThreads, hiddenProjects: [] },
       });
@@ -134,6 +136,7 @@ async function seedBrowser(page) {
       class MockWebSocket extends EventTarget {
         constructor(url) {
           super();
+          const provider = new URL(url, location.href).searchParams.get("provider") || "claude";
           window.__wsUrls = window.__wsUrls || [];
           window.__wsUrls.push(String(url || ""));
           this.readyState = 0;
@@ -144,8 +147,8 @@ async function seedBrowser(page) {
               new MessageEvent("message", {
                 data: JSON.stringify({
                   type: "ready",
-                  provider: "claude",
-                  model: String(url).includes("45999") ? "opus" : "sonnet",
+                  provider,
+                  model: provider === "gemini" ? "gemini-3.8-flash-high" : String(url).includes("45999") ? "opus" : "sonnet",
                   threadId: "",
                   history: [],
                 }),
@@ -153,7 +156,7 @@ async function seedBrowser(page) {
             );
           }, 10);
         }
-        send() {}
+        send(body) { (window.__sentPrompts ||= []).push(JSON.parse(body)); }
         close() {}
       }
       MockWebSocket.OPEN = 1;
@@ -303,6 +306,30 @@ async function run() {
     check("app identity is separate from selected workspace metadata",
       /アプリ aaaaaaa/.test(await page.locator("#fleetCurrentBuild").innerText())
       && /作業場所:/.test(await page.locator("#fleetCurrentMeta").innerText()));
+
+    check("an older bridge does not offer an unsupported Gemini tab", await page.locator('[data-thread-provider="gemini"]').isHidden());
+    apiState.gemini = true;
+    await refreshAir();
+    await page.evaluate(() => renderThreadProviderTabs());
+    await page.locator('[data-thread-provider="gemini"]').click();
+    await page.waitForFunction(() => [...document.querySelectorAll(".thread-item")].some(row => row.textContent.includes("Gemini の文章相談")));
+    await page.evaluate(() => [...document.querySelectorAll(".thread-item")].find(row => row.textContent.includes("Gemini の文章相談")).querySelector(".thread-select").click());
+    await page.waitForFunction(() => document.querySelector("#geminiNotice")?.hidden === false);
+    await page.waitForFunction(() => connectionReady && currentThreadProvider() === "gemini");
+    await page.waitForTimeout(350); // Let the mobile drawer's close animation settle before the screenshot.
+    check("Gemini is named as the chat provider", /Gemini/.test(await page.locator("#bridgePillAgent").innerText()));
+    check("Gemini labels plan mode without pretending to support the other permission modes", await page.locator("#accessButton").isDisabled() && /相談・計画/.test(await page.locator("#accessButton").innerText()) && /厳密な読み取り専用ではなく/.test(await page.locator("#geminiNotice").innerText()));
+    check("Gemini's unavailable attachment button is disabled", await page.locator("#addButton").isDisabled());
+    check("Gemini does not inherit Claude's chosen model", /gemini-3.8-flash-high/i.test(await page.locator("#modelButton").innerText()));
+    await page.locator("#modelButton").click();
+    const geminiDepths = await page.locator("[data-reasoning]").evaluateAll(rows => rows.filter(row => !row.hidden).map(row => row.dataset.reasoning));
+    check("Gemini offers only supported reasoning levels", geminiDepths.join(",") === "low,medium,high", geminiDepths.join(","));
+    await page.locator("#modelButton").click();
+    if (wantShots) await page.screenshot({ path: path.join(shotsDir, "gemini-plan-mode.png") });
+    await page.locator("#prompt").fill("販売文を読みやすくしてください。");
+    await page.locator("#send").click();
+    const submitted = await page.evaluate(() => (window.__sentPrompts || []).filter(item => item.type === "prompt").at(-1));
+    check("Gemini submission does not inherit full-access or approval settings", submitted?.text === "販売文を読みやすくしてください。" && !Object.hasOwn(submitted.options, "sandboxMode") && !Object.hasOwn(submitted.options, "approvalPolicy"));
     if (checks.some(result => !result.ok)) console.error(browserErrors.join("\n"));
 
     await page.close();

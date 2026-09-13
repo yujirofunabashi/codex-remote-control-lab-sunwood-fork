@@ -659,6 +659,8 @@ button[aria-pressed="true"]:disabled {
   overflow-wrap: anywhere;
 }
 .lab-controls[hidden] { display: none; }
+.thread-provider-tabs button[hidden], .gemini-notice[hidden] { display: none; }
+.composer .gemini-notice { margin: 0 0 8px; font-size: 12px; line-height: 1.5; color: var(--muted, #777); white-space: normal; overflow: visible; text-overflow: clip; }
 .lab-controls small, .lab-file-freshness { color: var(--muted); }
 .lab-controls > div { display: flex; flex-wrap: wrap; gap: 8px; }
 .lab-controls button {

@@ -27,8 +27,8 @@ function positivePort(value, field) {
 function normalizeProvider(value, field = "provider") {
   const provider = String(value || "").trim().toLowerCase();
   if (!provider) return "";
-  if (provider === "codex" || provider === "claude") return provider;
-  throw new Error(`${field} must be codex or claude`);
+  if (provider === "codex" || provider === "claude" || provider === "gemini") return provider;
+  throw new Error(`${field} must be codex, claude, or gemini`);
 }
 
 function normalizeFleetConfig(raw = {}) {
@@ -78,6 +78,7 @@ function latestBridgeConfig(configPath, previousBridge = {}) {
 
 function bridgeEnvForEntry(entry, baseEnv = process.env, options = {}) {
   const portSuffix = `_${entry.phonePort}`;
+  const modelKey = entry.provider === "gemini" ? "GEMINI_MODEL" : "CODEX_MODEL";
   const fleetEnv = options.configPath
     ? {
         PHONE_FLEET_CONFIG_PATH: path.resolve(options.configPath),
@@ -93,7 +94,7 @@ function bridgeEnvForEntry(entry, baseEnv = process.env, options = {}) {
   const scopedModel = entry.model
     ? {
         [`PHONE_MODEL${portSuffix}`]: entry.model,
-        [`CODEX_MODEL${portSuffix}`]: entry.model,
+        [`${modelKey}${portSuffix}`]: entry.model,
       }
     : {};
   return {
@@ -110,7 +111,7 @@ function bridgeEnvForEntry(entry, baseEnv = process.env, options = {}) {
     ...scopedProvider,
     [`PHONE_WORKDIR${portSuffix}`]: entry.workdir,
     [`CODEX_WORKDIR${portSuffix}`]: entry.workdir,
-    ...(entry.model ? { PHONE_MODEL: entry.model, CODEX_MODEL: entry.model } : {}),
+    ...(entry.model ? { PHONE_MODEL: entry.model, [modelKey]: entry.model } : {}),
     ...scopedModel,
   };
 }

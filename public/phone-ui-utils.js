@@ -49,7 +49,7 @@
       if (!other || (online && !otherOnline) || (online === otherOnline && timestampValueMs(observation.run?.updatedAt) > timestampValueMs(other.run?.updatedAt))) sources.set(key, observation);
     }
     for (const observation of sources.values()) {
-      if (!observation.threadId || !["codex", "claude"].includes(observation.provider)) continue;
+      if (!observation.threadId || !["codex", "claude", "gemini"].includes(observation.provider)) continue;
       const key = sessionActivityKey(observation);
       const old = records.get(key) || Array.from(records.values()).find((item) => item.bridgeId === observation.bridgeId && item.provider === observation.provider && item.threadId === observation.threadId);
       if (old && old.key !== key) records.delete(old.key);

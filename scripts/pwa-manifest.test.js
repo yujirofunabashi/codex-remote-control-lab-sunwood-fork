@@ -161,11 +161,19 @@ test("an explicit provider on the install page makes an icon for that provider",
 
 test("an unknown provider on the install page is ignored", () => {
   const token = "secret123";
-  const req = { url: `/install?token=${token}&provider=gemini`, headers: { host: "127.0.0.1:45214" } };
+  const req = { url: `/install?token=${token}&provider=unsupported`, headers: { host: "127.0.0.1:45214" } };
   const href = manifestHrefForRequest(req, token);
   assert.doesNotMatch(href, /provider=/);
   const manifest = manifestPayloadForRequest(new URL(href, "http://127.0.0.1:45214/install"), token);
   assert.equal(manifest.start_url, `/install#token=${token}`);
+});
+
+test("Gemini install identity uses the generic application icon, not a competing AI logo", () => {
+  const token = "gemini-install-fixture";
+  const manifest = manifestPayloadForRequest(new URL(`http://127.0.0.1:45214/site.webmanifest?install=1&provider=gemini&token=${token}`), token);
+  assert.match(manifest.name, /^Gemini Remote /);
+  assert.equal(manifest.start_url, `/install?provider=gemini#token=${token}`);
+  assert.ok(manifest.icons.every(icon => /icon-(?:192|512)\.png/.test(icon.src)));
 });
 
 test("the install page carries the requested provider's icon, name and manifest", () => {

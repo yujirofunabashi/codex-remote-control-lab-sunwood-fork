@@ -68,7 +68,7 @@ const sessionActivityStorageKey = "codexPhoneSessionActivity:v1";
 let sessionActivityRecords = (() => {
   try {
     const value = JSON.parse(safeReadStorage(localStorage, sessionActivityStorageKey, "[]"));
-    return Array.isArray(value) ? value.filter((item) => item && typeof item.key === "string" && typeof item.threadId === "string" && ["codex", "claude"].includes(item.provider) && Number.isInteger(item.ordinal) && item.ordinal > 0 && ["running", "done", "question", "approval", "error", "offline", "interrupted", "idle"].includes(item.status)) : [];
+    return Array.isArray(value) ? value.filter((item) => item && typeof item.key === "string" && typeof item.threadId === "string" && ["codex", "claude", "gemini"].includes(item.provider) && Number.isInteger(item.ordinal) && item.ordinal > 0 && ["running", "done", "question", "approval", "error", "offline", "interrupted", "idle"].includes(item.status)) : [];
   } catch { return []; }
 })();
 let sessionActivitySaved = JSON.stringify(sessionActivityRecords);
@@ -284,7 +284,7 @@ const startupHashToken = startupHashParams.get("token") || "";
 const initialToken = params.get("token") || startupHashToken;
 const initialProviderParam = (() => {
   const value = String(params.get("provider") || "").trim().toLowerCase();
-  return value === "codex" || value === "claude" ? value : "";
+  return value === "codex" || value === "claude" || value === "gemini" ? value : "";
 })();
 let storedToken = "";
 try {
@@ -1641,6 +1641,9 @@ function threadsHiddenByInboxFilter() {
 function renderThreadProviderTabs() {
   const provider = currentThreadProvider();
   for (const button of threadProviderTabButtons) {
+    const unsupported = button.dataset.threadProvider === "gemini" && !getBridgeState(activeBridgeId).info?.providers?.includes("gemini");
+    button.hidden = unsupported;
+    button.disabled = unsupported;
     const active = normalizeProviderName(button.dataset.threadProvider) === provider;
     button.classList.toggle("active", active);
     button.setAttribute("aria-selected", String(active));
@@ -2039,6 +2042,7 @@ const reasoningAliases = new Map([
 const fallbackReasoningChoices = {
   codex: ["low", "medium", "high", "xhigh"],
   claude: ["low", "medium", "high", "xhigh", "max"],
+  gemini: ["low", "medium", "high"],
 };
 // Deepest last. Used to pick the closest level a model does have when the one
 // that was chosen is not on its list.
@@ -2056,6 +2060,7 @@ const serviceTierAliases = new Map([
 const inlineModelChoices = {
   codex: ["gpt-5.6-sol", "gpt-5.5"],
   claude: ["sonnet", "opus", "haiku"],
+  gemini: ["gemini-3.8-flash-high"],
 };
 let liveModelChoices = {};
 
@@ -2186,7 +2191,7 @@ function migrateLegacySelectedModel() {
 // Codex calls it reasoning, Claude calls it effort, and both are chosen from the
 // same four-step menu.
 function providerSupportsReasoning() {
-  return activeProvider === "codex" || activeProvider === "claude";
+  return activeProvider === "codex" || activeProvider === "claude" || activeProvider === "gemini";
 }
 
 // Both providers take the level by name, so there is nothing left to translate.
@@ -2207,7 +2212,7 @@ function providerSupportsServiceTier() {
 
 function normalizeProviderName(provider) {
   const value = String(provider || "").trim().toLowerCase();
-  if (value === "codex" || value === "claude") return value;
+  if (value === "codex" || value === "claude" || value === "gemini") return value;
   return "";
 }
 
@@ -2216,6 +2221,7 @@ function currentThreadProvider() {
 }
 
 function providerLabel(provider) {
+  if (provider === "gemini") return "Gemini";
   return provider === "claude" ? "Claude" : "Codex";
 }
 
@@ -5566,9 +5572,14 @@ function renderLabControls() {
   const info = activeLabInfo();
   renderLabProgress(info);
   labControls.hidden = !info;
-  accessButton.disabled = Boolean(info);
-  accessButton.textContent = info ? "実験フォルダ内のみ" : accessMode.label;
-  addButton.disabled = Boolean(info);
+  const gemini = currentThreadProvider() === "gemini";
+  accessButton.disabled = Boolean(info) || gemini;
+  accessButton.textContent = info ? "実験フォルダ内のみ" : gemini ? "相談・計画モード" : accessMode.label;
+  accessButton.title = gemini ? "計画を提案するモードです。厳密な読み取り専用ではなく、操作の許可はPC側のAntigravity設定に従います。承認ボタンには未対応です。" : "";
+  const geminiNotice = document.querySelector("#geminiNotice");
+  if (geminiNotice) geminiNotice.hidden = !gemini;
+  addButton.disabled = Boolean(info) || gemini;
+  addButton.title = gemini ? "Geminiは現在、文章のみ対応しています。" : "";
   updateModelButton();
   const state = getBridgeState(activeBridgeId);
   const lab = state.status?.lab || info?.lab || {};
@@ -5906,7 +5917,7 @@ function renderSessionActivityButtons(container, items, expanded = false) {
     existing.delete(item.key);
     const button = entry.firstElementChild;
     const ordinal = item.ordinal <= 20 ? String.fromCodePoint(0x245f + item.ordinal) : String(item.ordinal);
-    const name = `${item.provider === "claude" ? "Claude" : "Codex"} ${item.machineLabel}${ordinal}`;
+    const name = `${providerLabel(item.provider)} ${item.machineLabel}${ordinal}`;
     const label = `${name}：${sessionActivityLabels[item.status]}。${item.title}`;
     button.dataset.state = item.status;
     button.setAttribute("aria-current", item.key === currentKey ? "true" : "false");
@@ -6255,7 +6266,7 @@ function applyActiveBridgeState(bridgeId) {
   workspaceFollowsSelectedThread = Boolean(state.workspaceFollowsSelectedThread);
   token = effectiveBridgeToken(activeBridge()) || "";
   selectedThreadByProvider.clear();
-  for (const provider of ["codex", "claude"]) {
+  for (const provider of ["codex", "claude", "gemini"]) {
     if (typeof selections[provider] === "string") selectedThreadByProvider.set(provider, selections[provider]);
   }
   selectedThreadByProvider.set(threadProvider, selectedThread);
@@ -7164,6 +7175,7 @@ function isActiveBridgeThread(thread = {}) {
 // Missing/empty replies are not ownership evidence and never start a new chat.
 const threadProviderRecoveries = new Map();
 async function recoverSelectedThreadProvider(threadId, provider, bridgeId) {
+  if (provider === "gemini" || String(threadId).startsWith("gemini:")) return false;
   if (!threadId || connectionReady) return false;
   const socket = ws;
   const isCurrent = () => activeBridgeId === bridgeId && selectedThread === threadId && currentThreadProvider() === provider && ws === socket && !connectionReady;
@@ -7450,6 +7462,16 @@ function setNewSessionStarting(starting) {
   const lab = getBridgeState(newSessionMachine.value).info?.capabilities?.lab;
   newSessionProvider.disabled = starting || Boolean(lab);
   if (lab) newSessionProvider.value = "codex";
+  renderNewSessionProviders();
+}
+
+function renderNewSessionProviders() {
+  const supported = getBridgeState(newSessionMachine.value).info?.providers || ["codex", "claude"];
+  for (const option of newSessionProvider.options) {
+    option.disabled = option.value === "gemini" && !supported.includes("gemini");
+    option.hidden = option.disabled;
+  }
+  if (newSessionProvider.selectedOptions[0]?.disabled) newSessionProvider.value = supported[0] || "codex";
 }
 
 async function browseNewSessionFolder(targetPath = "") {
@@ -7460,6 +7482,7 @@ async function browseNewSessionFolder(targetPath = "") {
   const lab = getBridgeState(bridgeId).info?.capabilities?.lab;
   newSessionProvider.disabled = Boolean(lab);
   if (lab) newSessionProvider.value = "codex";
+  renderNewSessionProviders();
   const entry = bridgeById(bridgeId);
   const machine = entry ? shortMachineName(entry, getBridgeState(bridgeId)) || bridgeDisplayLabel(entry, bridgeId) : "";
   const stillCurrent = () => newSessionDialog.open && seq === newSessionBrowseSeq && newSessionMachine.value === bridgeId;
@@ -9592,6 +9615,10 @@ composer.addEventListener("submit", (event) => {
   const inputValue = promptInput.value;
   const text = inputValue.trim();
   if (!text && !pendingFiles.length) return;
+  if (currentThreadProvider() === "gemini" && pendingFiles.length) {
+    addStatus("Geminiは現在、文章のみ対応しています。添付を外してください。入力と添付は残しています。");
+    return;
+  }
   const lab = activeLabInfo();
   if (lab && !(getBridgeState(activeBridgeId).status?.lab || lab.lab)?.aiReady) {
     addStatus("AI作業の承認・実機検証が未完了のため送信しません。入力は残しています。");
@@ -9632,8 +9659,8 @@ composer.addEventListener("submit", (event) => {
           model: activeLabInfo()?.model || selectedModel || undefined,
           serviceTier: activeLabInfo() ? "standard" : currentThreadProvider() === "codex" ? selectedServiceTier || null : undefined,
           effort: effortForSubmission(),
-          approvalPolicy: activeLabInfo() ? "never" : accessMode.approvalPolicy,
-          sandboxMode: activeLabInfo() ? "workspace-write" : accessMode.sandboxMode,
+          approvalPolicy: currentThreadProvider() === "gemini" ? undefined : activeLabInfo() ? "never" : accessMode.approvalPolicy,
+          sandboxMode: currentThreadProvider() === "gemini" ? undefined : activeLabInfo() ? "workspace-write" : accessMode.sandboxMode,
         },
       }),
     );

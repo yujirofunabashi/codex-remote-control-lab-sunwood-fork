@@ -37,13 +37,14 @@ const { isUnavailableHistoryError, emptyCodexThreadWorkdir, hasSavedCodexThread 
 const { recentTurnsOptions, withRecentTurns } = require("./codex-history");
 const { latestAssistantQuestion, idleRunStateFromHistory } = require("./question-state");
 const operationContext = require("../public/operation-context");
+const { GeminiBridge, GeminiSessionStore, DEFAULT_GEMINI_MODEL, GEMINI_CAPABILITIES } = require("./gemini-bridge");
 
 const root = path.resolve(__dirname, "..");
 let bridgeBuildTracker;
 
 function normalizeProvider(input) {
   const value = String(input || "codex").trim().toLowerCase();
-  if (value === "codex" || value === "claude") return value;
+  if (value === "codex" || value === "claude" || value === "gemini") return value;
   throw new Error(`Unsupported PHONE_AGENT_PROVIDER: ${value}`);
 }
 
@@ -65,10 +66,12 @@ function appIdSlug(input, fallback) {
 }
 
 function defaultAppNameForProvider(provider) {
+  if (provider === "gemini") return "Gemini Remote";
   return provider === "claude" ? "Claude Remote" : "Codex Remote";
 }
 
 function defaultAppShortNameForProvider(provider) {
+  if (provider === "gemini") return "Gemini";
   return provider === "claude" ? "Claude" : "Codex";
 }
 
@@ -300,7 +303,7 @@ function stallThresholdMs(value, fallback) {
 function rateLimitCachePathForProvider(provider) {
   const configured = providerEnvValue(provider, "RATE_LIMIT_CACHE_PATH", { legacyCodex: true });
   if (configured) return path.resolve(configured);
-  return provider === "claude" ? path.join(root, ".phone-rate-limits.claude.json") : path.join(root, ".phone-rate-limits.json");
+  return provider === "codex" ? path.join(root, ".phone-rate-limits.json") : path.join(root, `.phone-rate-limits.${provider}.json`);
 }
 
 function readRateLimitCache(provider) {
@@ -458,15 +461,18 @@ const shouldStartCodexServer = !process.env.CODEX_APP_SERVER_URL && !codexSocket
 // bridge when something is watching for that code.
 const bridgeIsSupervised = /^(1|true|yes|on)$/i.test(process.env.PHONE_SUPERVISED || "");
 const workdir = launchSettings.workdir;
+const geminiStore = new GeminiSessionStore(process.env.PHONE_GEMINI_STATE_DIR || path.join(os.homedir(), ".gemini", "phone-bridge", String(uiPort)));
+const geminiModelOptions = [DEFAULT_GEMINI_MODEL];
 const providerModels = {
   // The active provider takes the fleet-resolved model; the other still needs a
   // value so the UI can show it without a fleet entry of its own.
   codex: isCodexProvider
     ? launchSettings.model
-    : modelFromEnv(process.env, "codex", defaultModelForProvider("codex"), { launchEnvKeys }),
+    : agentProvider === "gemini" ? slotSettingValue(process.env, "CODEX_MODEL", uiPort, { launchEnvKeys, fallback: defaultModelForProvider("codex") }) : modelFromEnv(process.env, "codex", defaultModelForProvider("codex"), { launchEnvKeys }),
   claude: isClaudeProvider
     ? launchSettings.model
-    : modelFromEnv(process.env, "claude", defaultModelForProvider("claude"), { launchEnvKeys }),
+    : agentProvider === "gemini" ? slotSettingValue(process.env, "CLAUDE_MODEL", uiPort, { launchEnvKeys, fallback: defaultModelForProvider("claude") }) : modelFromEnv(process.env, "claude", defaultModelForProvider("claude"), { launchEnvKeys }),
+  gemini: agentProvider === "gemini" ? launchSettings.model : slotSettingValue(process.env, "GEMINI_MODEL", uiPort, { launchEnvKeys, fallback: DEFAULT_GEMINI_MODEL }),
 };
 const model = providerModels[agentProvider] || defaultModelForProvider(agentProvider);
 const historySyncEnabled = historySyncEnabledFromEnv(process.env, { launchEnvKeys });
@@ -601,6 +607,7 @@ function reasoningChoicePayload({ cache = codexModelCache } = {}) {
     byModel: { ...(cache?.efforts || {}) },
     codex: [...codexEffortOptions],
     claude: [...claudeEffortLevels],
+    gemini: ["low", "medium", "high"],
   };
 }
 
@@ -778,10 +785,10 @@ function bridgeInfoPayload() {
     // Application code, not the repository selected for this conversation.
     build: bridgeBuildTracker?.status() || { schema: 1, available: false, restartRequired: null },
     provider: agentProvider,
-    providers: ["codex", "claude"],
+    providers: ["codex", "claude", "gemini"],
     model,
     modelsByProvider: providerModels,
-    modelChoices: { codex: codexModelChoices({ configured: modelForProvider("codex") }), claude: claudeModelOptions },
+    modelChoices: { codex: codexModelChoices({ configured: modelForProvider("codex") }), claude: claudeModelOptions, gemini: geminiModelOptions },
     reasoningChoices: reasoningChoicePayload(),
     approvalPolicy: "on-request",
     sandboxMode: "workspace-write",
@@ -791,6 +798,7 @@ function bridgeInfoPayload() {
     shell: { main: staticAssetHref("main.js"), style: staticAssetHref("style.css") },
     app: { id: phoneAppId, name: phoneAppName, shortName: phoneAppShortName },
     capabilities: {
+      providers: { gemini: GEMINI_CAPABILITIES },
       threads: true,
       terminalHistory: true,
       artifacts: true,
@@ -829,18 +837,22 @@ function currentWorkspaceMeta(cwd = workdir) {
 }
 
 function modelEnvKeyForProvider(provider) {
+  if (provider === "gemini") return "GEMINI_MODEL";
   return provider === "claude" ? "CLAUDE_MODEL" : "CODEX_MODEL";
 }
 
 function workdirEnvKeyForProvider(provider) {
+  if (provider === "gemini") return "GEMINI_WORKDIR";
   return provider === "claude" ? "CLAUDE_WORKDIR" : "CODEX_WORKDIR";
 }
 
 function defaultModelForProvider(provider) {
+  if (provider === "gemini") return DEFAULT_GEMINI_MODEL;
   return provider === "claude" ? "sonnet" : "gpt-5.6-sol";
 }
 
 function modelOptionsForProvider(provider) {
+  if (provider === "gemini") return geminiModelOptions;
   return provider === "claude" ? claudeModelOptions : codexModelChoices();
 }
 
@@ -869,6 +881,7 @@ function historySyncEnabledForProvider(provider) {
 
 function modelFromEnv(env, provider, fallback = defaultModelForProvider(provider), options = {}) {
   const providerKey = modelEnvKeyForProvider(provider);
+  if (provider === "gemini") return slotSettingValue(env, providerKey, options.uiPort || uiPort, { launchEnvKeys: options.launchEnvKeys, fallback });
   // Claude must not inherit CODEX_MODEL; that legacy fallback is Codex-only.
   const fallbackKeys = provider === "codex" ? [providerKey, "CODEX_MODEL"] : [providerKey];
   return slotSettingValue(env, "PHONE_MODEL", options.uiPort || uiPort, {
@@ -1397,16 +1410,18 @@ function localSettingsPayload(overrides = {}) {
       uiHost,
     },
     options: {
-      providers: ["codex", "claude"],
+      providers: ["codex", "claude", "gemini"],
       models: modelOptionsForProvider(agentProvider),
       modelsByProvider: {
         codex: codexModelChoices({ configured: modelForProvider("codex") }),
         claude: claudeModelOptions,
+        gemini: geminiModelOptions,
       },
       codexModelsUpdatedAt: codexModelCache.updatedAt,
       defaultModels: {
         codex: modelFromEnv(envValues, "codex", defaultModelForProvider("codex")),
         claude: modelFromEnv(envValues, "claude", defaultModelForProvider("claude")),
+        gemini: modelFromEnv(envValues, "gemini", DEFAULT_GEMINI_MODEL),
       },
       workspaces: workspaceOptions(),
     },
@@ -2322,6 +2337,8 @@ function bookmarkIconFiles({
   appName = phoneAppName,
 } = {}) {
   const normalizedProvider = normalizeProvider(provider);
+  // The general application icon does not impersonate another AI's brand.
+  if (normalizedProvider === "gemini") return { icon180: "icon-192.png", icon512: "icon-512.png" };
   const variant = bridgeIconVariant({ provider: normalizedProvider, machineLabel, appId, appName });
   return (
     bridgeIconFiles[normalizedProvider]?.[variant] ||
@@ -2339,7 +2356,7 @@ function requestedAppProvider(url) {
   const value = String(url?.searchParams?.get("provider") || "")
     .trim()
     .toLowerCase();
-  return value === "codex" || value === "claude" ? value : "";
+  return value === "codex" || value === "claude" || value === "gemini" ? value : "";
 }
 
 function appIdentityForProvider(provider = "") {
@@ -5072,6 +5089,11 @@ class ClaudeBridge {
 
 function getBridge(threadId, provider = agentProvider, connectionId = crypto.randomUUID(), options = {}) {
   const requestedProvider = normalizeProvider(provider);
+  if (threadId && requestedProvider === "gemini") {
+    for (const bridge of bridges.values()) {
+      if (bridge.provider === "gemini" && bridge.threadId === threadId && bridge.isReusable()) return bridge;
+    }
+  }
   // A new-session request that cannot be honoured is final: the same request id
   // against the same folder will keep failing, so the phone must be told to stop
   // retrying it rather than reconnect on the timer with the id it is holding.
@@ -5184,7 +5206,14 @@ function getBridge(threadId, provider = agentProvider, connectionId = crypto.ran
     existing = null;
   }
   if (!existing && !bridges.has(key)) {
-    const created = requestedProvider === "claude" ? new ClaudeBridge(threadId, baseKey, bridgeOptions) : new SharedBridge(threadId, baseKey, bridgeOptions);
+    const created = requestedProvider === "gemini"
+      ? new GeminiBridge(threadId, baseKey, bridgeOptions, {
+          store: geminiStore, workdir, model: modelForProvider("gemini"), bridgeMapKey,
+          workspaceMeta: currentWorkspaceMeta,
+          modelContext: context => operationContext.modelContext(context, phoneMachineLabel),
+          onDispose: bridge => { if (bridges.get(bridge.bridgeKey) === bridge) bridges.delete(bridge.bridgeKey); },
+        })
+      : requestedProvider === "claude" ? new ClaudeBridge(threadId, baseKey, bridgeOptions) : new SharedBridge(threadId, baseKey, bridgeOptions);
     created.newSessionId = newSessionId;
     created.newSessionWorkdir = requestedWorkdir || workdir;
     bridges.set(key, created);
@@ -5485,7 +5514,7 @@ function reviewTestsPayload(threadId = "", provider = "") {
 async function healthPayload(phoneToken, requestedProvider = agentProvider) {
   const summaries = bridgeSummaries();
   const appServerConnected =
-    requestedProvider === "claude" ? true : codexSocketPath || !shouldStartCodexServer ? appServerClient.ready : await isCodexReady();
+    requestedProvider !== "codex" ? true : codexSocketPath || !shouldStartCodexServer ? appServerClient.ready : await isCodexReady();
   const bridgeState = summaries.some((item) => item.run?.state === "error")
     ? "degraded"
     : appServerConnected
@@ -5494,7 +5523,7 @@ async function healthPayload(phoneToken, requestedProvider = agentProvider) {
   return {
     ok: bridgeState !== "error",
     bridge: bridgeState,
-    appServer: requestedProvider === "claude" ? "local-process" : appServerConnected ? "connected" : "disconnected",
+    appServer: requestedProvider !== "codex" ? "local-process" : appServerConnected ? "connected" : "disconnected",
     websocket: activeClientCount() ? "connected" : "disconnected",
     historySync: {
       enabled: historySyncEnabledForProvider(requestedProvider),
@@ -5727,9 +5756,9 @@ async function main() {
       if (!requireToken(url, phoneToken, res)) return;
       sendJson(res, 200, {
         provider: agentProvider,
-        providers: ["codex", "claude"],
+        providers: ["codex", "claude", "gemini"],
         model,
-        modelChoices: { codex: codexModelChoices({ configured: modelForProvider("codex") }), claude: claudeModelOptions },
+        modelChoices: { codex: codexModelChoices({ configured: modelForProvider("codex") }), claude: claudeModelOptions, gemini: geminiModelOptions },
     reasoningChoices: reasoningChoicePayload(),
         workdir,
         app: { id: phoneAppId, name: phoneAppName, shortName: phoneAppShortName },
@@ -5811,6 +5840,13 @@ async function main() {
       if (!requireToken(url, phoneToken, res)) return;
       const requestedProvider = queryProvider(url, res);
       if (!requestedProvider) return;
+      if (requestedProvider === "gemini") {
+        try {
+          const saved = geminiStore.list().filter(item => item.history.some(entry => entry.type === "user")).map(item => threadRecordForBridge({ ...item, threadId: item.id, listUpdatedAt: item.updatedAt }));
+          sendJson(res, 200, { provider: requestedProvider, activeProvider: requestedProvider, data: mergeThreadListData(saved, localThreadList("gemini")) });
+        } catch (error) { sendJson(res, 500, { error: error.message }); }
+        return;
+      }
       if (requestedProvider === "claude") {
         sendJson(res, 200, await claudeThreadListPayload());
         return;
@@ -5826,7 +5862,7 @@ async function main() {
       if (!requireToken(url, phoneToken, res)) return;
       const requestedProvider = queryProvider(url, res);
       if (!requestedProvider) return;
-      if (requestedProvider === "claude") {
+      if (requestedProvider !== "codex") {
         sendJson(res, 200, localModelList(requestedProvider));
         return;
       }
@@ -5843,7 +5879,7 @@ async function main() {
       if (!requireToken(url, phoneToken, res)) return;
       const requestedProvider = queryProvider(url, res);
       if (!requestedProvider) return;
-      if (requestedProvider === "claude") {
+      if (requestedProvider !== "codex") {
         sendJson(res, 200, { data: [] });
         return;
       }
@@ -5868,10 +5904,10 @@ async function main() {
       if (!requireToken(url, phoneToken, res)) return;
       const requestedProvider = queryProvider(url, res);
       if (!requestedProvider) return;
-      if (requestedProvider === "claude") {
+      if (requestedProvider !== "codex") {
         sendJson(res, 200, {
           config: { config: { model: modelForProvider(requestedProvider), cwd: workdir, provider: requestedProvider } },
-          auth: { authMethod: "claude-cli" },
+          auth: { authMethod: requestedProvider === "gemini" ? "antigravity-cli" : `${requestedProvider}-cli` },
           errors: [],
         });
         return;
@@ -6108,7 +6144,7 @@ async function main() {
     if (url.pathname === "/api/review/tests") {
       if (!requireToken(url, phoneToken, res)) return;
       const threadId = String(url.searchParams.get("thread") || "").trim();
-      const requestedProvider = queryProvider(url, res, threadId?.startsWith("claude:") ? "claude" : agentProvider);
+      const requestedProvider = queryProvider(url, res, threadId?.startsWith("gemini:") ? "gemini" : threadId?.startsWith("claude:") ? "claude" : agentProvider);
       if (!requestedProvider) return;
       sendJson(res, 200, reviewTestsPayload(threadId, requestedProvider));
       return;
@@ -6139,7 +6175,7 @@ async function main() {
       if (!requireToken(url, phoneToken, res)) return;
       const requestedProvider = queryProvider(url, res);
       if (!requestedProvider) return;
-      if (requestedProvider === "claude") {
+      if (requestedProvider !== "codex") {
         sendJson(res, 200, { skipped: true, reason: "history sync is only available for the Codex provider" });
         return;
       }
@@ -6164,10 +6200,18 @@ async function main() {
     if (url.pathname === "/api/thread") {
       if (!requireToken(url, phoneToken, res)) return;
       const threadId = url.searchParams.get("thread");
-      const requestedProvider = queryProvider(url, res, threadId?.startsWith("claude:") ? "claude" : agentProvider);
+      const requestedProvider = queryProvider(url, res, threadId?.startsWith("gemini:") ? "gemini" : threadId?.startsWith("claude:") ? "claude" : agentProvider);
       if (!requestedProvider) return;
       if (!threadId) {
         sendJson(res, 400, { error: "thread is required" });
+        return;
+      }
+      if (requestedProvider === "gemini") {
+        try {
+          const bridge = findBridgeByThreadId(threadId, requestedProvider);
+          const session = bridge ? null : geminiStore.read(threadId);
+          sendJson(res, 200, { provider: requestedProvider, activeProvider: requestedProvider, threadId, missing: !bridge && !session, history: bridge?.history || session?.history || [] });
+        } catch (error) { sendJson(res, 400, { error: error.message }); }
         return;
       }
       if (requestedProvider === "claude") {
@@ -6289,7 +6333,7 @@ async function main() {
     const fresh = url.searchParams.get("fresh") === "1";
     let requestedProvider;
     try {
-      requestedProvider = normalizeProvider(url.searchParams.get("provider") || (threadId?.startsWith("claude:") ? "claude" : agentProvider));
+      requestedProvider = normalizeProvider(url.searchParams.get("provider") || (threadId?.startsWith("gemini:") ? "gemini" : threadId?.startsWith("claude:") ? "claude" : agentProvider));
     } catch (error) {
       socket.write(`HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n${error.message}`);
       socket.destroy();
@@ -6366,6 +6410,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  GeminiBridge,
   ClaudeBridge,
   SharedBridge,
   compactCodexError,

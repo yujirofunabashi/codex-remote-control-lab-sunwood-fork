@@ -99,6 +99,7 @@
               </button>
               <div id="threadProviderTabs" class="thread-provider-tabs" role="tablist" aria-label="一覧に出すAI">
                 <button type="button" data-thread-provider="claude" aria-selected="false">Claude</button>
+                <button type="button" data-thread-provider="gemini" aria-selected="false">Gemini</button>
                 <button type="button" data-thread-provider="codex" aria-selected="false">Codex</button>
               </div>
             </div>
@@ -406,6 +407,7 @@
               </div>
             </section>
             <form id="composer" class="composer">
+              <p id="geminiNotice" class="gemini-notice" hidden>Gemini試験版：文章の相談・計画に対応。添付と承認ボタンは未対応です。厳密な読み取り専用ではなく、操作の許可はPC側の設定に従います。</p>
               <input id="fileInput" class="hidden" type="file" accept="image/*,audio/*,.m4a,.mp3,.wav,.aac,.flac,.ogg,.webm,.mp4" multiple />
               <div id="approvalStrip" class="approval-strip hidden" aria-live="polite"></div>
               <div class="composer-status-bar">
@@ -582,7 +584,7 @@
       <p id="newSessionHelp">パソコンとフォルダを選んで開始します。まだチャットがないフォルダも選べます。</p>
       <div class="new-session-selects">
         <label>使用するパソコン<select id="newSessionMachine" class="settings-select"></select></label>
-        <label>使用するAI<select id="newSessionProvider" class="settings-select"><option value="codex">Codex</option><option value="claude">Claude</option></select></label>
+        <label>使用するAI<select id="newSessionProvider" class="settings-select"><option value="codex">Codex</option><option value="claude">Claude</option><option value="gemini">Gemini</option></select></label>
       </div>
       <div class="workspace-browser">
         <div class="new-session-folder-tools">

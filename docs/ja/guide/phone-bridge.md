@@ -158,7 +158,7 @@ Bridge Fleet / Worktree Switchboard を使うと、その複数 slot を 1 つ�
 
 起動通知は任意です。`PHONE_NTFY_TOPIC` を設定すると ready URL を ntfy topic へ投稿します。`PHONE_PUSHOVER_TOKEN` と `PHONE_PUSHOVER_USER` を設定すると同じ URL を Pushover へ送ります。`PHONE_DISCORD_WEBHOOK_URL` を設定すると Discord へ投稿します。起動通知は 1 件で、Mac 名（`PHONE_MACHINE_LABEL`、未設定なら hostname）とフォルダ名を載せ、`tailscale serve` がその bridge を HTTPS で公開していればその公開アドレスを先頭に置きます。`npm run phone` は local `.env` を読んでから環境変数を参照します。これらは fleet の `.env` と同じ slot 付きの形（例 `PHONE_DISCORD_WEBHOOK_URL_45214`）でも指定できます。1 つの `.env` を共有する 2 つの bridge で通知先を分けたり、片方だけ通知させたりできます。slot なしのキーは全 slot に効きます。`PHONE_NTFY_SERVER` は既定で `https://ntfy.sh`、HTTPS 必須です。通知 request は `PHONE_NOTIFY_TIMEOUT_MS` で timeout し、既定は 5000 ms です。起動通知は既定で token を含みません。インストール済みのホーム画面アプリは自分の token を既に持っていて、bridge が上がったことが分かれば足りる一方、channel に残る token 付き URL は bridge が registry backup を配信する以上 fleet 全体の鍵になるためです。初回セットアップで token 付き URL が要るときだけ `PHONE_NOTIFY_STARTUP_TOKEN_URLS=1` を設定し、private/protected な topic、account、channel で使ってください。通知用 credential は Git に入れないでください。
 
-task 完了/中断通知は、設定済み provider へ常に送ります。その他の作業 event 通知も使う場合は `PHONE_NOTIFY_EVENTS=1` を設定します。対応 event は `approval_required`、`approval_expired`、`question_required`、`test_failed`、`connection_lost`、`history_sync_failed`、`long_running` です。起動は起動通知 1 件にまとめ、別の `bridge_started` event は送りません。文面は人が読む日本語です。見出しはどの Mac の誰が何をしたか（例 `✅ mini の Claude の作業が終わりました`、`🔔 Air の Codex が承認を待っています`）で、続けてフォルダ名、依頼文の冒頭、完了なら返答の冒頭（既定 200 文字。`PHONE_NOTIFY_EXCERPT_CHARS` で変更、`0` で省略）、承認待ちなら実行したいコマンドや変更するファイル、質問ならその質問文、失敗なら原因、次に何をすればよいか、最後に token なしの bridge URL を 1 つ載せます。Discord へは見出しを本文、残りを embed として送り、送り主名を `Claude mini` / `Codex Air` のように Mac ごとに変え、embed の帯をその Mac の色（mini は琥珀色、Air は青、それ以外は名前から決めた固定色。`PHONE_BRIDGE_COLOR` で上書き可）にします。2 台の Mac が同じ channel に投稿しても、どちらの通知か読む前に分かります。thread ID、turn ID、model 名、event type の生の値、UTC の時刻は載せません。質問で終わった turn は `question_required` だけを送り、完了通知を重ねません。turn 中に接続が切れた場合は `test_failed` 1 件に原因を含めます。`connection_lost` は予期しない切断だけに送ります。フォルダの切り替え、放置後の後片付け、再起動で bridge が自分で接続を閉じたときは送りません。Codex の認証切れは生の 401 ではなく、`codex login` を促す 1 行にして送ります。リンクは `tailscale serve` の HTTPS 公開アドレスがあればそれを使います。生の IP は別 origin になり、ホーム画面アプリが保存した token が使えないためです。同じ thread / event type の短時間連投は `PHONE_NOTIFY_EVENT_DEDUPE_MS` で抑制します。event 通知には full token を含めません。
+Codex / Claude の task 完了/中断通知は、設定済み provider へ常に送ります。その他の作業 event 通知も使う場合は `PHONE_NOTIFY_EVENTS=1` を設定します。対応 event は `approval_required`、`approval_expired`、`question_required`、`test_failed`、`connection_lost`、`history_sync_failed`、`long_running` です。起動は起動通知 1 件にまとめ、別の `bridge_started` event は送りません。文面は人が読む日本語です。見出しはどの Mac の誰が何をしたか（例 `✅ mini の Claude の作業が終わりました`、`🔔 Air の Codex が承認を待っています`）で、続けてフォルダ名、依頼文の冒頭、完了なら返答の冒頭（既定 200 文字。`PHONE_NOTIFY_EXCERPT_CHARS` で変更、`0` で省略）、承認待ちなら実行したいコマンドや変更するファイル、質問ならその質問文、失敗なら原因、次に何をすればよいか、最後に token なしの bridge URL を 1 つ載せます。Discord へは見出しを本文、残りを embed として送り、送り主名を `Claude mini` / `Codex Air` のように Mac ごとに変え、embed の帯をその Mac の色（mini は琥珀色、Air は青、それ以外は名前から決めた固定色。`PHONE_BRIDGE_COLOR` で上書き可）にします。2 台の Mac が同じ channel に投稿しても、どちらの通知か読む前に分かります。thread ID、turn ID、model 名、event type の生の値、UTC の時刻は載せません。質問で終わった turn は `question_required` だけを送り、完了通知を重ねません。turn 中に接続が切れた場合は `test_failed` 1 件に原因を含めます。`connection_lost` は予期しない切断だけに送ります。フォルダの切り替え、放置後の後片付け、再起動で bridge が自分で接続を閉じたときは送りません。Codex の認証切れは生の 401 ではなく、`codex login` を促す 1 行にして送ります。リンクは `tailscale serve` の HTTPS 公開アドレスがあればそれを使います。生の IP は別 origin になり、ホーム画面アプリが保存した token が使えないためです。同じ thread / event type の短時間連投は `PHONE_NOTIFY_EVENT_DEDUPE_MS` で抑制します。event 通知には full token を含めません。
 
 レート制限表示は local の非公式 provider 別 snapshot に対応しています。Codex では `PHONE_CODEX_RATE_LIMIT_REFRESH_COMMAND="node scripts/read-desktop-rate-limits.js"` を設定すると、bridge は Codex auth file `~/.codex/auth.json` を読み、Codex Desktop が使う usage endpoint を呼び、表示に必要な残量 percentage/reset だけを正規化して `.phone-rate-limits.json` に cache します。従来の `PHONE_RATE_LIMIT_REFRESH_COMMAND` も Codex 用としてだけ維持しているため、Claude mode で Codex の制限値が混ざることは避けます。token や raw API response は cache しません。失敗時は前回の provider cache か `unavailable` に fallback します。Codex app UI の macOS Accessibility fallback を明示的に使う場合だけ `PHONE_RATE_LIMIT_SOURCE=desktop` を設定します。
 
@@ -171,6 +171,33 @@ background の thread 一覧 polling は、同じ error の連続表示を抑え
 permission mode がどれであっても、run 側には必ず確認手段を渡します。Claude Code は bridge ごとの Unix socket に紐づく permission-prompt tool 付きで起動するため、止まった tool 呼び出しはスマホ側の承認カードになります。フルアクセス（`bypassPermissions`）も同じです。このモードでは通常の tool 呼び出しは prompt tool を通さず素通りしますが、`PreToolUse` hook が `ask` を返せば止まります。確認先が無い run は permission denial を記録したまま待ち続けます。開いた承認は答えるまで bridge が保持するので、再読み込みや再接続をしても同じ質問が戻り、止まったまま進まない run にはなりません。スマホが接続していないときも同じです。通知先（Discord など）が設定されていれば、質問はその場で拒否せず保持して通知し、あとから開いたアプリに `ready` でカードを渡します。この通知は `PHONE_NOTIFY_EVENTS` の設定に関係なく送ります。接続中の端末も通知先もない場合だけ、その場で拒否します。答えが無いまま `PHONE_APPROVAL_TIMEOUT_MS`（既定 1200000 ms = 20 分）が経つと拒否として進み、`approval_expired` 通知で時間切れを知らせます。Claude Code は無応答の stdio MCP 呼び出しを 30 分で打ち切るので、この値はそれより短くしてください。Codex の承認も `ready` の run 状態に保持中の承認を載せるため、再接続後にカードが戻ります。保持は質問した側が終わるまでです。答えを受け取らないまま turn が終了した場合は bridge も質問を取り下げるので、どの決定も届かないカードが残り続けることはありません。
 
 turn が終わるのは Claude Code process の終了時だけなので、出力を止めたまま終了しない process はスマホに「処理中」を出し続けます。これは進行中の作業と見分けが付かず、画面が答えるべき唯一の問いに答えられなくなります。bridge は turn ごとに最後の出力時刻を持ち、`PHONE_CLAUDE_STALL_WARN_MS`（既定 90000 ms）沈黙したら作業ログに一度だけ無応答の可能性を書き、`PHONE_CLAUDE_STALL_KILL_MS`（既定 300000 ms）沈黙したら応答が停止したとみなして process を終了し、turn を「応答なし」として閉じ、`failed` の run 通知を送ります。SIGTERM を無視する process があるため、`PHONE_CLAUDE_STALL_KILL_GRACE_MS`（既定 2000 ms）後に SIGKILL へ上げます。判断材料は時間だけではありません。実行中の tool 呼び出しが残っている turn は、長い build や test で沈黙するのが正常なので、待ち時間をログに書くだけで終了させません。終了対象になるのは tool 結果を受け取った後、つまり出力を返すべき状態で黙った turn だけです。どちらの閾値も `0` で無効化でき、片方だけ止めることもできます。既に届いた途中までの応答は履歴に残します。
+
+## Geminiの文章相談（試験版） {#gemini}
+
+Gemini（GoogleのAI）には、後継のAntigravity CLI（`agy`：Geminiを作業用に呼び出すソフト）で接続します。従来のGemini CLIは、最新版でも個人アカウントに対して `UNSUPPORTED_CLIENT`（この接続ソフトは未対応）を返す場合があります。古いログイン情報があるだけでは利用可能とは判断しません。Google AI Plus（個人向け契約）とWorkspace Business Plus（事業向け契約）が、どちらも作業用ソフトの有料利用枠を持つとは限りません。ログイン後の利用可能モデルと[公式の利用条件](https://antigravity.google/pricing)を確認し、追加課金や別契約へ自動で切り替えないでください。
+
+各PCで[公式の導入手順](https://antigravity.google/docs/cli/install/)を確認し、そのPCのターミナル（文字で操作するアプリ）で `agy` を起動してGoogleへログインします。認証情報を別のPCへコピーしたり、認証コードをチャットへ貼ったりしません。その後、次を確認します。
+
+```sh
+agy --version
+agy models
+agy -p '道具やファイルを使わず「起動確認OK」とだけ答えてください。' --model gemini-3.8-flash-high --effort high --mode plan --output-format json
+```
+
+順に「ソフトの版」「本人が選べるAIの一覧」「実際の回答」を調べる命令です。最後だけは本当のAI利用であり、成功した回答を確認するまでは動作確認済みとはしません。`gemini-3.8-flash-high`（深く考えるGemini 3.8 Flash）が本人の一覧にない場合は停止し、利用可能なGeminiを選び直します。
+
+確認後、リモコンのAI切替や新規セッション（新しい会話）の画面でGeminiを選びます。未対応の古い中継ソフトとWindows実験室では、使える選択肢として表示しません。Windowsにソフトを入れることと、実験室からAIを動かせることは別です。稼働中のリモコンへの反映には、既存の更新手順と実機確認も必要です。
+
+- `ANTIGRAVITY_BIN`（起動ソフトの場所）：未指定なら利用者用の標準導入先と通常の命令検索先を探します。
+- `GEMINI_MODEL`／`GEMINI_MODEL_<port>`（接続口ごとのAI指定）：初期候補は `gemini-3.8-flash-high` です。既存AIの指定は上書きしません。
+- `PHONE_AGENT_PROVIDER=gemini`（起動時にGeminiを選ぶ設定）：必要な接続口だけで指定します。
+- `PHONE_GEMINI_STATE_DIR`（リモコン用の会話保存先）：通常は `~/.gemini/phone-bridge/<port>`（そのPCの利用者用フォルダ内）です。会話本文と再開番号を保存し、認証情報は含めません。
+
+この試験版は、文章の送受信、保存した会話の再開、中断に対応します。再開はその会話の番号で行い、他の会話へ自動で移りません。初回ログインに失敗しても、送信した文章は会話に残ります。PCのターミナルで作った既存会話の自動取り込みはしません。
+
+画面には「相談・計画モード」と表示します。これは変更案を考える指示であり、**厳密な読み取り専用ではありません**。実際の操作の許可はPC側の設定に従います。[公式の画面なし接続方式](https://antigravity.google/docs/cli/headless/)には承認ボタン用の通信がないため、確認が必要な処理は実行されない場合があります。文章の回答が成功しても、その処理まで成功したとは表示しません。全操作の自動承認、追加クレジットの使用、別の課金接続が設定されている場合は、設定を勝手に直さず起動を止めます。
+
+画像・ファイル添付、実行中の追加送信の予約、操作命令の展開、ターミナルへの引継ぎ、自動通知、利用残量の自動取得は未対応です。添付時や回答中の追加入力は受け取った扱いにせず、下書きを残します。操作元の情報は共通の決まった項目だけに整え、本文とは区切ってAIへ渡します。**導入、模擬テスト、本人の実回答、稼働中のリモコンへの反映は、別々に確認してください。**
 
 ## sidebar は全 workdir を横断する
 

@@ -62,9 +62,9 @@ test("fleet config rejects unsupported providers", () => {
   assert.throws(
     () =>
       normalizeFleetConfig({
-        bridges: [{ id: "work-c", workdir: "/tmp/work-c", phonePort: 45234, provider: "gemini" }],
+        bridges: [{ id: "work-c", workdir: "/tmp/work-c", phonePort: 45234, provider: "unsupported" }],
       }),
-    /provider must be codex or claude/,
+    /provider must be codex, claude, or gemini/,
   );
 });
 
@@ -98,6 +98,15 @@ test("bridgeEnvForEntry passes only scoped bridge settings", () => {
   assert.equal(env.CODEX_MODEL, "gpt-5.5");
   assert.equal(env.CODEX_MODEL_45214, "gpt-5.5");
   assert.equal(env.PHONE_TOKEN, undefined);
+});
+
+test("Gemini fleet defaults are scoped without overwriting Codex's model", () => {
+  const entry = normalizeFleetConfig({ bridges: [{ id: "gemini-slot", workdir: "/tmp/gemini", phonePort: 45234, provider: "gemini", model: "gemini-3.8-flash-high" }] }).bridges[0];
+  const env = bridgeEnvForEntry(entry, { CODEX_MODEL: "gpt-5.5" });
+  assert.equal(env.PHONE_AGENT_PROVIDER_45234, "gemini");
+  assert.equal(env.GEMINI_MODEL_45234, "gemini-3.8-flash-high");
+  assert.equal(env.CODEX_MODEL, "gpt-5.5");
+  assert.equal(env.CODEX_MODEL_45234, undefined);
 });
 
 test("fleet restart reloads the latest bridge config", () => {
