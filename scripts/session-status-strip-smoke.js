@@ -38,8 +38,9 @@ async function main() {
     const errors = [];
     page.on("pageerror", (error) => errors.push(error.message));
     await page.addInitScript(({ airOrigin, fixtures }) => {
-      window.__runStates = fixtures;
+      window.__runStates = JSON.parse(sessionStorage.getItem("session-smoke-fixtures") || "null") || fixtures;
       window.__socketUrls = [];
+      window.__sentMessages = [];
       class MockWebSocket extends EventTarget {
         constructor(address) {
           super();
@@ -56,11 +57,11 @@ async function main() {
             const provider = url.searchParams.get("provider") || "codex";
             const threadId = url.searchParams.get("thread") || "idle";
             const fixture = window.__runStates[machine].find((item) => item.threadId === threadId && item.provider === provider);
-            this.emit({ type: "ready", threadId, provider, model: provider === "claude" ? "sonnet" : "gpt-5", workdir: `/fixture/${machine}/project`, threadTitle: fixture?.title || "確認用チャット", run: fixture?.run || { state: "ready" }, history: [], clients: 1 });
+            this.emit({ type: "ready", threadId, provider, model: provider === "claude" ? "sonnet" : "gpt-5", workdir: `/fixture/${machine}/project`, threadTitle: fixture?.title || "確認用チャット", run: fixture?.run || { state: "ready" }, history: fixture?.history || [], clients: 1 });
           }, 20);
         }
         emit(message) { this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(message) })); }
-        send() {}
+        send(data) { window.__sentMessages.push(JSON.parse(data)); }
         close() { this.readyState = 3; }
       }
       MockWebSocket.OPEN = 1;
@@ -82,7 +83,7 @@ async function main() {
       }
       if (url.pathname === "/api/status") return reply({ provider, bridges: state[machine] });
       if (url.pathname === "/api/threads") return reply({ provider, activeProvider: "codex", providers: ["codex", "claude"], data: state[machine].filter((item) => item.provider === provider).map((item) => ({ id: item.threadId, provider, name: item.title, cwd: item.workdir })), hiddenProjects: [] });
-      if (url.pathname === "/api/thread") return reply({ threadId: url.searchParams.get("thread"), history: [] });
+      if (url.pathname === "/api/thread") return reply({ threadId: url.searchParams.get("thread"), history: state[machine].find(item => item.threadId === url.searchParams.get("thread") && item.provider === provider)?.history || [] });
       if (url.pathname === "/api/info") return reply({ provider, providers: ["codex", "claude"], model: "gpt-5", workdir: `/fixture/${machine}/project` });
       return reply({ data: [] });
     });
@@ -230,6 +231,45 @@ async function main() {
     await byKey("mini", "codex", "finished").click();
     assert.equal(await byKey("mini", "codex", "finished").count(), 0);
     assert.equal(await page.evaluate(() => window.__socketUrls.length), socketCount);
+    // A stopped conversation remains stopped after reopening. Dismissing its
+    // shortcut preserves the conversation, answer and draft, including reload.
+    state.mini[1].run = { state: "interrupted", label: "中断しました", turnId: "stopped-one", updatedAt: 400 };
+    state.mini[1].history = [{ type: "user", text: "中断表示の確認" }, { type: "assistant", text: "中断前の返答" }];
+    await page.evaluate(fixtures => {
+      window.__runStates = fixtures;
+      sessionStorage.setItem("session-smoke-fixtures", JSON.stringify(fixtures));
+      const stopped = fixtures.mini[1];
+      window.__socket.emit({ type: "ready", provider: "codex", threadId: "finished", workdir: stopped.workdir, history: stopped.history, run: stopped.run });
+    }, { mini: state.mini, air: state.air });
+    assert.equal(await byKey("mini", "codex", "finished").getAttribute("data-state"), "interrupted");
+    assert.equal(await page.locator("#runStateLabel").textContent(), "中断しました");
+    assert.equal(await page.locator("#interruptRun").isVisible(), false);
+    await page.locator("#prompt").fill("中断後の未送信メモ");
+    if (process.argv.includes("--shots")) {
+      await page.locator("#sessionActivityItems").evaluate(element => { element.scrollLeft = 0; });
+      await page.screenshot({ path: path.join(root, "output/playwright/session-interrupted-mobile.png") });
+    }
+    await dismissFor("mini", "codex", "finished").click();
+    assert.equal(await byKey("mini", "codex", "finished").count(), 0);
+    assert.equal(await page.locator("#prompt").inputValue(), "中断後の未送信メモ");
+    assert.equal(await page.getByText("中断前の返答", { exact: true }).count(), 1);
+    assert.deepEqual(await page.evaluate(() => window.__sentMessages), []);
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.waitForFunction(() => selectedThread === "finished" && connectionReady);
+    await page.evaluate(() => refreshFleet({ force: true }));
+    assert.equal(await page.locator("#runStateLabel").textContent(), "中断しました");
+    assert.equal(await page.locator("#interruptRun").isVisible(), false);
+    assert.equal(await byKey("mini", "codex", "finished").count(), 0, "the same interruption stays dismissed after reopening");
+    assert.equal(await page.locator("#prompt").inputValue(), "中断後の未送信メモ");
+    assert.equal(await page.getByText("中断前の返答", { exact: true }).count(), 1);
+    assert.deepEqual(await page.evaluate(() => window.__sentMessages), []);
+    state.mini[1].run = { ...state.mini[1].run, turnId: "stopped-two", updatedAt: 500 };
+    await page.evaluate(run => window.__socket.emit({ type: "runState", threadId: "finished", ...run }), state.mini[1].run);
+    assert.equal(await byKey("mini", "codex", "finished").getAttribute("data-state"), "interrupted", "another interrupted turn gets its own notice");
+    await page.locator("#sessionActivityCount").click();
+    await page.locator('.session-activity-item.expanded').filter({ has: page.locator('[data-state="interrupted"]') }).locator(".session-activity-dismiss").click();
+    assert.equal(await summaryCount("interrupted").count(), 0);
+    await page.locator("#closeSessionActivity").click();
     await byKey("mini", "claude", "shared").click();
     await page.waitForFunction(() => currentThreadProvider() === "claude" && selectedThread === "shared" && connectionReady);
     assert.equal(await byKey("mini", "claude", "shared").getAttribute("data-state"), "question");
@@ -268,7 +308,7 @@ async function main() {
     assert.equal(await page.locator("#sessionActivityStrip").isVisible(), false);
     assert.ok(await page.locator("#prompt").evaluate((input) => input === document.activeElement));
     assert.deepEqual(errors, []);
-    console.log("Session strip verified: persistent completion/error dismissal, touch/keyboard targets, retained conversations/drafts, new-event reappearance, visible mixed-state counts at 320–1024px, attention-first list updates, identity, orbit, reduced motion, stable scroll, full titles, question classification/correction, completion acknowledgement, provider/Mac navigation, offline safety and empty state.");
+    console.log("Session strip verified: persistent completion/error/interruption dismissal, stopped state after reload, retained conversations/answers/drafts without sending prompts, new-event reappearance, touch/keyboard targets, visible mixed-state counts at 320–1024px, attention-first list updates, identity, orbit, reduced motion, stable scroll, full titles, question classification/correction, completion acknowledgement, provider/Mac navigation, offline safety and empty state.");
   } finally {
     await browser?.close();
     await new Promise((resolve) => server.close(resolve));

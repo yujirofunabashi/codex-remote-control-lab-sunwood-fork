@@ -241,6 +241,60 @@ test("an empty completed turn does not inherit a previous question", () => {
   assert.equal(own.runPayload().state, "done");
 });
 
+for (const scenario of [
+  { name: "saved interruption", events: [["task_started", "stopped"], ["turn_aborted", "stopped"]], state: "interrupted", turnId: "stopped" },
+  { name: "legacy interruption without a turn id", events: [["task_started", "stopped"], ["turn_aborted"]], state: "interrupted", turnId: "stopped" },
+  { name: "interruption in a truncated history tail", events: [["turn_aborted", "stopped"]], state: "interrupted", turnId: "stopped" },
+  { name: "new work after interruption", events: [["task_started", "stopped"], ["turn_aborted", "stopped"], ["task_started", "new"]], state: "streaming", turnId: "new", snapshotStatus: "interrupted" },
+  { name: "new work sharing the interruption timestamp", events: [["task_started", "stopped"], ["turn_aborted", "stopped"], ["task_started", "new"]], state: "streaming", turnId: "new", sameTimestamp: true },
+  { name: "late interruption from an older turn", events: [["task_started", "new"], ["turn_aborted", "old"]], state: "streaming", turnId: "new" },
+  { name: "normal completion after interruption", events: [["task_started", "stopped"], ["turn_aborted", "stopped"], ["task_started", "new"], ["task_complete", "new"]], state: "done", turnId: "new", snapshotStatus: "interrupted" },
+]) {
+  test(`reopening respects ${scenario.name} without changing the saved conversation`, t => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "codex-interrupted-state-"));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    const sessionPath = path.join(directory, "session.jsonl");
+    const saved = scenario.events.map(([type, turn_id], index) => JSON.stringify({
+      type: "event_msg", timestamp: new Date(Date.UTC(2026, 0, 1, 0, 0, scenario.sameTimestamp ? 0 : index)).toISOString(),
+      payload: { type, turn_id, ...(type === "turn_aborted" ? { reason: "interrupted" } : {}) },
+    })).join("\n") + "\n";
+    fs.writeFileSync(sessionPath, saved);
+    const own = bridge("reopened", null);
+    own.promoteBridgeKey = () => {};
+    own.readyPayload = () => ({ run: own.runPayload(), history: own.history });
+    own.request = () => assert.fail("restoring state must not start or interrupt work");
+    own.pending.set(7, "thread/resume");
+    deliver(own, { id: 7, result: { thread: { id: "reopened", path: sessionPath, turns: [
+      { id: "previous", status: "completed", items: [{ type: "agentMessage", text: "続行しますか？" }] },
+      { id: "stopped", status: scenario.snapshotStatus, items: [{ type: "userMessage", id: "user", content: [{ type: "text", text: "お願いします" }] }] },
+      ...(scenario.state === "done" ? [{ id: "new", status: "completed", items: [{ type: "agentMessage", text: "再開後の回答" }] }] : []),
+    ] } } });
+    const ready = own.events.find(event => event.type === "ready");
+    assert.equal(ready.run.state, scenario.state);
+    assert.equal(ready.run.turnId, scenario.turnId);
+    assert.ok(ready.history.some(entry => entry.type === "user" && entry.text === "お願いします"));
+    assert.equal(fs.readFileSync(sessionPath, "utf8"), saved);
+  });
+}
+
+for (const savedStart of [false, true]) {
+  test(`the server's interrupted status survives reopening with ${savedStart ? "an unfinished local start" : "no local transcript"}`, t => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "codex-interrupted-server-state-"));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    const sessionPath = path.join(directory, "session.jsonl");
+    if (savedStart) fs.writeFileSync(sessionPath, JSON.stringify({ type: "event_msg", timestamp: "2026-01-01T00:00:00Z", payload: { type: "task_started", turn_id: "stopped" } }) + "\n");
+    const own = bridge("reopened", null);
+    own.promoteBridgeKey = () => {};
+    own.readyPayload = () => ({ run: own.runPayload() });
+    own.pending.set(7, "thread/resume");
+    deliver(own, { id: 7, result: { thread: { id: "reopened", path: sessionPath, turns: [
+      { id: "stopped", status: "interrupted", items: [{ type: "agentMessage", text: "続行しますか？" }] },
+    ] } } });
+    assert.equal(own.events.find(event => event.type === "ready").run.state, "interrupted");
+    assert.equal(own.activeTurnId, null);
+  });
+}
+
 test("a nonblocking progress question cannot become a final reply wait", () => {
   const own = bridge("reply-state", "current-turn");
   deliver(own, { method: "item/completed", params: { threadId: "reply-state", turnId: "current-turn", item: { type: "agentMessage", phase: "commentary", text: "こちらで続行しますか？" } } });

@@ -64,6 +64,7 @@
       // while another result or an observed new run makes attention visible again.
       const notice = status === "done" ? JSON.stringify(["done", completion])
         : status === "error" ? JSON.stringify(["error", observation.run?.turnId || "", observation.run?.updatedAt || "", observation.run?.label || ""])
+        : status === "interrupted" ? JSON.stringify(["interrupted", observation.run?.turnId || observation.run?.updatedAt || ""])
         : old?.notice || "";
       const next = {
         key, group, ordinal,
@@ -98,7 +99,7 @@
   }
 
   function canDismissSessionActivity(item = {}) {
-    return item.status === "done" || item.status === "error";
+    return item.status === "done" || item.status === "error" || item.status === "interrupted";
   }
 
   function dismissSessionActivity(records = [], key = "") {

@@ -2668,18 +2668,28 @@ function recentJsonlRows(filePath, maxBytes = 1024 * 1024) {
 function runStateFromSessionFile(thread) {
   const rows = recentJsonlRows(thread?.path);
   let latestStarted = null;
-  let latestCompleted = null;
+  let latestFinished = null;
   for (const row of rows) {
     if (row.type !== "event_msg") continue;
     const payload = row.payload || {};
-    if (payload.type === "task_started") latestStarted = { turnId: payload.turn_id || null, timestamp: row.timestamp || "" };
-    if (payload.type === "task_complete") latestCompleted = { turnId: payload.turn_id || null, timestamp: row.timestamp || "" };
+    if (payload.type === "task_started") {
+      latestStarted = { turnId: payload.turn_id || null };
+      latestFinished = null;
+    }
+    if (payload.type === "task_complete" || payload.type === "turn_aborted") {
+      // A delayed terminal record for an older turn cannot stop newer work.
+      if (latestStarted?.turnId && payload.turn_id && payload.turn_id !== latestStarted.turnId) continue;
+      latestFinished = {
+        state: payload.type === "turn_aborted" ? "interrupted" : "done",
+        turnId: payload.turn_id || latestStarted?.turnId || null,
+      };
+    }
   }
-  if (latestStarted && (!latestCompleted || latestCompleted.timestamp < latestStarted.timestamp)) {
+  if (latestStarted && !latestFinished) {
     return { state: "streaming", label: "回答生成中", turnId: latestStarted.turnId };
   }
-  if (latestCompleted) {
-    return { state: "done", label: "前回完了・送信できます", turnId: latestCompleted.turnId };
+  if (latestFinished) {
+    return { state: latestFinished.state, label: latestFinished.state === "interrupted" ? "中断しました" : "前回完了・送信できます", turnId: latestFinished.turnId };
   }
   return null;
 }
@@ -3343,12 +3353,21 @@ class SharedBridge {
     this.seenUserItems = new Set((result.thread.turns || []).flatMap((turn) =>
       (turn.items || []).filter((item) => item.type === "userMessage").map((item) => `${turn.id}:${item.id}`)).slice(-historyLimit));
     this.terminalHistory = terminalHistoryFromChatHistory(this.history);
-    const activeTurn = (result.thread.turns || []).findLast((turn) => turn.status === "inProgress");
+    const turns = result.thread.turns || [];
+    const activeTurn = turns.findLast((turn) => turn.status === "inProgress");
     this.activeTurnId = activeTurn?.id || null;
     this.turnStarted = Boolean(activeTurn);
+    let recordedRun = activeTurn ? null : runStateFromSessionFile(result.thread);
+    const lastTurn = turns.at(-1);
+    // The server also supplies interruption when no local transcript is
+    // available. Preserve a newer turn written after this history snapshot.
+    if (!activeTurn && lastTurn?.status === "interrupted"
+      && (!recordedRun || turns.some(turn => turn.id === recordedRun.turnId))) {
+      recordedRun = { state: "interrupted", label: "中断しました", turnId: lastTurn.id };
+    }
     const idleState = activeTurn
       ? { state: "running", label: "Agent 処理中", turnId: activeTurn.id }
-      : idleRunStateFromHistory(this.history, runStateFromSessionFile(result.thread));
+      : idleRunStateFromHistory(this.history, recordedRun);
     this.setBridgeRunState(idleState.state, idleState.label, idleState.turnId);
     this.emit("ready", this.readyPayload());
     if (this.requestedThreadId) this.emit("status", { text: `既存threadを再開しました: ${this.threadId}` });

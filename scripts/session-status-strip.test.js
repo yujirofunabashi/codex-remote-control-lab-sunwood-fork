@@ -76,8 +76,8 @@ test("a new observed run clears acknowledgement even without a server completion
   assert.equal(visibleSessionActivity(records).length, 1);
 });
 
-test("dismissing old errors and completions survives polling, missing observations and reload without deleting the conversation", () => {
-  for (const state of ["done", "error"]) {
+test("dismissing finished notices survives polling, missing observations and reload without deleting the conversation", () => {
+  for (const state of ["done", "error", "interrupted"]) {
     let records = reconcileSessionActivity([], [observation(state)]);
     const original = records[0];
     records = dismissSessionActivity(records, original.key);
@@ -95,7 +95,7 @@ test("dismissing old errors and completions survives polling, missing observatio
 });
 
 test("dismissal cannot hide running work, questions, approvals or connection trouble", () => {
-  for (const state of ["running", "question", "approval", "offline", "interrupted"]) {
+  for (const state of ["running", "question", "approval", "offline"]) {
     const records = reconcileSessionActivity([], [observation(state)]);
     assert.deepEqual(dismissSessionActivity(records, records[0].key), records);
     assert.equal(visibleSessionActivity(records).length, 1);
@@ -127,7 +127,7 @@ test("legacy stored notices and timestamp-free errors can be dismissed without c
 });
 
 test("legacy notices whose server watcher has expired can still be dismissed", () => {
-  for (const state of ["done", "error"]) {
+  for (const state of ["done", "error", "interrupted"]) {
     const legacy = reconcileSessionActivity([], [observation(state)])[0];
     delete legacy.notice;
     delete legacy.dismissedNotice;
@@ -138,4 +138,17 @@ test("legacy notices whose server watcher has expired can still be dismissed", (
     assert.equal(records[0].key, legacy.key);
     assert.equal(records[0].status, state);
   }
+});
+
+test("an interrupted notice stays dismissed across reconnects but a different interrupted turn appears again", () => {
+  const stopped = (turnId, updatedAt) => observation("interrupted", { run: { state: "interrupted", turnId, updatedAt } });
+  let records = reconcileSessionActivity([], [stopped("first", 100)]);
+  records = dismissSessionActivity(records, records[0].key);
+  records = reconcileSessionActivity(JSON.parse(JSON.stringify(records)), [stopped("first", 200)]);
+  assert.equal(visibleSessionActivity(records).length, 0, "reopening the same stop is not a new notification");
+  records = reconcileSessionActivity(records, [stopped("second", 300)]);
+  assert.equal(visibleSessionActivity(records).length, 1, "a new stop appears even when its running state was missed");
+  records = dismissSessionActivity(records, records[0].key);
+  records = reconcileSessionActivity(records, [observation("running")]);
+  assert.equal(visibleSessionActivity(records).length, 1, "dismissal never hides subsequent work");
 });
