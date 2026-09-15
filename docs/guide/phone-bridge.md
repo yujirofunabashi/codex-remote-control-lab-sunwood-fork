@@ -62,6 +62,8 @@ Connection cards distinguish **app** build identity from the selected **workspac
 
 Tracking state reflects the last local fetch; run `bridge:check` for a fresh remote comparison. The UI's recheck button refreshes bridge state but does not pull code. Any browser source change, including CSS and helpers, changes the served browser build so idle pages can reload; active work, drafts and attachments defer it. Backend changes require an authorized restart of the affected supervised bridge after active work is saved. If dependencies changed, run `npm ci` first. Verify both bridges' actual served screens and matching clean builds with no restart warning afterward.
 
+When a conversation inside this bridge requests its own restart, restarting also stops the process producing that reply. An authorized one-time delivery worker must pin the reviewed revision and wait for that exact reply to be saved and every conversation to become idle. After recovery, compare the start time, running build, served files, histories, workdirs and connection settings. An armed or waiting worker is not completed delivery. Do not force-reload a page holding a draft or attachments, and keep an unobserved owner screen explicitly unverified.
+
 ## Runtime Layout
 
 ```text
