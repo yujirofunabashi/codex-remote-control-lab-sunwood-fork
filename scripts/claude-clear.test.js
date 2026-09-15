@@ -41,6 +41,13 @@ process.stdin.on("end", () => process.exit(0));
 process.env.PHONE_AGENT_PROVIDER_DEFAULT = "claude";
 process.env.CLAUDE_BIN = stubBin;
 
+// Task notifications can be forced even when event notices are disabled.
+for (const key of Object.keys(process.env)) {
+  if (/^PHONE_(NOTIFY|NTFY|PUSHOVER|DISCORD)_/.test(key)) process.env[key] = "";
+}
+process.env.PHONE_NOTIFY_EVENTS = "0";
+globalThis.fetch = async () => { throw new Error("This CLI stub test must not send notifications"); };
+
 const { ClaudeBridge } = require("./start-phone");
 
 const fullAccess = { approvalPolicy: "never", sandboxMode: "danger-full-access" };

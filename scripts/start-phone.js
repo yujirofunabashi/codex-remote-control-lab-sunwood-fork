@@ -37,6 +37,7 @@ const { isUnavailableHistoryError, emptyCodexThreadWorkdir, hasSavedCodexThread 
 const { recentTurnsOptions, withRecentTurns } = require("./codex-history");
 const { latestAssistantQuestion, idleRunStateFromHistory } = require("./question-state");
 const operationContext = require("../public/operation-context");
+const modelPolicy = require("../public/model-policy");
 const { GeminiBridge, GeminiSessionStore, DEFAULT_GEMINI_MODEL, GEMINI_CAPABILITIES } = require("./gemini-bridge");
 
 const root = path.resolve(__dirname, "..");
@@ -489,7 +490,7 @@ const maxUploadBytes = uploadLimitBytes();
 // Only the fallback for when the app-server has never been asked. The list the
 // phone is shown comes from `model/list`, so a model that reaches this account
 // appears the next time Codex runs, without a release of this bridge.
-const codexModelOptions = ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4-mini"];
+const codexModelOptions = ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"];
 // Aliases rather than pinned full names: they follow the current generation, so
 // the list cannot rot into offering models that no longer exist.
 const claudeModelOptions = ["sonnet", "opus", "haiku", "fable"];
@@ -552,8 +553,8 @@ function readCodexModelCache(cachePath = codexModelCachePath) {
 let codexModelCache = readCodexModelCache();
 
 function rememberCodexModels(list, { cachePath = codexModelCachePath } = {}) {
+  if (!Array.isArray(list)) return codexModelCache.models;
   const models = codexModelIdsFromList(list);
-  if (!models.length) return codexModelCache.models;
   const efforts = codexEffortsFromList(list);
   const changed =
     JSON.stringify(models) !== JSON.stringify(codexModelCache.models) ||
@@ -569,15 +570,19 @@ function rememberCodexModels(list, { cachePath = codexModelCachePath } = {}) {
   return models;
 }
 
-// Live models first, in the order the app-server lists them, then any fallback
-// the account has not confirmed. A configured default is always offered even if
-// no list has named it, so a model chosen ahead of its release can be kept.
+// Keep availability separate from policy. Once the account has answered, an
+// old default or fallback must not reintroduce a model missing from its list.
 function codexModelChoices({ cache = codexModelCache, fallback = codexModelOptions, configured = "" } = {}) {
-  const choices = [];
-  for (const id of [...(cache?.models || []), ...(configured ? [configured] : []), ...fallback]) {
-    if (id && !choices.includes(id)) choices.push(id);
-  }
-  return choices;
+  const known = cache?.updatedAt || cache?.models?.length;
+  return modelPolicy.choices("codex", known ? cache.models : [...(configured ? [configured] : []), ...fallback]);
+}
+
+function validateCodexModel(input, { cache = codexModelCache } = {}) {
+  const value = String(input || "").trim();
+  const available = cache?.updatedAt || cache?.models?.length ? cache.models : null;
+  const error = modelPolicy.selectionError("codex", value, available);
+  if (error) throw new Error(error);
+  return value;
 }
 // The levels a given Codex model really accepts, by its own names. The phone
 // menu is built from this, so "max" on the menu is the model's max rather than
@@ -598,6 +603,13 @@ function codexEffortLevel(options = {}, model = "", { cache = codexModelCache } 
   const known = cache?.efforts?.[String(model || "").trim()];
   if (Array.isArray(known) && known.length) return known.includes(requested) ? requested : "";
   return codexEffortNames.includes(requested) ? requested : "";
+}
+
+function codexTurnSelection(options, inheritedModel) {
+  const model = validateCodexModel(options.model || inheritedModel);
+  const effort = codexEffortLevel(options, model);
+  if (options.effort && !effort) throw new Error("選択中のモデルはその思考の深さに対応していません。対応する深さを選んでください。入力は残しています。");
+  return { model, effort };
 }
 
 // What the phone needs to draw the menu: the real levels per model, plus a
@@ -2403,6 +2415,7 @@ function serveIndex(req, res, { includeManifest = true, standalone = true, phone
     .replace(/<script src="main\.js"><\/script>/, `<script src="${escapeHtmlAttribute(staticAssetHref("main.js"))}"></script>`)
     .replace(/<script src="phone-ui-utils\.js"><\/script>/, `<script src="${escapeHtmlAttribute(staticAssetHref("phone-ui-utils.js"))}"></script>`)
     .replace(/<script src="operation-context\.js"><\/script>/, `<script src="${escapeHtmlAttribute(staticAssetHref("operation-context.js"))}"></script>`)
+    .replace(/<script src="model-policy\.js"><\/script>/, `<script src="${escapeHtmlAttribute(staticAssetHref("model-policy.js"))}"></script>`)
     .replace(
       /<meta name="apple-mobile-web-app-title" content="[^"]*" \/>/,
       `<meta name="apple-mobile-web-app-title" content="${escapeHtmlAttribute(identity.shortName)}" />`,
@@ -2836,9 +2849,9 @@ function parseClaudeSessionFile(filePath, stat, text) {
     }
     if (item.type !== "user" && item.type !== "assistant") continue;
     if (!isClaudeConversationRecord(item)) continue;
-    const contentText = textFromClaudeContent(item.message?.content);
-    if (!contentText.trim()) continue;
     const role = item.message?.role === "assistant" || item.type === "assistant" ? "assistant" : "user";
+    const contentText = textFromClaudeContent(role === "user" ? operationContext.visibleUserContent(item.message?.content) : item.message?.content);
+    if (!contentText.trim()) continue;
     if (role === "user") {
       if (!firstUserText) firstUserText = contentText;
       lastUserText = contentText;
@@ -3716,6 +3729,13 @@ class SharedBridge {
 
   prompt(text, attachments = [], options = {}, clientMessageId = null, context = null) {
     context = { ...operationContext.normalize(context), receivedAt: Date.now() };
+    try {
+      const selection = codexTurnSelection(options, this.model);
+      options = { ...options, model: selection.model };
+    } catch (error) {
+      this.emit("error", { text: error.message, clientMessageId });
+      return;
+    }
     if (!this.threadId) {
       this.emit("error", { text: "Thread is not ready yet" });
       return;
@@ -3775,6 +3795,8 @@ class SharedBridge {
   }
 
   startPrompt(text, attachments = [], options = {}, clientMessageId = null, context = null) {
+    // Repeat at dequeue time, before saving attachments or touching history.
+    const { model: selectedModel, effort } = codexTurnSelection(options, this.model);
     this.interruptRequested = false;
     this.turnStarted = false;
     const input = [{ type: "text", text, text_elements: [] }];
@@ -3803,11 +3825,10 @@ class SharedBridge {
         "phone-operation-context": { kind: "application", value: operationContext.modelContext(context, phoneMachineLabel) },
       },
     };
-    params.model = options.model || this.model;
+    params.model = selectedModel;
     // Overrides the reasoning effort for this turn and the ones after it. Left
     // out, the thread keeps whatever `model_reasoning_effort` in the Codex
     // config says, which is what made the phone's depth menu do nothing.
-    const effort = codexEffortLevel(options, params.model);
     if (effort) params.effort = effort;
     if (Object.prototype.hasOwnProperty.call(options, "serviceTier")) params.serviceTier = normalizeServiceTier(options.serviceTier);
     if (options.approvalPolicy) params.approvalPolicy = options.approvalPolicy;
@@ -4466,7 +4487,7 @@ class ClaudeBridge {
       "--permission-mode",
       permissionMode,
       "--append-system-prompt",
-      operationContext.modelContext(context, phoneMachineLabel),
+      operationContext.fixedInstructions,
     ];
     const effort = claudeEffortLevel(options);
     if (effort) args.push("--effort", effort);
@@ -4504,7 +4525,13 @@ class ClaudeBridge {
       child.stdin.end(
         `${JSON.stringify({
           type: "user",
-          message: { role: "user", content: [{ type: "text", text: promptText }, ...imageBlocks] },
+          message: { role: "user", content: [
+            { type: "text", text: promptText },
+            ...imageBlocks,
+            // Keep slash-command parsing and arguments exactly as submitted.
+            // The next ordinary prompt supplies a fresh observation again.
+            ...(slashCommandFromPrompt(promptText) ? [] : [{ type: "text", text: operationContext.turnContext(context, phoneMachineLabel) }]),
+          ] },
           parent_tool_use_id: null,
         })}\n`,
       );
@@ -5869,7 +5896,8 @@ async function main() {
       try {
         const result = await appServerRequest("model/list", { limit: 80, includeHidden: false });
         rememberCodexModels(result?.data);
-        sendJson(res, 200, result);
+        sendJson(res, 200, { ...result, data: (result?.data || []).filter(item =>
+          item && !item.hidden && modelPolicy.eligibleCodexModel(item.id || item.model || item.slug)) });
       } catch (error) {
         sendJson(res, 500, { error: error.message });
       }
@@ -6015,7 +6043,7 @@ async function main() {
             fleetUpdates.provider = requestedProvider;
           }
           if (Object.prototype.hasOwnProperty.call(body, "model")) {
-            const nextModel = validateModel(body.model);
+            const nextModel = requestedProvider === "codex" ? validateCodexModel(body.model) : validateModel(body.model);
             updates[slotEnvKey(modelEnvKeyForProvider(requestedProvider), uiPort)] = nextModel;
             fleetUpdates.model = nextModel;
           }
@@ -6421,6 +6449,7 @@ module.exports = {
   codexEffortsFromList,
   codexModelChoices,
   codexModelIdsFromList,
+  validateCodexModel,
   codexReasoningChoices,
   reasoningChoicePayload,
   localSettingsPayload,

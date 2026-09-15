@@ -34,6 +34,21 @@ function turn(role, text, extra = {}) {
   };
 }
 
+test("separate operator data stays in the native transcript but not the restored phone history", () => {
+  const { turnContext, selectPreset } = require("../public/operation-context");
+  const data = turnContext(selectPreset("iphone"), "mini");
+  const record = turn("user", "本文はそのまま");
+  record.message.content.push({ type: "text", text: data });
+  const file = writeTranscript("operator-data", [record, turn("assistant", "回答"), turn("user", data)]);
+  const result = readClaudeSessionFile(file);
+  assert.equal(result.history[0].text, "本文はそのまま");
+  assert.equal(result.history[2].text, data, "an owner's first text block is never removed");
+  assert.ok(fs.readFileSync(file, "utf8").includes(data), "the saved transcript is not rewritten");
+  const summary = require("./claude-sessions").summarize(file);
+  assert.equal(summary.firstPrompt, "本文はそのまま");
+  assert.equal(summary.lastPrompt, data, "a native user's own text is preserved in the command-line listing too");
+});
+
 test("the synthetic resume pair never becomes the last thing the phone shows", () => {
   // Recorded from a session the phone owned while something else opened it: an
   // isMeta user turn nobody typed, answered by a <synthetic> assistant record,

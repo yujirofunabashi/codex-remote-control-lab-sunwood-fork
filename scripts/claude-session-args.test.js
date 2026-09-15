@@ -10,6 +10,7 @@ const path = require("path");
 const stubRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-session-args-"));
 const stubBin = path.join(stubRoot, "claude-stub.js");
 const argsLog = path.join(stubRoot, "args.log");
+const inputLog = path.join(stubRoot, "input.log");
 
 // Answers `--help` the way a CLI that supports the flag does, so the bridge's
 // capability probe sees what it would see against a real install.
@@ -33,6 +34,7 @@ process.stdin.on("data", (chunk) => {
   buffer = lines.pop() || "";
   for (const line of lines) {
     if (!line.trim()) continue;
+    fs.appendFileSync(process.env.STUB_INPUT_LOG, line + "\\n");
     emit({ type: "result", subtype: "success", is_error: false, result: "ok", session_id: "stub-session" });
   }
 });
@@ -44,6 +46,7 @@ process.stdin.on("end", () => process.exit(0));
 process.env.PHONE_AGENT_PROVIDER_DEFAULT = "claude";
 process.env.CLAUDE_BIN = stubBin;
 process.env.STUB_ARGS_LOG = argsLog;
+process.env.STUB_INPUT_LOG = inputLog;
 process.env.PHONE_SESSION_NAME_PREFIX = "📱";
 process.env.PHONE_NOTIFY_EVENTS = "0";
 for (const key of Object.keys(process.env)) {
@@ -135,22 +138,70 @@ test("resuming does not rename, so a title set on the desktop survives", async (
   }
 });
 
-test("the operator context is refreshed outside user text on every Claude turn", async () => {
+test("fixed instructions stay identical while each resumed Claude turn gets its own operator data", async () => {
   fs.writeFileSync(argsLog, "");
+  fs.writeFileSync(inputLog, "");
   const { selectPreset } = require("../public/operation-context");
   const bridge = new ClaudeBridge(null, "operation-context");
   const client = fakeClient();
   bridge.clients.add(client);
   try {
-    bridge.prompt("/help", [], fullAccess, "first", selectPreset("air-mini"));
+    bridge.prompt("first", [], fullAccess, "first", selectPreset("air-mini"));
     await turnCompleted(client, 1);
     bridge.prompt("second", [], fullAccess, "second", selectPreset("mini"));
     await turnCompleted(client, 2);
     const [first, second] = turns();
-    assert.match(first[first.indexOf("--append-system-prompt") + 1], /手元: Air.*画面共有/);
-    assert.match(second[second.indexOf("--append-system-prompt") + 1], /手元: mini.*経路: 直接/);
-    assert.deepEqual(bridge.history.filter(entry => entry.type === "user").map(entry => entry.text), ["/help", "second"]);
+    const fixed = first[first.indexOf("--append-system-prompt") + 1];
+    assert.equal(second[second.indexOf("--append-system-prompt") + 1], fixed);
+    assert.doesNotMatch(fixed, /受信=|選択=|手元:|実行先:/);
+    const messages = fs.readFileSync(inputLog, "utf8").trim().split("\n").map(JSON.parse);
+    assert.equal(messages[0].message.content[0].text, "first");
+    assert.match(messages[0].message.content[1].text, /手元: Air.*画面共有/);
+    assert.equal(messages[1].message.content[0].text, "second");
+    assert.match(messages[1].message.content[1].text, /手元: mini.*経路: 直接/);
+    assert.equal(second[second.indexOf("--resume") + 1], "stub-session");
+    assert.deepEqual(bridge.history.filter(entry => entry.type === "user").map(entry => entry.text), ["first", "second"]);
   } finally {
     bridge.closeApprovalServer();
+  }
+});
+
+test("slash commands keep their exact input and receive no extra arguments", async () => {
+  fs.writeFileSync(inputLog, "");
+  const bridge = new ClaudeBridge(null, "context-command");
+  const client = fakeClient();
+  bridge.clients.add(client);
+  try {
+    bridge.prompt("/clear", [], fullAccess);
+    await turnCompleted(client);
+    const input = JSON.parse(fs.readFileSync(inputLog, "utf8").trim());
+    assert.deepEqual(input.message.content, [{ type: "text", text: "/clear" }]);
+    bridge.prompt("next", [], fullAccess);
+    await turnCompleted(client, 2);
+    const next = fs.readFileSync(inputLog, "utf8").trim().split("\n").map(JSON.parse)[1];
+    assert.match(next.message.content.at(-1).text, /当回データ.*手元: 未確認/);
+  } finally { bridge.closeApprovalServer(); }
+});
+
+test("an image stays inline beside the original text when operator data is added", async () => {
+  fs.writeFileSync(inputLog, "");
+  const bridge = new ClaudeBridge(null, "context-image");
+  const client = fakeClient();
+  bridge.clients.add(client);
+  let saved;
+  const encoded = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1sAAAAASUVORK5CYII=";
+  try {
+    bridge.prompt("この画像", [{ name: "context-fixture.png", dataUrl: `data:image/png;base64,${encoded}` }], fullAccess);
+    await turnCompleted(client);
+    saved = bridge.history.find(entry => entry.type === "user").attachments[0];
+    const content = JSON.parse(fs.readFileSync(inputLog, "utf8").trim()).message.content;
+    assert.equal(content[0].text, "この画像");
+    assert.equal(content[1].type, "image");
+    assert.equal(content[1].source.data, encoded);
+    assert.match(content[2].text, /操作環境 当回データ/);
+    assert.doesNotMatch(bridge.history[0].text, /当回データ/);
+  } finally {
+    bridge.closeApprovalServer();
+    if (saved?.absolutePath) fs.unlinkSync(saved.absolutePath);
   }
 });

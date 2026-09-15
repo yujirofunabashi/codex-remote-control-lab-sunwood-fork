@@ -18,6 +18,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const { visibleUserContent } = require("../public/operation-context");
 
 const root = path.resolve(__dirname, "..");
 
@@ -101,10 +102,11 @@ function summarize(filePath) {
     const timestamp = Date.parse(item.timestamp || "");
     if (Number.isFinite(timestamp)) session.updatedAt = Math.max(session.updatedAt, timestamp);
     if (item.type !== "user" && item.type !== "assistant") continue;
-    const content = textFromContent(item.message?.content);
+    const isUser = (item.message?.role || item.type) === "user";
+    const content = textFromContent(isUser ? visibleUserContent(item.message?.content) : item.message?.content);
     if (!content) continue;
     session.messages += 1;
-    if ((item.message?.role || item.type) !== "user") continue;
+    if (!isUser) continue;
     if (!session.firstPrompt) session.firstPrompt = content;
     // The phone sidebar labels a row by its latest message while this labelled
     // it by the first, so the same session read as two different ones. Carry

@@ -185,6 +185,7 @@ test("the install page carries the requested provider's icon, name and manifest"
     { includeManifest: true, standalone: true, phoneToken: token },
   );
   assert.equal(res.statusCode, 200);
+  assert.match(res.body, /<script src="model-policy\.js\?v=[^"]+"><\/script>/, "policy helper is versioned alongside the page");
   assert.match(res.body, /<title>Codex Remote [^<]+<\/title>/);
   assert.match(res.body, /<meta name="apple-mobile-web-app-title" content="Codex [^"]+" \/>/);
   assert.match(res.body, /<link rel="apple-touch-icon" sizes="180x180" href="[^"]*codex[^"]*" \/>/);

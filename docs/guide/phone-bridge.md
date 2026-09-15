@@ -234,6 +234,18 @@ The first integration is intentionally limited. The composer displays a text-adv
 
 Text attachments, images, slash-command expansion, queued prompts, native terminal handoff, automatic notifications and live quota meters are not implemented. Busy or attachment submissions remain unacknowledged so the browser retains the draft. Submitted text survives a failed login in the saved conversation. Operator context is normalized through the shared fixed vocabulary and prefixed to the model input; it is not a separate system-role API message. Never equate a passing mock test, successful installation, live model response and deployed bridge: verify each separately.
 
+## Model and reasoning selection {#model-selection}
+
+Choose the model and reasoning effort that meet the task's accuracy requirements. The bridge does not force Astra, Fable, or maximum effort. Normal substantive implementation and research use `xhigh` as the operating baseline, bounded deterministic work can use `high`, and verified simple work can use `medium` or `low` when greater depth is unnecessary. Reserve `max` for the hardest reasoning and opt into `ultra` only when parallel agent work is requested. Reassess at task boundaries and raise capability when results fall short.
+
+The [official model guide](https://learn.chatgpt.com/docs/models#choosing-astra-sol-terra-and-luna) distinguishes Astra for the hardest complete workflows, Sol for complex open-ended work, Terra for everyday work, and Luna for clear repeatable tasks. This deployment further restricts Luna to bounded, repeatable input/output, directly checkable results, a real latency requirement, and low-impact reversible errors, all together. Classifying supplied labels into a fixed schema with every result checked is one example. These are operating restrictions, not a claim about the model's maximum capability.
+
+Codex model choices, settings saves, prompt acceptance and final submission enforce a GPT-5.6 generation floor. Historical model metadata and saved defaults remain readable; an old selection requires an explicit eligible model for the next turn. Rejected prompts retain their drafts and are never automatically sent to a substitute model. Once the account has returned a catalog, only its eligible entries are offered; an empty eligible list stops submission. Before the first catalog, static eligible choices are provisional and availability still depends on the app-server.
+
+Supported Codex reasoning values reach the request unchanged. Unsupported values arriving from an old client are rejected rather than silently omitted. Model and effort are independent, and Claude's existing choices remain available. This is generation/capability validation, not automatic task classification or machine enforcement of Luna's task conditions. It does not change global defaults or unattended model candidates.
+
+Run `node scripts/model-policy-smoke.js` and `node scripts/model-policy-smoke.js --webkit` to exercise the real page with mocked connections: rejected old selections retain drafts and attachments, while eligible models and lighter efforts reach submission unchanged. These checks do not call external models.
+
 ## The Sidebar Spans Every Workdir
 
 Sessions are filed per working directory. While the sidebar read only the active one, **changing the workdir made every earlier session look deleted** — the display was scoped, the records were never lost.
@@ -440,7 +452,11 @@ A Mac browser cannot distinguish Air from mini or identify the physical operator
 
 Each browser prompt carries a short, separate model-context fragment with the operator, screen, route, entry point, execution machine, and receipt time. User text, session naming, and displayed history remain unchanged. The model is instructed not to repeat the fragment during ordinary replies or carry an old operator across entry points. Queued prompts retain their own context and receipt time. Client fields accept only fixed device/route vocabulary; client instructions and claimed execution hosts are ignored.
 
-This covers Codex and Claude prompts sent through this app. Codex uses the app-server `additionalContext` application fragment, verified against the generated 0.153.4 protocol; Claude uses `--append-system-prompt`. It does not instrument prompts sent directly from official apps or terminals, or Windows lab tasks. Older Codex app servers need compatibility verification before relying on the fragment.
+This covers Codex and Claude prompts sent through this app. Codex uses the app-server `additionalContext` application fragment, verified against the generated 0.153.4 protocol. Claude sends only fixed handling rules through `--append-system-prompt`; current device and timestamp data travel as a separate text block in the ordinary user input. Native transcripts retain that data, while restored phone history and session previews omit only the generated trailing block. Slash commands such as `/clear` receive their original arguments without that extra block; the next ordinary prompt carries a fresh observation. Queued observations expire against execution time while retaining their original receipt time.
+
+[Claude's resume behavior](https://code.claude.com/docs/en/prompt-caching#resuming-a-session) normally retains the original system prompt, so changing only the appended system instructions may not deliver new device information. Separating current facts avoids depending on that change. It does not instrument prompts sent directly from official apps or terminals, or Windows lab tasks. Existing transcripts are never rewritten. Older Codex app servers need compatibility verification before relying on the fragment.
+
+Mock transport checks, actual model interpretation, cache/usage measurements and deployment are separate evidence. Identical fixed instructions alone prove neither lower consumption nor response quality. Verify new and resumed native sessions without clearing existing conversations, and follow the update procedure for authorized production rollout and restart.
 
 ## PWA Notes
 

@@ -60,9 +60,9 @@ test("server edits require a restart until a fresh process captures the new sour
   assert.equal(createBuildTracker(root).status().restartRequired, false);
 });
 
-test("shared operator-context code updates both browser and server build identities", t => {
+for (const sharedFile of ["operation-context.js", "model-policy.js"]) test(`shared ${sharedFile} updates both browser and server build identities`, t => {
   const root = fixture(t);
-  const file = path.join(root, "public", "operation-context.js");
+  const file = path.join(root, "public", sharedFile);
   fs.writeFileSync(file, "// shared context one\n");
   const tracker = createBuildTracker(root, { cacheMs: 0 });
   const before = tracker.status();

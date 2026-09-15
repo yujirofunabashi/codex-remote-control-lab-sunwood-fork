@@ -61,7 +61,7 @@ function sourceSnapshot(root) {
       clientFingerprint: fingerprint(root, files.filter(file => file.startsWith("public/"))),
       // The operator-context vocabulary is served to browsers and required by
       // the Node bridge. Updating it must not look like a static-only change.
-      serverFingerprint: fingerprint(root, files.filter(file => !file.startsWith("public/") || file === "public/operation-context.js")),
+      serverFingerprint: fingerprint(root, files.filter(file => !file.startsWith("public/") || ["public/operation-context.js", "public/model-policy.js"].includes(file))),
       upstream,
     };
   } catch {

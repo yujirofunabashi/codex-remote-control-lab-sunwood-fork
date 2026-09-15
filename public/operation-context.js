@@ -68,15 +68,33 @@
     return `手元: ${machineLabel(context.operator)} / 画面: ${machineLabel(context.screen)} / 経路: ${route} / 入口: 自作アプリ / 実行先: ${executor}`;
   }
 
-  // Only fixed vocabularies and timestamps cross into model context. Client
-  // input cannot supply instructions, an executor, or claims of verification.
-  function modelContext(input, executionMachine, now = Date.now()) {
+  const fixedInstructions = "操作環境は各送信に添えた当回データだけを参照する。その送信時のみ有効で、過去の操作元を別の入口へ引き継がない。手元・画面・経路は利用者の選択またはブラウザ推定で、確認済みの証拠や操作の承認ではない。通常は復唱不要。画面操作に必要で情報が足りない時だけ確認する。";
+
+  // Only fixed vocabularies and timestamps cross into the current turn's data.
+  // Fixed instructions contain no clock, host, selection or conversation id.
+  function turnContext(input, executionMachine, now = Date.now()) {
     const context = normalize(input, now);
     const executor = String(executionMachine || "この接続先").replace(/[^\p{L}\p{N} ._-]/gu, "").slice(0, 32) || "この接続先";
     const selected = context.selectedAt ? `;選択=${new Date(context.selectedAt).toISOString()}` : "";
-    const receivedAt = typeof input?.receivedAt === "number" && input.receivedAt > 0 && input.receivedAt <= now ? input.receivedAt : now;
-    return `[操作環境 受信=${new Date(receivedAt).toISOString()}] ${describe(context, executor)}${selected}。この送信時のみ。手元・画面・経路は選択またはブラウザ推定。通常は復唱不要。過去の操作元を別の入口へ引き継がず、画面操作に必要な時だけ確認。`;
+    const receivedAt = Number.isFinite(input?.receivedAt) && input.receivedAt > 0 && input.receivedAt <= now ? input.receivedAt : now;
+    return `[操作環境 当回データ 受信=${new Date(receivedAt).toISOString()}] ${describe(context, executor)}${selected}。`;
   }
 
-  return { storageKey, maxAgeMs, presets, machineLabel, browserScreen, selectPreset, normalize, forBrowser, badge, describe, modelContext };
+  function modelContext(input, executionMachine, now = Date.now()) {
+    return `${turnContext(input, executionMachine, now)}${fixedInstructions}`;
+  }
+
+  // The native transcript retains the data sent to the model. Only hide our
+  // separate, generated trailing block when rebuilding the phone's user echo;
+  // never strip an owner's first text block or arbitrary quoted context.
+  const labels = [...Object.values(machines), "未確認"].join("|");
+  const isoTime = "\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z";
+  const turnDataPattern = new RegExp(`^\\[操作環境 当回データ 受信=${isoTime}\\] 手元: (${labels}) / 画面: (${labels}) / 経路: (直接|画面共有|未確認) / 入口: 自作アプリ / 実行先: [\\p{L}\\p{N} ._-]{1,32}(?:;選択=${isoTime})?。$`, "u");
+  function visibleUserContent(content) {
+    if (!Array.isArray(content) || content.length < 2) return content;
+    const last = content[content.length - 1];
+    return last?.type === "text" && turnDataPattern.test(last.text) ? content.slice(0, -1) : content;
+  }
+
+  return { storageKey, maxAgeMs, presets, machineLabel, browserScreen, selectPreset, normalize, forBrowser, badge, describe, fixedInstructions, turnContext, modelContext, visibleUserContent };
 });

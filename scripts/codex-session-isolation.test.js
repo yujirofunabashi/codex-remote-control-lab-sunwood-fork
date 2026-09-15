@@ -18,7 +18,7 @@ for (const key of Object.keys(process.env)) {
 function bridge(threadId, turnId = "own-turn") {
   const instance = Object.create(SharedBridge.prototype);
   Object.assign(instance, {
-    provider: "codex", model: "test", workdir: os.tmpdir(),
+    provider: "codex", model: "gpt-5.6-sol", workdir: os.tmpdir(),
     threadId, requestedThreadId: threadId, activeTurnId: turnId,
     upstream: new EventEmitter(), pending: new Map(), clients: new Set(),
     history: [], runState: { state: "running", turnId },

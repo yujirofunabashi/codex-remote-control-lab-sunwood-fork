@@ -5,6 +5,7 @@ const APP_SHELL = [
   "./main.js",
   "./phone-ui-utils.js",
   "./operation-context.js",
+  "./model-policy.js",
   "./site.webmanifest",
   "./favicon.svg",
   "./icon-192.png",

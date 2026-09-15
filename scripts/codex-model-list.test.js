@@ -49,18 +49,21 @@ test("a remembered list survives on disk and comes back in order", () => {
   const onDisk = readCodexModelCache(cachePath);
   assert.deepEqual(onDisk.models, remembered);
   assert.ok(onDisk.updatedAt, "the cache records when the list was last confirmed");
-  // An empty answer is not a list of zero models; it leaves the last one alone.
-  assert.deepEqual(rememberCodexModels([], { cachePath }), remembered);
+  // A failed/missing answer leaves the last catalog; a successful empty list
+  // is authoritative and must not resurrect fallback models.
+  assert.deepEqual(rememberCodexModels(undefined, { cachePath }), remembered);
   assert.deepEqual(readCodexModelCache(cachePath).models, remembered);
+  assert.deepEqual(rememberCodexModels([], { cachePath }), []);
+  assert.deepEqual(codexModelChoices(), []);
 });
 
-test("live models come first, a configured model is always offered, and the fallback fills in", () => {
+test("a confirmed catalog supplies choices; fallback is only for an unknown catalog", () => {
   const choices = codexModelChoices({
     cache: { models: ["gpt-6.0-nova", "gpt-5.6-sol"], updatedAt: "2026-09-05T00:00:00Z" },
     fallback: ["gpt-5.6-sol", "gpt-5.5"],
     configured: "gpt-7-preview",
   });
-  assert.deepEqual(choices, ["gpt-6.0-nova", "gpt-5.6-sol", "gpt-7-preview", "gpt-5.5"]);
+  assert.deepEqual(choices, ["gpt-6.0-nova", "gpt-5.6-sol"]);
   // Nothing remembered yet: the fallback alone, still with the configured model.
   assert.deepEqual(codexModelChoices({ cache: { models: [] }, fallback: ["gpt-5.6-sol"], configured: "gpt-5.6-sol" }), ["gpt-5.6-sol"]);
 });
@@ -129,10 +132,10 @@ test("the page takes the bridge's model list per provider and redraws the menu",
   assert.deepEqual(result.live, { codex: ["gpt-6.0-nova", "gpt-5.6-sol"], claude: ["opus", "sonnet"] });
   assert.equal(result.redrew, true);
 
-  // An unknown provider, an empty list, or no answer at all changes nothing.
+  // An empty eligible list clears the menu. No answer at all changes nothing.
   result = adopt({ gemini: ["x"], codex: [] });
-  assert.deepEqual(result.live, { codex: ["gpt-6.0-nova", "gpt-5.6-sol"], claude: ["opus", "sonnet"] });
-  assert.equal(result.redrew, false);
+  assert.deepEqual(result.live, { codex: [], claude: ["opus", "sonnet"] });
+  assert.equal(result.redrew, true);
   result = adopt(undefined);
   assert.equal(result.redrew, false);
 });
@@ -140,4 +143,62 @@ test("the page takes the bridge's model list per provider and redraws the menu",
 test("the composer menu draws the bridge's list before the typed one", () => {
   const render = functionSource("renderInlineModelChoices");
   assert.match(render, /liveModelChoices\[activeProvider\] \|\| inlineModelChoices\[activeProvider\]/);
+});
+
+test("an old saved default or fallback cannot return below-floor models to the menu", () => {
+  assert.deepEqual(codexModelChoices({
+    cache: { models: ["gpt-5.5", "gpt-5.6-terra"] },
+    configured: "gpt-5.4-mini", fallback: ["gpt-6-astra", "gpt-5.5"],
+  }), ["gpt-5.6-terra"]);
+  assert.deepEqual(codexModelChoices({
+    cache: { models: ["gpt-5.5"] }, configured: "gpt-5.5", fallback: ["gpt-5.6-luna"],
+  }), [], "no eligible model means no automatic replacement");
+});
+
+test("the final send refuses an old or ambiguous model before saving attachments or history", () => {
+  const { SharedBridge } = require("./start-phone");
+  const bridge = Object.create(SharedBridge.prototype);
+  Object.assign(bridge, {
+    model: "gpt-5.5", threadId: "old-thread", pending: new Map(),
+    request() { assert.fail("an invalid model reached the app-server"); },
+    appendHistory() { assert.fail("a rejected prompt entered history"); },
+    emit() {}, setBridgeRunState() {},
+  });
+  for (const model of [undefined, "gpt-5.4-mini", "astra", "o3", "gpt-5.5-codex"]) {
+    assert.throws(() => bridge.startPrompt("keep my draft", [], { model }), /GPT-5\.6/);
+  }
+});
+
+test("each eligible role and supported effort reaches the real send path unchanged", () => {
+  const { SharedBridge, validateCodexModel } = require("./start-phone");
+  const models = ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"];
+  const efforts = ["low", "medium", "high", "xhigh"];
+  rememberCodexModels(models.map(id => ({ id, supportedReasoningEfforts: efforts })), { cachePath });
+  const sent = [];
+  const bridge = Object.create(SharedBridge.prototype);
+  Object.assign(bridge, {
+    model: "gpt-5.5", threadId: "old-thread", pending: new Map(),
+    request(method, params) { sent.push({ method, params }); return sent.length; },
+    appendHistory() {}, emit() {}, setBridgeRunState() {},
+  });
+  for (const model of models) for (const effort of efforts) {
+    bridge.startPrompt("bounded verified work", [], { model, effort });
+    assert.equal(sent.at(-1).params.model, model);
+    assert.equal(sent.at(-1).params.effort, effort);
+  }
+  assert.equal(bridge.model, "gpt-5.5", "historical model metadata is not rewritten");
+  assert.throws(() => validateCodexModel("gpt-7-preview"), /候補/);
+  assert.throws(() => bridge.startPrompt("keep", [], { model: models[0], effort: "unsupported" }), /思考の深さ/);
+  assert.equal(sent.length, 16);
+});
+
+test("old browser selections are rejected before a queued prompt is acknowledged", () => {
+  const { SharedBridge } = require("./start-phone");
+  const messages = [];
+  const bridge = Object.create(SharedBridge.prototype);
+  Object.assign(bridge, { model: "gpt-5.5", threadId: "old-thread", activeTurnId: "busy", turnQueue: [], emit(type, data) { messages.push({ type, ...data }); } });
+  bridge.prompt("keep", [], {}, "draft-one");
+  assert.equal(bridge.turnQueue.length, 0);
+  assert.equal(messages[0].type, "error");
+  assert.equal(messages[0].clientMessageId, "draft-one");
 });

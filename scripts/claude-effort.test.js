@@ -37,6 +37,12 @@ delete process.env.CLAUDE_EFFORT;
 process.env.CLAUDE_BIN = stubBin;
 process.env.STUB_ARGS_LOG = argsLog;
 
+for (const key of Object.keys(process.env)) {
+  if (/^PHONE_(NOTIFY|NTFY|PUSHOVER|DISCORD)_/.test(key)) process.env[key] = "";
+}
+process.env.PHONE_NOTIFY_EVENTS = "0";
+globalThis.fetch = async () => { throw new Error("This CLI stub test must not send notifications"); };
+
 const { ClaudeBridge, claudeEffortLevel } = require("./start-phone");
 
 const fullAccess = { approvalPolicy: "never", sandboxMode: "danger-full-access" };

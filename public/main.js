@@ -1,5 +1,6 @@
 const uiUtils = window.CodexPhoneUiUtils || {};
 const operationContextUtils = window.PhoneOperationContext;
+const modelPolicy = window.PhoneModelPolicy;
 const operationContextButton = document.querySelector("#operationContextButton");
 const operationContextDialog = document.querySelector("#operationContextDialog");
 let operationContextSelection = (() => {
@@ -2058,7 +2059,7 @@ const serviceTierAliases = new Map([
 // Only what the menu shows before a bridge has answered. The bridge reports the
 // models its account actually has, and that list replaces these.
 const inlineModelChoices = {
-  codex: ["gpt-5.6-sol", "gpt-5.5"],
+  codex: ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
   claude: ["sonnet", "opus", "haiku"],
   gemini: ["gemini-3.8-flash-high"],
 };
@@ -2073,7 +2074,7 @@ function adoptModelChoices(choices) {
   for (const [provider, list] of Object.entries(choices)) {
     const key = normalizeProviderName(provider);
     const models = (Array.isArray(list) ? list : []).map((item) => String(item || "").trim()).filter(Boolean);
-    if (key && models.length) next[key] = models;
+    if (key && Array.isArray(list)) next[key] = models;
   }
   if (!Object.keys(next).length) return;
   liveModelChoices = { ...liveModelChoices, ...next };
@@ -2390,8 +2391,8 @@ function renderInlineModelChoices() {
   const moreButton = modelMenu.querySelector("#moreModelsButton");
   if (!moreButton) return;
   for (const row of modelMenu.querySelectorAll("[data-model-choice]")) row.remove();
-  const choices = [...(liveModelChoices[activeProvider] || inlineModelChoices[activeProvider] || inlineModelChoices.codex)].slice(0, 6);
-  if (selectedModel && !choices.includes(selectedModel)) choices.unshift(selectedModel);
+  const choices = modelPolicy.choices(activeProvider, liveModelChoices[activeProvider] || inlineModelChoices[activeProvider] || inlineModelChoices.codex).slice(0, 6);
+  if (!liveModelChoices[activeProvider] && selectedModel && !modelPolicy.selectionError(activeProvider, selectedModel) && !choices.includes(selectedModel)) choices.unshift(selectedModel);
   for (const choice of choices) {
     const row = document.createElement("button");
     row.type = "button";
@@ -8328,7 +8329,7 @@ function renderLocalSettings(payload) {
   modelSelect.className = "settings-select";
 
   function modelChoicesForProvider(provider) {
-    return modelsByProvider[provider] || options.models || [];
+    return modelPolicy.choices(provider, modelsByProvider[provider] || options.models || []);
   }
 
   function preferredModelForProvider(provider) {
@@ -8338,12 +8339,17 @@ function renderLocalSettings(payload) {
   }
 
   function renderModelSelectForProvider(provider, selectedValue = preferredModelForProvider(provider)) {
-    const modelValues = new Set([selectedValue, defaultModels[provider], ...(modelChoicesForProvider(provider) || [])].filter(Boolean));
+    const allowed = modelChoicesForProvider(provider);
+    const modelValues = new Set([selectedValue, ...allowed].filter(Boolean));
     modelSelect.replaceChildren();
     for (const modelValue of modelValues) {
       const option = document.createElement("option");
       option.value = modelValue;
       option.textContent = modelValue;
+      if (provider === "codex" && (!allowed.includes(modelValue) || !modelPolicy.eligibleCodexModel(modelValue))) {
+        option.disabled = true;
+        option.textContent += "（対象外：選び直してください）";
+      }
       modelSelect.appendChild(option);
     }
     modelSelect.value = selectedValue || modelSelect.options[0]?.value || "";
@@ -8708,14 +8714,14 @@ async function showModels() {
   try {
     const result = await apiGet(`/api/models?provider=${encodeURIComponent(currentThreadProvider())}`);
     artifactList.replaceChildren();
-    const models = result.data || [];
+    const models = (result.data || []).filter(candidate => !candidate.hidden && !modelPolicy.selectionError(currentThreadProvider(), candidate.model || candidate.id));
     for (const candidate of models.slice(0, 24)) {
       addPanelRow(candidate.displayName || candidate.model || candidate.id, candidate.defaultReasoningEffort || "", () => {
         setSelectedModel(candidate.model || candidate.id);
         addStatus(`モデルを ${selectedModel} に設定しました。次の送信から反映します。`);
       });
     }
-    if (!models.length) addPanelRow("モデル一覧を取得できませんでした");
+    if (!models.length) addPanelRow("この接続先で利用できるモデル候補がありません");
   } catch (error) {
     showToolError("モデル", error);
   }
@@ -9626,6 +9632,11 @@ composer.addEventListener("submit", (event) => {
   }
   if (pendingSubmission) {
     addStatus("前回の送信確認中です。入力は残しています。");
+    return;
+  }
+  const modelError = modelPolicy.selectionError(currentThreadProvider(), lab?.model || selectedModel);
+  if (modelError) {
+    addStatus(modelError);
     return;
   }
   if (!ws || ws.readyState !== WebSocket.OPEN) {
