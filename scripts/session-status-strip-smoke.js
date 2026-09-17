@@ -287,6 +287,12 @@ async function main() {
     assert.equal(await summaryCount("running").textContent(), "処理中 1");
     assert.equal(await summaryCount("offline").textContent(), "接続確認 2");
     assert.equal(await summaryCount("error").count(), 0);
+    const offlineSelection = await page.evaluate(() => ({ thread: selectedThread, provider: currentThreadProvider(), bridge: activeBridgeId }));
+    await dismissFor("air", "codex", "shared").tap();
+    assert.equal(await summaryCount("offline").textContent(), "接続確認 1");
+    assert.deepEqual(await page.evaluate(() => ({ thread: selectedThread, provider: currentThreadProvider(), bridge: activeBridgeId })), offlineSelection);
+    await page.evaluate(() => refreshFleet({ force: true }));
+    assert.equal(await summaryCount("offline").textContent(), "接続確認 1", "the same outage stays dismissed while polling");
     await page.evaluate(() => applyTheme("cyberpunk"));
     assert.ok(await page.locator(".content-grid").evaluate((element) => element.getBoundingClientRect().height > 250));
     for (const width of [320, 520, 1024]) {
@@ -302,13 +308,19 @@ async function main() {
     for (const machine of ["mini", "air"]) for (const item of state[machine]) item.run = { state: "ready", updatedAt: 500 };
     await page.evaluate(() => refreshFleet({ force: true }));
     assert.equal(await page.locator("#sessionActivityStrip").isVisible(), false);
+    state.airOffline = true;
+    await page.evaluate(() => refreshFleet({ force: true }));
+    assert.equal(await summaryCount("offline").textContent(), "接続確認 2", "a later outage is shown again after recovery");
+    state.airOffline = false;
+    await page.evaluate(() => refreshFleet({ force: true }));
+    assert.equal(await page.locator("#sessionActivityStrip").isVisible(), false);
     state.mini[0].run = { state: "error", updatedAt: 600 };
     await page.evaluate(() => refreshFleet({ force: true }));
     await dismissFor("mini", "codex", "shared").click();
     assert.equal(await page.locator("#sessionActivityStrip").isVisible(), false);
     assert.ok(await page.locator("#prompt").evaluate((input) => input === document.activeElement));
     assert.deepEqual(errors, []);
-    console.log("Session strip verified: persistent completion/error/interruption dismissal, stopped state after reload, retained conversations/answers/drafts without sending prompts, new-event reappearance, touch/keyboard targets, visible mixed-state counts at 320–1024px, attention-first list updates, identity, orbit, reduced motion, stable scroll, full titles, question classification/correction, completion acknowledgement, provider/Mac navigation, offline safety and empty state.");
+    console.log("Session strip verified: persistent completion/error/interruption/connection dismissal, stopped state after reload, retained conversations/answers/drafts without sending prompts, new-event reappearance after recovery, touch/keyboard targets, visible mixed-state counts at 320–1024px, attention-first list updates, identity, orbit, reduced motion, stable scroll, full titles, question classification/correction, completion acknowledgement, provider/Mac navigation and empty state.");
   } finally {
     await browser?.close();
     await new Promise((resolve) => server.close(resolve));

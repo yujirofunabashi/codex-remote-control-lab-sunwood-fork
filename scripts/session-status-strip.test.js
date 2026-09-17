@@ -94,12 +94,28 @@ test("dismissing finished notices survives polling, missing observations and rel
   }
 });
 
-test("dismissal cannot hide running work, questions, approvals or connection trouble", () => {
-  for (const state of ["running", "question", "approval", "offline"]) {
+test("dismissal cannot hide running work, questions or approvals", () => {
+  for (const state of ["running", "question", "approval"]) {
     const records = reconcileSessionActivity([], [observation(state)]);
     assert.deepEqual(dismissSessionActivity(records, records[0].key), records);
     assert.equal(visibleSessionActivity(records).length, 1);
   }
+});
+
+test("connection trouble can be dismissed for one outage and returns after recovery", () => {
+  let records = reconcileSessionActivity([], [observation("offline")], { now: 100 });
+  const original = records[0];
+  records = dismissSessionActivity(records, original.key);
+  assert.equal(visibleSessionActivity(records).length, 0);
+  assert.equal(records.length, 1);
+  assert.equal(records[0].threadId, original.threadId);
+
+  records = reconcileSessionActivity(JSON.parse(JSON.stringify(records)), [observation("offline")], { now: 200 });
+  assert.equal(visibleSessionActivity(records).length, 0, "polling the same outage must not redraw it");
+
+  records = reconcileSessionActivity(records, [observation("ready")], { now: 300 });
+  records = reconcileSessionActivity(records, [observation("offline")], { now: 400 });
+  assert.equal(visibleSessionActivity(records).length, 1, "a later outage must be visible again");
 });
 
 test("dismissal stays scoped to Mac, provider and conversation and rearms after a new run", () => {

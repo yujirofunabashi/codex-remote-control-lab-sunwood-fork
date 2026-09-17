@@ -62,9 +62,16 @@
         : old?.completion || "";
       // Dismiss an event, not its conversation: polling/reloads keep it hidden,
       // while another result or an observed new run makes attention visible again.
+      const offlineVersion = (Number(old?.offlineVersion) || 0) + (status === "offline" && old?.status !== "offline" ? 1 : 0);
+      const offlineNotice = status === "offline"
+        ? (old?.status === "offline" && old.notice
+          ? old.notice
+          : JSON.stringify(["offline", offlineVersion]))
+        : "";
       const notice = status === "done" ? JSON.stringify(["done", completion])
         : status === "error" ? JSON.stringify(["error", observation.run?.turnId || "", observation.run?.updatedAt || "", observation.run?.label || ""])
         : status === "interrupted" ? JSON.stringify(["interrupted", observation.run?.turnId || observation.run?.updatedAt || ""])
+        : status === "offline" ? offlineNotice
         : old?.notice || "";
       const next = {
         key, group, ordinal,
@@ -76,6 +83,7 @@
         title: observation.title || old?.title || "名前未設定のチャット",
         workdir: observation.workdir || old?.workdir || "",
         status, completion,
+        offlineVersion,
         acknowledged: status === "running" ? "" : old?.acknowledged || "",
         notice,
         dismissedNotice: status === "running" ? "" : old?.dismissedNotice || "",
@@ -99,7 +107,7 @@
   }
 
   function canDismissSessionActivity(item = {}) {
-    return item.status === "done" || item.status === "error" || item.status === "interrupted";
+    return item.status === "done" || item.status === "error" || item.status === "interrupted" || item.status === "offline";
   }
 
   function dismissSessionActivity(records = [], key = "") {
