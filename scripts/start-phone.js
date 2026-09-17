@@ -1007,13 +1007,13 @@ function requestTokenFromHeaders(headers = {}) {
   if (bearer) return bearer[1].trim();
   const headerToken = headers["x-phone-token"] || headers["X-Phone-Token"];
   if (headerToken) return String(headerToken).trim();
-  const cookieToken = cookieValue(headers.cookie || headers.Cookie, "codex_phone_token");
-  if (cookieToken) return cookieToken;
+  // Cookies are shared across ports on a host and may belong to another slot.
+  // Prefer the explicit WebSocket key, just as HTTP prefers its auth header.
   for (const protocol of String(headers["sec-websocket-protocol"] || "").split(",")) {
     const trimmed = protocol.trim();
     if (trimmed.startsWith("phone-token.")) return decodeBase64Url(trimmed.slice("phone-token.".length));
   }
-  return "";
+  return cookieValue(headers.cookie || headers.Cookie, "codex_phone_token");
 }
 
 function requestToken(url) {

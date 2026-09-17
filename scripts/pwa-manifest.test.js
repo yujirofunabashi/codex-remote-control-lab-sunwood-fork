@@ -116,6 +116,21 @@ test("auth metadata and header helpers do not expose full token", () => {
   assert.equal(requestTokenFromHeaders({ authorization: `Bearer ${token}` }), token);
 });
 
+test("an explicit WebSocket key wins over a stale cookie, just like an API key", () => {
+  const token = "current-slot-key";
+  const headers = {
+    cookie: "codex_phone_token=old-or-other-slot-key",
+    "sec-websocket-protocol": `phone-bridge-v1, phone-token.${Buffer.from(token).toString("base64url")}`,
+  };
+  assert.equal(requestTokenFromHeaders(headers), token);
+  assert.equal(requestTokenFromHeaders({ ...headers, authorization: `Bearer ${token}` }), token);
+  assert.equal(requestTokenFromHeaders({ cookie: "codex_phone_token=cookie-only-key" }), "cookie-only-key");
+  assert.equal(requestTokenFromHeaders({
+    cookie: `codex_phone_token=${token}`,
+    "sec-websocket-protocol": `phone-token.${Buffer.from("wrong-explicit-key").toString("base64url")}`,
+  }), "wrong-explicit-key", "a rejected explicit key must not silently fall back to the cookie");
+});
+
 test("service worker avoids caching tokenized API and bridge traffic", () => {
   const source = fs.readFileSync(path.join(__dirname, "..", "public", "service-worker.js"), "utf8");
   assert.match(source, /CACHE_NAME/);

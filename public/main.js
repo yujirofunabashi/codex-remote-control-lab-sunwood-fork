@@ -361,8 +361,9 @@ const appBasePath = proxyBasePath();
 // so the icon iOS creates launches an app that can already reach the bridge -
 // unlike the root page, whose manifest start_url is deliberately token-free.
 function installEntryUrl() {
-  const url = new URL(appPath("/install"), location.href);
-  const value = effectiveBridgeToken(activeBridge()) || token;
+  const bridge = activeBridge();
+  const url = new URL(bridgeAbsoluteUrl("/install", bridge), location.href);
+  const value = effectiveBridgeToken(bridge);
   if (value) url.searchParams.set("token", value);
   // The icon opens in the AI this chat is using, so a Codex chat on a
   // Claude-default bridge yields a Codex icon, with its own picture and name.
@@ -1107,6 +1108,18 @@ function bridgeAbsoluteUrl(path, entry = activeBridge()) {
 function urlWithBridgeToken(url, entry = activeBridge()) {
   const bridge = entry || activeBridge();
   return new URL(bridgeAbsoluteUrl(url, bridge), location.href).href;
+}
+
+function bridgeNavigationUrl(entry = activeBridge()) {
+  const url = new URL(bridgeAbsoluteUrl("/", entry), location.href);
+  const state = getBridgeState(entry.id);
+  const provider = normalizeProviderName(state.threadProvider || state.activeProvider);
+  if (provider) url.searchParams.set("provider", provider);
+  // A new origin/tab may have no saved key. The fragment is read and removed
+  // at startup; unlike a query parameter it is not sent in HTTP requests.
+  const value = effectiveBridgeToken(entry);
+  if (value) url.hash = new URLSearchParams({ token: value }).toString();
+  return url.href;
 }
 
 function authHeadersForBridge(entry = activeBridge(), headers = {}, tokenOverride = "") {
@@ -5766,7 +5779,7 @@ function renderBridgeFleetSheet() {
       openButton.type = "button";
       openButton.className = "secondary";
       openButton.textContent = "別タブ";
-      openButton.addEventListener("click", () => window.open(urlWithBridgeToken("/", entry), "_blank", "noopener"));
+      openButton.addEventListener("click", () => window.open(bridgeNavigationUrl(entry), "_blank", "noopener"));
       const copyButton = document.createElement("button");
       copyButton.type = "button";
       copyButton.className = "secondary";
@@ -9143,13 +9156,13 @@ function canReconnect() {
 
 // A Home Screen app has storage of its own, so an icon added from a URL without
 // the key starts with nothing to connect with - and the old wording sent the
-// owner to the Mac to restart a bridge that was running perfectly. On the pages
-// an icon is made from, say what actually went wrong and what fixes it.
+// owner to the Mac to restart a bridge that was running perfectly. Explain
+// how to recover authentication without interrupting the running bridge.
 function tokenMissingMessage() {
   if (preserveEntryUrl) {
     return "接続キーがありません。ホーム画面に追加する URL には接続キーが必要です。Safari で接続キー付きの URL を一度開いてから、このページを開き直して追加してください。下の欄に接続キーを入力しても構いません。";
   }
-  return "token がありません。PC 側で `npm run phone` を再実行し、新しい URL を開いてください。";
+  return "この画面には接続キーがありません。接続できているアプリの接続先一覧から、この接続先の「別タブ」を開き直すか、下の欄に接続キーを入力してください。";
 }
 
 function renderTokenRecoveryForm(container) {
