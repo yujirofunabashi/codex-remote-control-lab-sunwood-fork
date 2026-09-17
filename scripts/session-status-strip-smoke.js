@@ -291,8 +291,10 @@ async function main() {
     await dismissFor("air", "codex", "shared").tap();
     assert.equal(await summaryCount("offline").textContent(), "接続確認 1");
     assert.deepEqual(await page.evaluate(() => ({ thread: selectedThread, provider: currentThreadProvider(), bridge: activeBridgeId })), offlineSelection);
+    await dismissFor("air", "claude", "permission").tap();
+    assert.equal(await summaryCount("offline").count(), 0, "the connection summary disappears after every outage is dismissed");
     await page.evaluate(() => refreshFleet({ force: true }));
-    assert.equal(await summaryCount("offline").textContent(), "接続確認 1", "the same outage stays dismissed while polling");
+    assert.equal(await summaryCount("offline").count(), 0, "the same outages stay dismissed while polling");
     await page.evaluate(() => applyTheme("cyberpunk"));
     assert.ok(await page.locator(".content-grid").evaluate((element) => element.getBoundingClientRect().height > 250));
     for (const width of [320, 520, 1024]) {
