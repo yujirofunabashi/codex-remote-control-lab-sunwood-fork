@@ -28,13 +28,32 @@
     const request = pendingApproval || run.pendingApproval;
     if (request?.params?.toolName === "AskUserQuestion" || /requestUserInput$/.test(request?.method || "")) return "question";
     if (request || run.state === "approval") return "approval";
-    if (["running", "streaming", "syncing", "interrupting"].includes(run.state)) return "running";
+    if (["running", "streaming", "interrupting"].includes(run.state)) return "running";
     if (["done", "completed"].includes(run.state)) return "done";
     if (["question", "question_required"].includes(run.state)) return "question";
     if (["error", "test_failed"].includes(run.state)) return "error";
     if (run.state === "interrupted") return "interrupted";
     if (["disconnected", "offline"].includes(run.state)) return "offline";
     return "idle";
+  }
+
+  function sameSessionActivityNotice(left, right) {
+    if (!left || !right) return false;
+    if (left === right) return true;
+    const a = safeJsonParse(left, [], { arrayOnly: true });
+    const b = safeJsonParse(right, [], { arrayOnly: true });
+    // Existing saved error notices include a reconnect timestamp and label.
+    // With a turn id, neither field identifies a new failure.
+    return a[0] === "error" && b[0] === "error" && Boolean(a[1]) && a[1] === b[1];
+  }
+
+  function sessionActivityDismissals(item = {}) {
+    return [...new Set([...(Array.isArray(item.dismissedNotices) ? item.dismissedNotices : []), item.dismissedNotice]
+      .filter((notice) => typeof notice === "string" && notice))];
+  }
+
+  function isSessionActivityDismissed(item = {}) {
+    return sessionActivityDismissals(item).some((notice) => sameSessionActivityNotice(notice, item.notice));
   }
 
   function reconcileSessionActivity(previous = [], observations = [], options = {}) {
@@ -54,6 +73,16 @@
       const old = records.get(key) || Array.from(records.values()).find((item) => item.bridgeId === observation.bridgeId && item.provider === observation.provider && item.threadId === observation.threadId);
       if (old && old.key !== key) records.delete(old.key);
       const status = sessionActivityStatus(observation.run, observation.pendingApproval);
+      const oldNoticeStatus = safeJsonParse(old?.notice, [old?.status], { arrayOnly: true })[0];
+      const clearedResult = ["done", "error", "interrupted"].includes(oldNoticeStatus)
+        && (isSessionActivityDismissed(old)
+          || (oldNoticeStatus === "done" && old?.completion && old.acknowledged === old.completion));
+      // Reading history is not new work. A lost connection also says nothing
+      // new about an already cleared result; do not recreate its shortcut.
+      if ((observation.run?.state === "syncing" && status === "idle") || (status === "offline" && clearedResult)) {
+        if (old) records.set(key, { ...old, key, bridgeId: observation.bridgeId, machineKey: observation.machineKey, machineLabel: observation.machineLabel });
+        continue;
+      }
       if (!old && status === "idle") continue;
       const group = JSON.stringify([observation.machineKey || observation.bridgeId, observation.provider]);
       const ordinal = old?.ordinal || 1 + Math.max(0, ...Array.from(records.values()).filter((item) => item.group === group).map((item) => item.ordinal || 0));
@@ -87,6 +116,10 @@
         acknowledged: status === "running" ? "" : old?.acknowledged || "",
         notice,
         dismissedNotice: status === "running" ? "" : old?.dismissedNotice || "",
+        // Keep every explicitly cleared event, not only the last one: delayed
+        // polls/reconnects may report an older turn after a newer one was closed.
+        // Legacy runs without ids cannot distinguish reused event signatures.
+        dismissedNotices: status === "running" && !observation.run?.turnId ? [] : sessionActivityDismissals(old),
       };
       // An idle reconnect or an expired watcher is not evidence that the
       // owner has read the completed answer.
@@ -99,11 +132,13 @@
   function visibleSessionActivity(records = []) {
     return records.filter((item) => item.status !== "idle"
       && !(item.status === "done" && item.acknowledged === item.completion)
-      && !(canDismissSessionActivity(item) && item.notice && item.dismissedNotice === item.notice));
+      && !(canDismissSessionActivity(item) && isSessionActivityDismissed(item)));
   }
 
   function acknowledgeSessionActivity(records = [], key = "") {
-    return records.map((item) => item.key === key && item.status === "done" ? { ...item, acknowledged: item.completion } : item);
+    return records.map((item) => item.key === key && item.status === "done"
+      ? { ...item, acknowledged: item.completion, dismissedNotices: [...new Set([...sessionActivityDismissals(item), item.notice || JSON.stringify(["done", item.completion])])] }
+      : item);
   }
 
   function canDismissSessionActivity(item = {}) {
@@ -116,7 +151,7 @@
       // Older browser records may outlive their server watcher, so no new
       // observation is guaranteed to supply the event identifier for them.
       const notice = item.notice || JSON.stringify([item.status, item.completion || ""]);
-      return { ...item, notice, dismissedNotice: notice };
+      return { ...item, notice, dismissedNotice: notice, dismissedNotices: [...new Set([...sessionActivityDismissals(item), notice])] };
     });
   }
 

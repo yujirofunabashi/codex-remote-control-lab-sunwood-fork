@@ -66,16 +66,21 @@ const sessionActivityCount = document.querySelector("#sessionActivityCount");
 const sessionActivityDialog = document.querySelector("#sessionActivityDialog");
 const sessionActivityList = document.querySelector("#sessionActivityList");
 const sessionActivityStorageKey = "codexPhoneSessionActivity:v1";
-let sessionActivityRecords = (() => {
+let sessionActivityStored = safeReadStorage(localStorage, sessionActivityStorageKey, null);
+function readSessionActivity() {
   try {
-    const value = JSON.parse(safeReadStorage(localStorage, sessionActivityStorageKey, "[]"));
+    const value = JSON.parse(sessionActivityStored || "[]");
     return Array.isArray(value) ? value.filter((item) => item && typeof item.key === "string" && typeof item.threadId === "string" && ["codex", "claude", "gemini"].includes(item.provider) && Number.isInteger(item.ordinal) && item.ordinal > 0 && ["running", "done", "question", "approval", "error", "offline", "interrupted", "idle"].includes(item.status)) : [];
   } catch { return []; }
-})();
+}
+let sessionActivityRecords = readSessionActivity();
 let sessionActivitySaved = JSON.stringify(sessionActivityRecords);
 let sessionActivityViewRequest = null;
 const sessionActivityLabels = { running: "処理中", done: "完了・未確認", question: "返信待ち", approval: "許可待ち", error: "エラー", offline: "接続・状態を確認", interrupted: "中断" };
 const sessionActivityOrder = ["question", "approval", "error", "offline", "done", "interrupted", "running"];
+window.addEventListener("storage", (event) => {
+  if (event.storageArea === localStorage && event.key === sessionActivityStorageKey) renderSessionActivity();
+});
 const log = document.querySelector("#log");
 const logShell = document.querySelector("#logShell");
 const chatLatestButton = document.querySelector("#chatLatestButton");
@@ -1965,7 +1970,7 @@ function setRunState(state, label) {
   const bridgeState = getBridgeState(activeBridgeId);
   bridgeState.runState = state;
   bridgeState.lastEventAt = Date.now();
-  if (selectedThread && ["running", "streaming", "approval", "question", "syncing", "interrupting", "done", "interrupted"].includes(state)) {
+  if (selectedThread && ["running", "streaming", "approval", "question", "interrupting", "done", "interrupted"].includes(state)) {
     const key = `${currentThreadProvider()}:${selectedThread}`;
     const previous = bridgeState.sessionRuns.get(key);
     bridgeState.sessionRuns.set(key, {
@@ -5831,7 +5836,11 @@ function sessionActivityObservations() {
       if (!state.connected && state.lastError) {
         // Keep the last known completed answer, but do not invent progress
         // (or a task failure) when only the connection has failed.
-        if (uiUtils.sessionActivityStatus(run.run, run.pendingApproval) !== "done") {
+        const status = uiUtils.sessionActivityStatus(run.run, run.pendingApproval);
+        // Merely opening an idle chat must not create a new connection-warning
+        // shortcut. Existing running records are handled below if unobserved.
+        if (status === "idle") continue;
+        if (status !== "done") {
           observation.run = { state: "offline" };
           observation.pendingApproval = null;
         }
@@ -5855,12 +5864,28 @@ function currentSessionActivityKey() {
 function saveSessionActivity() {
   const serialized = JSON.stringify(sessionActivityRecords);
   if (serialized !== sessionActivitySaved) {
-    safeWriteStorage(localStorage, sessionActivityStorageKey, serialized);
+    try {
+      localStorage.setItem(sessionActivityStorageKey, serialized);
+      sessionActivityStored = serialized;
+    } catch {
+      // Keep the current view's dismissal even when browser storage is full.
+    }
     sessionActivitySaved = serialized;
   }
 }
 
+function refreshSavedSessionActivity() {
+  // Another open view may have cleared a notice since this view last rendered.
+  // Read the current value, not a queued storage event's potentially old value.
+  const stored = safeReadStorage(localStorage, sessionActivityStorageKey, sessionActivityStored);
+  if (stored === sessionActivityStored) return;
+  sessionActivityStored = stored;
+  sessionActivityRecords = readSessionActivity();
+  sessionActivitySaved = JSON.stringify(sessionActivityRecords);
+}
+
 function acknowledgeCurrentSessionActivity() {
+  refreshSavedSessionActivity();
   sessionActivityRecords = uiUtils.acknowledgeSessionActivity(sessionActivityRecords, currentSessionActivityKey());
   saveSessionActivity();
   renderSessionActivity();
@@ -5919,6 +5944,7 @@ function renderSessionActivityButtons(container, items, expanded = false) {
       dismiss.className = "session-activity-dismiss";
       dismiss.textContent = "×";
       dismiss.addEventListener("click", () => {
+        refreshSavedSessionActivity();
         sessionActivityRecords = uiUtils.dismissSessionActivity(sessionActivityRecords, entry.dataset.sessionKey);
         saveSessionActivity();
         renderSessionActivity();
@@ -5980,6 +6006,7 @@ function renderSessionActivitySummary(items) {
 
 function renderSessionActivity() {
   if (!sessionActivityStrip) return;
+  refreshSavedSessionActivity();
   sessionActivityRecords = uiUtils.reconcileSessionActivity(sessionActivityRecords, sessionActivityObservations(), { bridgeIds: (bridgeRegistry.bridges || []).map((entry) => entry.id) });
   saveSessionActivity();
   const items = uiUtils.visibleSessionActivity(sessionActivityRecords);
@@ -6314,7 +6341,9 @@ async function setActiveBridge(bridgeId, { silent = false, reconnect = true, fol
   assistantEntry = null;
   liveOutputGroup = "";
   setReady(false);
-  setRunState(getBridgeState(bridgeId).runState || "connecting");
+  // The bridge summary may describe another conversation. Only this chat's
+  // ready/run response may mark it running and rearm its cleared shortcut.
+  setRunState("connecting");
   renderHistory([]);
   renderThreadList();
   renderArtifactIndex(artifactItems);
@@ -9578,9 +9607,8 @@ function connect({ preserveHistory = false, freshThread = false, workdir = "" } 
       return;
     }
     if (msg.type === "status") {
-      if (/履歴同期を更新しました/.test(msg.text || "")) setRunState("done", "完了・履歴同期済み");
-      else if (/履歴同期に失敗/.test(msg.text || "")) setRunState("error", "履歴同期に失敗");
-      else if (/履歴同期/.test(msg.text || "")) setRunState("syncing", msg.text);
+      // History-copy progress belongs in the log. It is not a new AI turn,
+      // completion or failure, and must not rearm a dismissed result.
       addEntry("status", msg.text);
     }
   });

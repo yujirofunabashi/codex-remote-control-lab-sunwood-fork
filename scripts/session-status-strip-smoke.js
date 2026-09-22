@@ -34,10 +34,11 @@ async function main() {
   let browser;
   try {
     browser = await (process.argv.includes("--webkit") ? webkit : chromium).launch();
-    const page = await browser.newPage({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, serviceWorkers: "block" });
+    const context = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, serviceWorkers: "block" });
+    const page = await context.newPage();
     const errors = [];
     page.on("pageerror", (error) => errors.push(error.message));
-    await page.addInitScript(({ airOrigin, fixtures }) => {
+    await context.addInitScript(({ airOrigin, fixtures }) => {
       window.__runStates = JSON.parse(sessionStorage.getItem("session-smoke-fixtures") || "null") || fixtures;
       window.__socketUrls = [];
       window.__sentMessages = [];
@@ -70,7 +71,7 @@ async function main() {
       localStorage.setItem("codexPhoneBridgeTokens:v1", JSON.stringify({ air: "fixture-token" }));
       localStorage.setItem("codexPhonePwaInstallHint:v1", "dismissed");
     }, { airOrigin, fixtures: { mini: state.mini, air: state.air } });
-    await page.route("**/api/**", async (route) => {
+    await context.route("**/api/**", async (route) => {
       const url = new URL(route.request().url());
       const headers = { "access-control-allow-origin": origin, "access-control-allow-credentials": "true", "access-control-allow-headers": "content-type, authorization, x-phone-token", "access-control-allow-methods": "GET, POST, OPTIONS" };
       if (route.request().method() === "OPTIONS") return route.fulfill({ status: 204, headers });
@@ -96,6 +97,15 @@ async function main() {
     }
     const summary = () => page.locator(".session-activity-total").allTextContents();
     const summaryCount = (status) => page.locator(`.session-activity-total[data-state="${status}"]`);
+    await page.waitForFunction(() => connectionReady);
+    await page.evaluate(async () => {
+      await setActiveBridge("air", { silent: true, reconnect: false });
+      await refreshFleet({ force: true });
+      await setActiveBridge(homeBridgeId, { silent: true, reconnect: false });
+    });
+    assert.equal(await page.evaluate(() => sessionActivityRecords.some(item => item.threadId === "idle")), false, "switching machines must not assign another conversation's running state to an idle chat");
+    await page.evaluate(() => connect());
+    await page.waitForFunction(() => connectionReady);
     assert.deepEqual(await summary(), ["返信待ち 1", "許可待ち 1", "エラー 1", "未確認完了 1", "処理中 1"]);
     assert.match(await page.locator("#sessionActivityCount").getAttribute("aria-label"), /完了・未確認 1件/);
     const byKey = (machine, provider, threadId) => page.locator(`.session-activity-chip[data-session-key='${JSON.stringify([machine.toLowerCase(), provider, threadId])}']`);
@@ -144,6 +154,11 @@ async function main() {
     await page.locator("#prompt").fill("片づけ前の下書き");
     const selectionBefore = await page.evaluate(() => ({ thread: selectedThread, provider: currentThreadProvider(), bridge: activeBridgeId, sockets: window.__socketUrls.length }));
     const recordsBefore = await page.evaluate(() => sessionActivityRecords.map(({ key, threadId, workdir, title, status }) => ({ key, threadId, workdir, title, status })));
+    // A second open view must not overwrite a newer dismissal with its old
+    // in-memory records when its next status poll renders the strip.
+    const sibling = await context.newPage();
+    await sibling.goto(`${origin}/?token=fixture-token&thread=sibling-idle&provider=codex`, { waitUntil: "domcontentloaded" });
+    await sibling.waitForFunction(() => connectionReady && document.querySelectorAll(".session-activity-chip").length === 5);
     assert.equal(await page.locator("#sessionActivityItems .session-activity-dismiss:visible").count(), 2);
     const targetSize = await dismissFor("mini", "codex", "finished").boundingBox();
     assert.ok(targetSize.width >= 24 && targetSize.width <= 28 && targetSize.height >= 24, "dismiss must stay compact and tappable");
@@ -152,10 +167,14 @@ async function main() {
     assert.ok(targetSize.x >= nameSize.x + nameSize.width && targetSize.x + targetSize.width <= capsuleSize.x + capsuleSize.width, "dismiss must fit inside the capsule without covering its name");
     await dismissFor("mini", "codex", "finished").tap();
     assert.equal(await summaryCount("done").count(), 0);
+    await sibling.evaluate(() => renderSessionActivity());
+    assert.equal(await sibling.locator('.session-activity-chip[data-state="done"]').count(), 0, "another open view must respect the saved dismissal");
     await page.locator("#sessionActivityCount").click();
     const errorDismiss = page.locator('.session-activity-row[data-state="error"]').locator("..").locator(".session-activity-dismiss");
     await errorDismiss.focus();
     await errorDismiss.press("Enter");
+    await sibling.waitForFunction(() => !document.querySelector('.session-activity-chip[data-state="error"]'), null, { timeout: 3000 });
+    await sibling.close();
     assert.deepEqual(await listStates(), ["question", "approval", "running"]);
     assert.equal(await page.locator("#sessionActivityList .session-activity-dismiss:visible").count(), 0);
     assert.ok(await page.locator("#sessionActivityList").evaluate((list) => list.contains(document.activeElement)), "focus stays in the open list after dismissal");
@@ -251,6 +270,25 @@ async function main() {
     }
     await dismissFor("mini", "codex", "finished").click();
     assert.equal(await byKey("mini", "codex", "finished").count(), 0);
+    await page.evaluate(() => {
+      window.__socket.emit({ type: "status", text: "履歴同期中" });
+      window.__socket.emit({ type: "status", text: "履歴同期を更新しました" });
+      window.__socket.emit({ type: "status", text: "履歴同期に失敗" });
+    });
+    assert.equal(await byKey("mini", "codex", "finished").count(), 0, "history synchronization must not reopen a dismissed shortcut");
+    assert.equal(await page.locator("#runStateLabel").textContent(), "中断しました", "history copying must not change the actual turn state");
+    await page.evaluate(run => window.__socket.emit({ type: "runState", threadId: "finished", ...run }), state.mini[1].run);
+    assert.equal(await byKey("mini", "codex", "finished").count(), 0);
+    await page.evaluate(() => {
+      const state = getBridgeState();
+      state.connected = false;
+      state.lastError = "fixture connection outage";
+      renderSessionActivity();
+    });
+    assert.equal(await byKey("mini", "codex", "finished").count(), 0, "an outage must not recreate a dismissed interrupted conversation");
+    assert.equal(await byKey("mini", "codex", "idle").count(), 0, "an outage must not invent a shortcut for an idle conversation");
+    await page.evaluate(() => refreshFleet({ force: true }));
+    assert.equal(await byKey("mini", "codex", "finished").count(), 0);
     assert.equal(await page.locator("#prompt").inputValue(), "中断後の未送信メモ");
     assert.equal(await page.getByText("中断前の返答", { exact: true }).count(), 1);
     assert.deepEqual(await page.evaluate(() => window.__sentMessages), []);
@@ -285,7 +323,7 @@ async function main() {
     await page.evaluate(() => refreshFleet({ force: true }));
     assert.equal(await byKey("air", "codex", "shared").getAttribute("data-state"), "offline");
     assert.equal(await summaryCount("running").textContent(), "処理中 1");
-    assert.equal(await summaryCount("offline").textContent(), "接続確認 2");
+    assert.equal(await summaryCount("offline").textContent(), "接続確認 2", JSON.stringify(await page.evaluate(() => uiUtils.visibleSessionActivity(sessionActivityRecords).map(({ key, status }) => ({ key, status })))));
     assert.equal(await summaryCount("error").count(), 0);
     const offlineSelection = await page.evaluate(() => ({ thread: selectedThread, provider: currentThreadProvider(), bridge: activeBridgeId }));
     await dismissFor("air", "codex", "shared").tap();
@@ -312,17 +350,42 @@ async function main() {
     assert.equal(await page.locator("#sessionActivityStrip").isVisible(), false);
     state.airOffline = true;
     await page.evaluate(() => refreshFleet({ force: true }));
-    assert.equal(await summaryCount("offline").textContent(), "接続確認 2", "a later outage is shown again after recovery");
+    assert.equal(await page.locator("#sessionActivityStrip").isVisible(), false, "idle conversations do not return as connection warnings");
     state.airOffline = false;
+    for (const item of state.air) item.run = { state: "running", turnId: `new-${item.threadId}`, updatedAt: 550 };
+    await page.evaluate(() => refreshFleet({ force: true }));
+    assert.equal(await summaryCount("running").textContent(), "処理中 2");
+    state.airOffline = true;
+    await page.evaluate(() => refreshFleet({ force: true }));
+    assert.equal(await summaryCount("offline").textContent(), "接続確認 2", "an outage during genuinely new work must still appear");
+    state.airOffline = false;
+    for (const item of state.air) item.run = { state: "ready", updatedAt: 575 };
     await page.evaluate(() => refreshFleet({ force: true }));
     assert.equal(await page.locator("#sessionActivityStrip").isVisible(), false);
-    state.mini[0].run = { state: "error", updatedAt: 600 };
+    state.mini[0].run = { state: "error", turnId: "failed-one", updatedAt: 600 };
     await page.evaluate(() => refreshFleet({ force: true }));
     await dismissFor("mini", "codex", "shared").click();
     assert.equal(await page.locator("#sessionActivityStrip").isVisible(), false);
+    state.mini[0].run = { state: "error", turnId: "failed-one", updatedAt: 700, label: "エラー" };
+    await page.evaluate(() => refreshFleet({ force: true }));
+    assert.equal(await page.locator("#sessionActivityStrip").isVisible(), false, "the same failure stays dismissed despite a reconnect timestamp");
+    state.mini[0].run = { state: "error", turnId: "failed-two", updatedAt: 800 };
+    await page.evaluate(() => refreshFleet({ force: true }));
+    assert.equal(await summaryCount("error").textContent(), "エラー 1", "a new failed turn still appears");
+    await page.evaluate(() => {
+      window.__originalSetItem = Storage.prototype.setItem;
+      Storage.prototype.setItem = function(key, value) {
+        if (key === "codexPhoneSessionActivity:v1") throw new DOMException("fixture quota exceeded", "QuotaExceededError");
+        return window.__originalSetItem.call(this, key, value);
+      };
+    });
+    await dismissFor("mini", "codex", "shared").click();
+    await page.evaluate(() => refreshFleet({ force: true }));
+    assert.equal(await page.locator("#sessionActivityStrip").isVisible(), false, "unavailable storage must not undo the current view's dismissal");
+    await page.evaluate(() => { Storage.prototype.setItem = window.__originalSetItem; });
     assert.ok(await page.locator("#prompt").evaluate((input) => input === document.activeElement));
     assert.deepEqual(errors, []);
-    console.log("Session strip verified: persistent completion/error/interruption/connection dismissal, stopped state after reload, retained conversations/answers/drafts without sending prompts, new-event reappearance after recovery, touch/keyboard targets, visible mixed-state counts at 320–1024px, attention-first list updates, identity, orbit, reduced motion, stable scroll, full titles, question classification/correction, completion acknowledgement, provider/Mac navigation and empty state.");
+    console.log("Session strip verified: dismissal across polling, reload, history sync, connection outages, same-turn timestamp changes and simultaneous views; in-memory dismissal when storage is unavailable; stopped state, retained conversations/answers/drafts without sending prompts, genuinely new events, touch/keyboard targets, 320–1024px layout, attention-first list, identity, orbit, reduced motion, stable scroll, full titles, question classification/correction, acknowledgement, provider/Mac navigation and empty state.");
   } finally {
     await browser?.close();
     await new Promise((resolve) => server.close(resolve));

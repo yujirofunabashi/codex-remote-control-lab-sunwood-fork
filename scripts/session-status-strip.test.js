@@ -15,7 +15,8 @@ test("identities include Mac, provider and conversation; two bridges on one Mac 
 });
 
 test("only executing states count as processing; cancellation and lost connection are not completion", () => {
-  for (const state of ["running", "streaming", "syncing", "interrupting"]) assert.equal(sessionActivityStatus({ state }), "running");
+  for (const state of ["running", "streaming", "interrupting"]) assert.equal(sessionActivityStatus({ state }), "running");
+  assert.equal(sessionActivityStatus({ state: "syncing" }), "idle", "reading history is not AI execution");
   for (const state of ["done", "question", "approval", "error", "interrupted", "offline"]) assert.notEqual(sessionActivityStatus({ state }), "running");
   assert.equal(sessionActivityStatus({ state: "running" }, { id: "approval" }), "approval");
   assert.equal(sessionActivityStatus({ state: "interrupted" }), "interrupted");
@@ -167,4 +168,66 @@ test("an interrupted notice stays dismissed across reconnects but a different in
   records = dismissSessionActivity(records, records[0].key);
   records = reconcileSessionActivity(records, [observation("running")]);
   assert.equal(visibleSessionActivity(records).length, 1, "dismissal never hides subsequent work");
+});
+
+test("history synchronization does not reopen dismissed results or acknowledged answers", () => {
+  for (const state of ["done", "error", "interrupted"]) {
+    const result = observation(state, { run: { state, turnId: "finished-turn", updatedAt: 100 } });
+    for (const clear of state === "done" ? [dismissSessionActivity, acknowledgeSessionActivity] : [dismissSessionActivity]) {
+      let records = reconcileSessionActivity([], [result]);
+      records = clear(records, records[0].key);
+      records = reconcileSessionActivity(JSON.parse(JSON.stringify(records)), [observation("syncing")]);
+      assert.equal(visibleSessionActivity(records).length, 0, "reading history is not a new run");
+      records = reconcileSessionActivity(records, [result]);
+      assert.equal(visibleSessionActivity(records).length, 0, "the same result stays cleared after synchronization");
+      records = reconcileSessionActivity(records, [observation("running", { run: { state: "running", turnId: "next-turn" } })]);
+      assert.equal(visibleSessionActivity(records).length, 1, "real new work remains visible");
+    }
+  }
+  assert.equal(visibleSessionActivity(reconcileSessionActivity([], [observation("syncing")])).length, 0);
+});
+
+test("a dismissed terminal result does not return as connection trouble during an outage", () => {
+  for (const state of ["done", "error", "interrupted"]) {
+    const result = observation(state, { run: { state, turnId: "finished-turn", updatedAt: 100 } });
+    let records = reconcileSessionActivity([], [result]);
+    records = dismissSessionActivity(records, records[0].key);
+    for (let retry = 0; retry < 3; retry++) {
+      records = reconcileSessionActivity(JSON.parse(JSON.stringify(records)), [observation("offline")]);
+      assert.equal(visibleSessionActivity(records).length, 0, "connection checks must not recreate a closed result");
+      records = reconcileSessionActivity(records, [observation("ready")]);
+      records = reconcileSessionActivity(records, [result]);
+      assert.equal(visibleSessionActivity(records).length, 0);
+    }
+    records = reconcileSessionActivity(records, [observation(state, { run: { state, turnId: "next-turn", updatedAt: 200 } })]);
+    assert.equal(visibleSessionActivity(records).length, 1, "a genuinely different result still appears");
+  }
+});
+
+test("the same failed turn stays dismissed when reconnecting changes its timestamp or label", () => {
+  const failed = (turnId, updatedAt, label) => observation("error", { run: { state: "error", turnId, updatedAt, label } });
+  let records = reconcileSessionActivity([], [failed("failed-turn", 100, "開始に失敗")]);
+  records = dismissSessionActivity(records, records[0].key);
+  records = reconcileSessionActivity(JSON.parse(JSON.stringify(records)), [failed("failed-turn", 200, "エラー")]);
+  assert.equal(visibleSessionActivity(records).length, 0);
+  records = reconcileSessionActivity(records, [failed("next-turn", 300, "エラー")]);
+  assert.equal(visibleSessionActivity(records).length, 1);
+});
+
+test("dismissing a newer result does not forget older dismissed turns arriving late", () => {
+  for (const state of ["done", "error", "interrupted"]) {
+    const result = (turnId, updatedAt) => observation(state, { run: { state, turnId, updatedAt } });
+    let records = reconcileSessionActivity([], [result("first", 100)]);
+    records = dismissSessionActivity(records, records[0].key);
+    records = reconcileSessionActivity(records, [observation("running", { run: { state: "running", turnId: "second", updatedAt: 200 } })]);
+    assert.equal(visibleSessionActivity(records).length, 1);
+    records = reconcileSessionActivity(records, [result("second", 300)]);
+    records = dismissSessionActivity(records, records[0].key);
+    for (const turnId of ["first", "second", "first"]) {
+      records = reconcileSessionActivity(JSON.parse(JSON.stringify(records)), [result(turnId, 400)]);
+      assert.equal(visibleSessionActivity(records).length, 0, "late replies for previously closed turns stay closed");
+    }
+    records = reconcileSessionActivity(records, [result("third", 500)]);
+    assert.equal(visibleSessionActivity(records).length, 1);
+  }
 });
