@@ -58,7 +58,10 @@
 
   function reconcileSessionActivity(previous = [], observations = [], options = {}) {
     const knownBridges = options.bridgeIds && new Set(options.bridgeIds);
-    const records = new Map(previous.filter((item) => item?.key && (!knownBridges || knownBridges.has(item.bridgeId))).map((item) => [item.key, { ...item }]));
+    const confirmedNumber = (value) => Number.isSafeInteger(value) && value > 0 ? value : null;
+    // Browser-local encounter order is not a conversation identity. Old saved
+    // ordinals migrate only when the owning machine confirms their replacement.
+    const records = new Map(previous.filter((item) => item?.key && (!knownBridges || knownBridges.has(item.bridgeId))).map((item) => [item.key, { ...item, ordinal: confirmedNumber(item.sessionNumber) }]));
     const sources = new Map();
     for (const observation of observations) {
       const key = sessionActivityKey(observation);
@@ -73,6 +76,7 @@
       const old = records.get(key) || Array.from(records.values()).find((item) => item.bridgeId === observation.bridgeId && item.provider === observation.provider && item.threadId === observation.threadId);
       if (old && old.key !== key) records.delete(old.key);
       const status = sessionActivityStatus(observation.run, observation.pendingApproval);
+      const ordinal = confirmedNumber(observation.sessionNumber) || confirmedNumber(old?.sessionNumber);
       const oldNoticeStatus = safeJsonParse(old?.notice, [old?.status], { arrayOnly: true })[0];
       const clearedResult = ["done", "error", "interrupted"].includes(oldNoticeStatus)
         && (isSessionActivityDismissed(old)
@@ -80,12 +84,11 @@
       // Reading history is not new work. A lost connection also says nothing
       // new about an already cleared result; do not recreate its shortcut.
       if ((observation.run?.state === "syncing" && status === "idle") || (status === "offline" && clearedResult)) {
-        if (old) records.set(key, { ...old, key, bridgeId: observation.bridgeId, machineKey: observation.machineKey, machineLabel: observation.machineLabel });
+        if (old) records.set(key, { ...old, key, ordinal, sessionNumber: ordinal, bridgeId: observation.bridgeId, machineKey: observation.machineKey, machineLabel: observation.machineLabel });
         continue;
       }
       if (!old && status === "idle") continue;
       const group = JSON.stringify([observation.machineKey || observation.bridgeId, observation.provider]);
-      const ordinal = old?.ordinal || 1 + Math.max(0, ...Array.from(records.values()).filter((item) => item.group === group).map((item) => item.ordinal || 0));
       const completion = status === "done"
         ? String(observation.run?.turnId || observation.run?.updatedAt || (old?.status === "done" && old.completion) || options.now || Date.now())
         : old?.completion || "";
@@ -103,7 +106,7 @@
         : status === "offline" ? offlineNotice
         : old?.notice || "";
       const next = {
-        key, group, ordinal,
+        key, group, ordinal, sessionNumber: ordinal,
         bridgeId: observation.bridgeId,
         machineKey: observation.machineKey,
         machineLabel: observation.machineLabel,

@@ -7,6 +7,7 @@ const path = require("path");
 const { execFileSync, spawn } = require("child_process");
 const WebSocket = require("ws");
 const { createBuildTracker } = require("./bridge-build");
+const { SessionNumberStore } = require("./session-number-store");
 const { bridgeKeyForRequest, bridgeMatchesWorkdir, shouldDisposeIdleBridge, shouldPromoteBridgeKey, shouldReplaceBridgeForWorkdir } = require("./bridge-state");
 const {
   RegistryConflictError,
@@ -94,6 +95,8 @@ function loadEnvFile(filePath) {
 
 const launchEnvKeys = new Set(Object.keys(process.env));
 loadEnvFile(path.join(root, ".env"));
+// Construction is read-only; numbers are allocated only on authenticated requests.
+const sessionNumbers = new SessionNumberStore();
 
 function hasLaunchEnv(key) {
   return launchEnvKeys.has(key);
@@ -5819,6 +5822,21 @@ async function main() {
     if (url.pathname === "/api/bridge/info") {
       if (!requireToken(url, phoneToken, res)) return;
       sendJson(res, 200, bridgeInfoPayload());
+      return;
+    }
+    if (url.pathname === "/api/session-numbers") {
+      if (!requireToken(url, phoneToken, res)) return;
+      if (req.method !== "POST") {
+        sendJson(res, 405, { error: "method not allowed" });
+        return;
+      }
+      try {
+        const body = await readJsonBody(req);
+        sendJson(res, 200, { sessions: sessionNumbers.assign(body.sessions) });
+      } catch (error) {
+        debugLog("session.numbers.error", { message: error.message });
+        sendJson(res, error instanceof TypeError ? 400 : 503, { error: "会話番号を確認できません。保存済みの番号は変更していません。" });
+      }
       return;
     }
     // The phone's own copy of the bridge list dies with the Home Screen icon,

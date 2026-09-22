@@ -70,7 +70,7 @@ let sessionActivityStored = safeReadStorage(localStorage, sessionActivityStorage
 function readSessionActivity() {
   try {
     const value = JSON.parse(sessionActivityStored || "[]");
-    return Array.isArray(value) ? value.filter((item) => item && typeof item.key === "string" && typeof item.threadId === "string" && ["codex", "claude", "gemini"].includes(item.provider) && Number.isInteger(item.ordinal) && item.ordinal > 0 && ["running", "done", "question", "approval", "error", "offline", "interrupted", "idle"].includes(item.status)) : [];
+    return Array.isArray(value) ? value.filter((item) => item && typeof item.key === "string" && typeof item.threadId === "string" && ["codex", "claude", "gemini"].includes(item.provider) && (item.ordinal == null || (Number.isSafeInteger(item.ordinal) && item.ordinal > 0)) && ["running", "done", "question", "approval", "error", "offline", "interrupted", "idle"].includes(item.status)) : [];
   } catch { return []; }
 }
 let sessionActivityRecords = readSessionActivity();
@@ -1077,6 +1077,9 @@ function getBridgeState(bridgeId = activeBridgeId) {
       status: null,
       sessionRuns: new Map(),
       sessionTitles: new Map(),
+      sessionNumbers: new Map(),
+      sessionNumbersPending: false,
+      sessionNumbersRetryAt: 0,
       statusRequestedAt: 0,
       threadCache: [],
       hiddenProjects: [],
@@ -5831,6 +5834,7 @@ function sessionActivityObservations() {
       const thread = state.sessionTitles.get(key) || (entry.id === activeBridgeId ? threadCache : state.threadCache).find((item) => item.id === run.threadId && item.provider === run.provider);
       const observation = {
         ...run, bridgeId: entry.id, machineKey: bridgeMachineKey(entry, state), machineLabel: shortMachineName(entry, state),
+        sessionNumber: state.sessionNumbers.get(key),
         title: thread ? titleForThread(thread) : "", workdir: run.workdir || thread?.cwd || "",
       };
       if (!state.connected && state.lastError) {
@@ -5859,6 +5863,51 @@ function sessionActivityObservations() {
 
 function currentSessionActivityKey() {
   return uiUtils.sessionActivityKey({ bridgeId: activeBridgeId, machineKey: bridgeMachineKey(activeBridge() || {}, getBridgeState()), provider: currentThreadProvider(), threadId: selectedThread });
+}
+
+function refreshSessionActivityNumbers() {
+  for (const entry of bridgeRegistry.bridges || []) {
+    const state = getBridgeState(entry.id);
+    if (!state.info || state.sessionNumbersPending || state.sessionNumbersRetryAt > Date.now()) continue;
+    const machineKey = bridgeMachineKey(entry, state);
+    const sessions = sessionActivityRecords
+      .filter(item => item.bridgeId === entry.id && !state.sessionNumbers.has(`${item.provider}:${item.threadId}`))
+      .slice(0, 64).map(({ provider, threadId }) => ({ provider, threadId }));
+    if (!sessions.length) continue;
+    state.sessionNumbersPending = true;
+    fetchJsonForBridge(entry, "/api/session-numbers", { method: "POST", body: JSON.stringify({ sessions }) }).then(result => {
+      if (bridgeById(entry.id)?.baseUrl !== entry.baseUrl || bridgeMachineKey(entry, state) !== machineKey) return;
+      if (!Array.isArray(result.sessions) || result.sessions.length !== sessions.length) throw new Error("番号を確認できません");
+      const requested = new Set(sessions.map(item => `${item.provider}:${item.threadId}`));
+      const confirmed = new Map();
+      for (const item of result.sessions) {
+        const key = `${item.provider}:${item.threadId}`;
+        if (!requested.has(key) || confirmed.has(key) || !Number.isSafeInteger(item.sessionNumber) || item.sessionNumber <= 0) throw new Error("番号を確認できません");
+        confirmed.set(key, item.sessionNumber);
+      }
+      // All slots on one machine share this number store. Keep duplicate
+      // connections in step without another request or changing the open chat.
+      for (const peer of bridgeRegistry.bridges || []) {
+        const peerState = getBridgeState(peer.id);
+        if (bridgeMachineKey(peer, peerState) === machineKey) {
+          for (const [key, number] of confirmed) peerState.sessionNumbers.set(key, number);
+        }
+      }
+      refreshSavedSessionActivity();
+      sessionActivityRecords = sessionActivityRecords.map(item => {
+        const number = item.machineKey === machineKey && confirmed.get(`${item.provider}:${item.threadId}`);
+        return number ? { ...item, sessionNumber: number, ordinal: number } : item;
+      });
+      saveSessionActivity();
+    }).catch(() => {
+      // Old/offline bridges do not get a made-up browser-local replacement.
+      // Number lookup failure must not turn a healthy conversation into error.
+      state.sessionNumbersRetryAt = Date.now() + 30_000;
+    }).finally(() => {
+      state.sessionNumbersPending = false;
+      renderSessionActivity();
+    });
+  }
 }
 
 function saveSessionActivity() {
@@ -5956,7 +6005,7 @@ function renderSessionActivityButtons(container, items, expanded = false) {
     }
     existing.delete(item.key);
     const button = entry.firstElementChild;
-    const ordinal = item.ordinal <= 20 ? String.fromCodePoint(0x245f + item.ordinal) : String(item.ordinal);
+    const ordinal = !item.ordinal ? "（番号未確認）" : item.ordinal <= 20 ? String.fromCodePoint(0x245f + item.ordinal) : String(item.ordinal);
     const name = `${providerLabel(item.provider)} ${item.machineLabel}${ordinal}`;
     const label = `${name}：${sessionActivityLabels[item.status]}。${item.title}`;
     button.dataset.state = item.status;
@@ -6008,6 +6057,12 @@ function renderSessionActivity() {
   if (!sessionActivityStrip) return;
   refreshSavedSessionActivity();
   sessionActivityRecords = uiUtils.reconcileSessionActivity(sessionActivityRecords, sessionActivityObservations(), { bridgeIds: (bridgeRegistry.bridges || []).map((entry) => entry.id) });
+  // An older open view can still save legacy records. Reapply confirmed
+  // numbers even for notices whose live watcher is no longer present.
+  sessionActivityRecords = sessionActivityRecords.map(item => {
+    const number = getBridgeState(item.bridgeId).sessionNumbers.get(`${item.provider}:${item.threadId}`);
+    return number ? { ...item, sessionNumber: number, ordinal: number } : item;
+  });
   saveSessionActivity();
   const items = uiUtils.visibleSessionActivity(sessionActivityRecords);
   sessionActivityStrip.hidden = items.length === 0;
@@ -6017,6 +6072,7 @@ function renderSessionActivity() {
     renderSessionActivityButtons(sessionActivityList, items, true);
     if (!items.length) sessionActivityDialog.close();
   }
+  refreshSessionActivityNumbers();
 }
 
 sessionActivityCount?.addEventListener("click", async () => {

@@ -4,10 +4,12 @@
 // still mocked, so this verifies delivered assets without opening real chats.
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const os = require("node:os");
 const http = require("node:http");
 const path = require("node:path");
 const { chromium, webkit } = require("playwright");
 const { idleRunStateFromHistory } = require("./question-state");
+const { SessionNumberStore } = require("./session-number-store");
 const root = path.resolve(__dirname, "..");
 const airOrigin = process.env.SESSION_SMOKE_ORIGIN?.startsWith("https:") ? "https://air.fixture.invalid:45999" : "http://127.0.0.1:45999";
 const build = { available: true, fingerprint: "test", clientFingerprint: "test", serverFingerprint: "test", head: "a".repeat(40), dirty: false, restartRequired: false, upstream: { name: "origin/develop", ahead: 0, behind: 0 } };
@@ -19,6 +21,10 @@ const state = {
 };
 
 async function main() {
+  const numberDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "session-strip-numbers-"));
+  const numberStores = Object.fromEntries(["mini", "air"].map(machine => [machine, new SessionNumberStore(path.join(numberDirectory, machine))]));
+  // These were assigned by another entry before this browser saw the runs.
+  numberStores.mini.assign([{ provider: "codex", threadId: "finished" }, { provider: "codex", threadId: "shared" }]);
   const publicDir = path.join(root, "public");
   const server = http.createServer((req, res) => {
     const pathname = new URL(req.url, "http://localhost").pathname;
@@ -38,7 +44,7 @@ async function main() {
     const page = await context.newPage();
     const errors = [];
     page.on("pageerror", (error) => errors.push(error.message));
-    await context.addInitScript(({ airOrigin, fixtures }) => {
+    await context.addInitScript(({ origin, airOrigin, fixtures }) => {
       window.__runStates = JSON.parse(sessionStorage.getItem("session-smoke-fixtures") || "null") || fixtures;
       window.__socketUrls = [];
       window.__sentMessages = [];
@@ -67,17 +73,26 @@ async function main() {
       }
       MockWebSocket.OPEN = 1;
       window.WebSocket = MockWebSocket;
-      localStorage.setItem("codexPhoneBridgeRegistry:v1", JSON.stringify({ version: 1, bridges: [{ id: "air", label: "Air", baseUrl: airOrigin, rememberToken: true }] }));
-      localStorage.setItem("codexPhoneBridgeTokens:v1", JSON.stringify({ air: "fixture-token" }));
+      localStorage.setItem("codexPhoneBridgeRegistry:v1", JSON.stringify({ version: 1, bridges: [{ id: "air", label: "Air", baseUrl: airOrigin, rememberToken: true }, { id: "mini", label: "mini", baseUrl: origin, rememberToken: true }] }));
+      localStorage.setItem("codexPhoneBridgeTokens:v1", JSON.stringify({ air: "fixture-token", mini: "fixture-token" }));
       localStorage.setItem("codexPhonePwaInstallHint:v1", "dismissed");
-    }, { airOrigin, fixtures: { mini: state.mini, air: state.air } });
+    }, { origin, airOrigin, fixtures: { mini: state.mini, air: state.air } });
+    // A second page origin has genuinely independent browser storage; only
+    // static assets and fixture API traffic are served here, never a real Mac.
+    await context.route(`${airOrigin}/**`, async route => {
+      const pathname = new URL(route.request().url()).pathname;
+      const file = path.resolve(publicDir, `.${pathname === "/" ? "/index.html" : pathname}`);
+      if (!file.startsWith(`${publicDir}${path.sep}`) || !fs.existsSync(file)) return route.fulfill({ status: 404, body: "" });
+      return route.fulfill({ path: file, contentType: ({ ".html": "text/html", ".js": "application/javascript", ".css": "text/css" })[path.extname(file)] || "application/octet-stream" });
+    });
     await context.route("**/api/**", async (route) => {
       const url = new URL(route.request().url());
-      const headers = { "access-control-allow-origin": origin, "access-control-allow-credentials": "true", "access-control-allow-headers": "content-type, authorization, x-phone-token", "access-control-allow-methods": "GET, POST, OPTIONS" };
+      const headers = { "access-control-allow-origin": route.request().headers().origin || origin, "access-control-allow-credentials": "true", "access-control-allow-headers": "content-type, authorization, x-phone-token", "access-control-allow-methods": "GET, POST, OPTIONS" };
       if (route.request().method() === "OPTIONS") return route.fulfill({ status: 204, headers });
       const machine = url.origin === airOrigin ? "air" : "mini";
       const provider = url.searchParams.get("provider") || "codex";
       const reply = (json) => route.fulfill({ json, headers });
+      if (url.pathname === "/api/session-numbers") return reply({ sessions: numberStores[machine].assign(route.request().postDataJSON().sessions) });
       if (url.pathname === "/api/bridge/info") {
         if (machine === "air" && state.airOffline) return route.abort();
         return reply({ id: machine === "air" ? "air" : "home", label: machine === "air" ? "Air" : "mini", machineLabel: machine === "air" ? "Air" : "mini", hostName: machine === "air" ? "MacBook-Air.local" : "Mac-mini.local", provider: "codex", providers: ["codex", "claude"], model: "gpt-5", workdir: `/fixture/${machine}/project`, build });
@@ -109,6 +124,30 @@ async function main() {
     assert.deepEqual(await summary(), ["返信待ち 1", "許可待ち 1", "エラー 1", "未確認完了 1", "処理中 1"]);
     assert.match(await page.locator("#sessionActivityCount").getAttribute("aria-label"), /完了・未確認 1件/);
     const byKey = (machine, provider, threadId) => page.locator(`.session-activity-chip[data-session-key='${JSON.stringify([machine.toLowerCase(), provider, threadId])}']`);
+    await page.waitForFunction(() => sessionActivityRecords.length === 5 && sessionActivityRecords.every(item => item.ordinal));
+    assert.equal(await byKey("mini", "codex", "shared").locator(".session-activity-name").textContent(), "Codex mini②");
+    assert.equal(await byKey("mini", "codex", "finished").locator(".session-activity-name").textContent(), "Codex mini①");
+    const expectedNumbers = await page.evaluate(() => Object.fromEntries(sessionActivityRecords.map(item => [item.key, item.ordinal])));
+    // A different entry already holds conflicting legacy browser-local numbers.
+    const otherEntry = await context.newPage();
+    otherEntry.on("pageerror", error => errors.push(error.message));
+    await otherEntry.addInitScript(records => {
+      if (!localStorage.getItem("number-migration-seeded")) {
+        localStorage.setItem("number-migration-seeded", "yes");
+        localStorage.setItem("codexPhoneSessionActivity:v1", JSON.stringify(records.map((item, index) => {
+          const { sessionNumber, ...legacy } = item;
+          return { ...legacy, bridgeId: item.machineKey === "mini" ? "mini" : "air", ordinal: index + 41 };
+        }).reverse()));
+      }
+    }, await page.evaluate(() => sessionActivityRecords));
+    await otherEntry.goto(`${airOrigin}/?token=fixture-token&thread=idle&provider=codex`, { waitUntil: "domcontentloaded" });
+    await otherEntry.waitForFunction(expected => sessionActivityRecords.length === 5 && sessionActivityRecords.every(item => item.ordinal === expected[item.key]), expectedNumbers);
+    await otherEntry.reload({ waitUntil: "domcontentloaded" });
+    await otherEntry.waitForFunction(expected => sessionActivityRecords.length === 5 && sessionActivityRecords.every(item => item.ordinal === expected[item.key]), expectedNumbers);
+    assert.equal(await otherEntry.locator('.session-activity-chip[data-session-key=\'["mini","codex","shared"]\'] .session-activity-name').textContent(), "Codex mini②");
+    assert.equal(await otherEntry.evaluate(() => window.__sentMessages.filter(item => item.type === "prompt").length), 0);
+    await otherEntry.close();
+    await page.bringToFront();
     const metrics = await page.evaluate(() => {
       const strip = document.querySelector("#sessionActivityStrip").getBoundingClientRect();
       const content = document.querySelector(".content-grid").getBoundingClientRect();
@@ -383,12 +422,26 @@ async function main() {
     await page.evaluate(() => refreshFleet({ force: true }));
     assert.equal(await page.locator("#sessionActivityStrip").isVisible(), false, "unavailable storage must not undo the current view's dismissal");
     await page.evaluate(() => { Storage.prototype.setItem = window.__originalSetItem; });
+    await page.evaluate(() => {
+      const records = JSON.parse(localStorage.getItem("codexPhoneSessionActivity:v1"));
+      const item = records.find(record => record.machineKey === "mini" && record.provider === "codex" && record.threadId === "shared");
+      item.ordinal = 87;
+      delete item.sessionNumber;
+      // A legacy view writes after this conversation's live watcher expired.
+      const state = getBridgeState(item.bridgeId);
+      state.sessionRuns.delete("codex:shared");
+      state.status.bridges = state.status.bridges.filter(run => run.threadId !== "shared" || run.provider !== "codex");
+      localStorage.setItem("codexPhoneSessionActivity:v1", JSON.stringify(records));
+      renderSessionActivity();
+    });
+    assert.equal(await page.evaluate(() => sessionActivityRecords.find(item => item.machineKey === "mini" && item.provider === "codex" && item.threadId === "shared").ordinal), 2, "late legacy storage cannot replace a confirmed number");
     assert.ok(await page.locator("#prompt").evaluate((input) => input === document.activeElement));
     assert.deepEqual(errors, []);
-    console.log("Session strip verified: dismissal across polling, reload, history sync, connection outages, same-turn timestamp changes and simultaneous views; in-memory dismissal when storage is unavailable; stopped state, retained conversations/answers/drafts without sending prompts, genuinely new events, touch/keyboard targets, 320–1024px layout, attention-first list, identity, orbit, reduced motion, stable scroll, full titles, question classification/correction, acknowledgement, provider/Mac navigation and empty state.");
+    console.log("Session strip verified: shared conversation numbers across separate entry origins, legacy-number migration and reload; dismissal across polling, reload, history sync, connection outages, same-turn timestamp changes and simultaneous views; in-memory dismissal when storage is unavailable; stopped state, retained conversations/answers/drafts without sending prompts, genuinely new events, touch/keyboard targets, 320–1024px layout, attention-first list, identity, orbit, reduced motion, stable scroll, full titles, question classification/correction, acknowledgement, provider/Mac navigation and empty state.");
   } finally {
     await browser?.close();
     await new Promise((resolve) => server.close(resolve));
+    fs.rmSync(numberDirectory, { recursive: true, force: true });
   }
 }
 main().catch((error) => { console.error(error); process.exitCode = 1; });

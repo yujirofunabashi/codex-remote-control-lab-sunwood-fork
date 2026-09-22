@@ -59,14 +59,36 @@ test("viewing questions, approvals and errors does not dismiss them; a new run r
 });
 
 test("ordinals and positions remain stable when a sibling completes or polling order changes", () => {
-  const one = observation("running");
-  const two = observation("question", { threadId: "two" });
+  const one = observation("running", { sessionNumber: 1 });
+  const two = observation("question", { threadId: "two", sessionNumber: 2 });
   let records = reconcileSessionActivity([], [one, two]);
   records = reconcileSessionActivity(records, [two, { ...one, run: { state: "done", updatedAt: 200 } }]);
   assert.deepEqual(records.map((item) => [item.threadId, item.ordinal]), [["one", 1], ["two", 2]]);
   records = acknowledgeSessionActivity(records, records[0].key);
   assert.equal(visibleSessionActivity(records)[0].ordinal, 2);
   assert.equal(reconcileSessionActivity(records, [], { bridgeIds: [] }).length, 0);
+});
+
+test("conversation numbers come from the owning machine, never the entry's encounter order", () => {
+  const one = observation("running", { sessionNumber: 4 });
+  const two = observation("question", { threadId: "two", sessionNumber: 9 });
+  const first = reconcileSessionActivity([], [one, two]);
+  const otherEntry = reconcileSessionActivity([], [two, one]);
+  assert.deepEqual(first.map(item => item.ordinal), [4, 9]);
+  assert.deepEqual(otherEntry.map(item => item.ordinal), [9, 4]);
+  const old = dismissSessionActivity(reconcileSessionActivity([], [observation("error")]), sessionActivityKey(one));
+  old[0].ordinal = 87; // A conflicting pre-migration, browser-local number.
+  const migrated = reconcileSessionActivity(old, [{ ...one, run: { state: "error", updatedAt: 100 } }]);
+  assert.equal(migrated[0].ordinal, 4);
+  assert.equal(visibleSessionActivity(migrated).length, 0, "number migration must not resurrect a dismissed tab");
+});
+
+test("an unconfirmed number is not invented, and a confirmed number survives disconnects", () => {
+  let records = reconcileSessionActivity([], [observation("running")]);
+  assert.equal(records[0].ordinal, null);
+  records = reconcileSessionActivity(records, [observation("running", { sessionNumber: 7 })]);
+  records = reconcileSessionActivity(JSON.parse(JSON.stringify(records)), [observation("offline")]);
+  assert.equal(records[0].ordinal, 7);
 });
 
 test("a new observed run clears acknowledgement even without a server completion timestamp", () => {
