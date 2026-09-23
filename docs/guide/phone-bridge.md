@@ -11,7 +11,7 @@ npm ci
 npm run phone
 ```
 
-The application pins its Codex dependency to 0.154.0. `npm run version:codex` inspects only that local installation and fails if it is missing, rather than falling back to a global Codex. A `CODEX_BIN` override and an already-running app-server must be checked separately:
+The application pins its Codex dependency to 0.156.1. `npm run version:codex` inspects only that local installation and fails if it is missing, rather than falling back to a global Codex. A `CODEX_BIN` override and an already-running app-server must be checked separately:
 
 ```bash
 npm run version:codex
