@@ -422,11 +422,21 @@ function persistClaudeRateLimitMessage(message) {
 const codexBin = process.env.CODEX_BIN || path.join(root, "node_modules", ".bin", "codex");
 
 // npm's shim in node_modules/.bin is a shell script, and on Windows spawn()
-// cannot run it (only codex.cmd, which needs a shell). The package's own
-// launcher is plain JavaScript that picks the Windows binary, so Windows runs
-// that under this Node instead. CODEX_BIN still wins everywhere.
-function codexLaunch(args, { platform = process.platform, env = process.env } = {}) {
+// cannot run it (only codex.cmd, which needs a shell). Windows therefore runs
+// the native codex.exe from the platform package directly. Not the package's
+// JavaScript launcher: it relays a stop to codex.exe through signal handlers,
+// which Windows never calls, so every bridge restart left the old app-server
+// running on its port. The launcher remains the fallback when the platform
+// package is missing. CODEX_BIN still wins everywhere.
+function codexLaunch(args, { platform = process.platform, env = process.env, arch = process.arch, resolve = require.resolve } = {}) {
   if (env.CODEX_BIN || platform !== "win32") return { command: env.CODEX_BIN || codexBin, args };
+  const [pkg, triple] = arch === "arm64" ? ["@openai/codex-win32-arm64", "aarch64-pc-windows-msvc"] : ["@openai/codex-win32-x64", "x86_64-pc-windows-msvc"];
+  try {
+    const vendor = path.join(path.dirname(resolve(`${pkg}/package.json`, { paths: [root] })), "vendor", triple, "bin", "codex.exe");
+    if (fs.existsSync(vendor)) return { command: vendor, args, env: { CODEX_MANAGED_PACKAGE_ROOT: path.join(root, "node_modules", "@openai", "codex"), CODEX_MANAGED_BY_NPM: "1" } };
+  } catch {
+    // Fall through to the launcher, which explains a missing platform package.
+  }
   return { command: process.execPath, args: [path.join(root, "node_modules", "@openai", "codex", "bin", "codex.js"), ...args] };
 }
 const claudeBin = process.env.CLAUDE_BIN || "claude";
@@ -1944,6 +1954,7 @@ function startCodexServer() {
     cwd: root,
     env: {
       ...process.env,
+      ...launch.env,
       PATH: `${path.join(root, "node_modules", ".bin")}${path.delimiter}${process.env.PATH || ""}`,
     },
     stdio: ["ignore", "pipe", "pipe"],

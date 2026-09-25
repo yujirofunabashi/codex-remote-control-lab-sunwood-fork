@@ -126,11 +126,29 @@ test("a locked-down bridge refuses to listen beyond this computer", () => {
   assert.doesNotThrow(() => assertLockdownLaunch({ host: "127.0.0.1", launchWorkdir: project }));
 });
 
-test("Windows starts Codex through the package's own launcher under this Node", () => {
-  const windows = codexLaunch(["app-server"], { platform: "win32", env: {} });
-  assert.equal(windows.command, process.execPath);
-  assert.match(windows.args[0], /@openai[\\/]codex[\\/]bin[\\/]codex\.js$/);
-  assert.equal(windows.args[1], "app-server");
+test("Windows starts the native codex.exe, so stopping the bridge stops Codex", () => {
+  // Stands in for node_modules/@openai/codex-win32-x64 on the Windows PC.
+  const pkg = path.join(tmp, "codex-win32-x64");
+  const exe = path.join(pkg, "vendor", "x86_64-pc-windows-msvc", "bin", "codex.exe");
+  fs.mkdirSync(path.dirname(exe), { recursive: true });
+  fs.writeFileSync(exe, "");
+  fs.writeFileSync(path.join(pkg, "package.json"), "{}");
+  const resolve = (request) => {
+    assert.equal(request, "@openai/codex-win32-x64/package.json");
+    return path.join(pkg, "package.json");
+  };
+  const windows = codexLaunch(["app-server"], { platform: "win32", arch: "x64", env: {}, resolve });
+  assert.equal(windows.command, exe);
+  assert.deepEqual(windows.args, ["app-server"]);
+  assert.equal(windows.env.CODEX_MANAGED_BY_NPM, "1");
+});
+
+test("without the platform package Windows falls back to the launcher, and CODEX_BIN wins", () => {
+  const missing = () => { throw new Error("not installed"); };
+  const fallback = codexLaunch(["app-server"], { platform: "win32", arch: "x64", env: {}, resolve: missing });
+  assert.equal(fallback.command, process.execPath);
+  assert.match(fallback.args[0], /@openai[\\/]codex[\\/]bin[\\/]codex\.js$/);
+  assert.equal(fallback.args[1], "app-server");
   assert.equal(codexLaunch(["app-server"], { platform: "darwin", env: {} }).args[0], "app-server");
   assert.equal(codexLaunch(["x"], { platform: "win32", env: { CODEX_BIN: "C:\\codex.exe" } }).command, "C:\\codex.exe");
 });

@@ -139,7 +139,7 @@ AI実行処理は、通常ユーザーのCodex CLIまたはClaude Code（=文字
 - `/api/terminal/run`（=コマンドの直接実行）、Claude・Gemini、接続先一覧の控えは断ります。控えを断るのは、他の機器の一覧と鍵をその PC に置かないためです。ホーム画面への追加も出さないので、他の機器のカードから開きます。
 - `PHONE_UI_HOST` が `127.0.0.1` で、`PHONE_WORKDIR` がそのフォルダの中でなければ起動しません。公開は `tailscale serve` だけにします。ドライブ全体、最上位のフォルダ、ホームを含むフォルダは指定できません。
 
-Windows では `npm install` で対応する Codex（`@openai/codex-win32-*`）も入ります。npm の `.bin` にある起動用の小さなファイルは Windows の `spawn()` で動かせないため、bridge は同じパッケージの JavaScript 製の起動処理を通して Codex を起動します。常駐は `phone:loop`（Mac 用のシェルが必要）の代わりに `npm run phone:supervise` を使います。終了コード42で入れ直す点は同じです。その Windows で Codex 自身の閉じ込め（`workspace-write`）が効くかは、実機でまだ確かめていません。頼る前に、フォルダの外へ書こうとする依頼で確認してください。この固定は証券ソフト側の決まりを変えません。API パスワード・注文・残高・建玉には触れません。
+Windows では `npm install` で対応する Codex（`@openai/codex-win32-*`）も入ります。npm の `.bin` にある起動用の小さなファイルは Windows の `spawn()` で動かせないため、bridge はそのパッケージの `codex.exe` を直接起動します。JavaScript 製の起動処理（codex.js）は使いません。この起動処理は、停止の合図を Codex 本体に伝える仕組み（シグナル）を使いますが、Windows ではその合図が届かないためです。経由すると、再起動のたびに古い Codex が通信の窓口をふさいだまま残ります。常駐は `phone:loop`（Mac 用のシェルが必要）の代わりに `npm run phone:supervise` を使います。終了コード42で入れ直す点は同じです。その Windows で Codex 自身の閉じ込め（`workspace-write`）が効くかは、実機でまだ確かめていません。頼る前に、フォルダの外へ書こうとする依頼で確認してください。この固定は証券ソフト側の決まりを変えません。API パスワード・注文・残高・建玉には触れません。
 
 ## 環境変数
 
