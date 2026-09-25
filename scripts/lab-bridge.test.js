@@ -112,6 +112,8 @@ test("opening the lab in Claude never hands back a Codex conversation", async t 
   const message = JSON.parse(String(bytes));
   assert.equal(message.type, "error");
   assert.match(message.text, /新規セッション/);
+  // The phone must not redial a refusal that only the owner's action can clear.
+  assert.equal(message.retryable, false);
   const codex = new WebSocket(app.origin.replace("http:", "ws:") + "/bridge?provider=codex", protocols);
   t.after(() => codex.terminate());
   const [codexBytes] = await once(codex, "message");

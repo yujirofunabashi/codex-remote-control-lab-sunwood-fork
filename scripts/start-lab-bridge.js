@@ -281,7 +281,7 @@ function createLabServer(config, { store = new LabState({ file: config.stateFile
       socket.end("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n"); return;
     }
     wss.handleUpgrade(req, socket, head, ws => {
-      const sendError = error => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "error", text: redactSensitiveText(error.message) })); };
+      const sendError = (error, extra = {}) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "error", text: redactSensitiveText(error.message), ...extra })); };
       try {
         const provider = requestedProvider(url);
         const existing = url.searchParams.get("thread");
@@ -319,7 +319,13 @@ function createLabServer(config, { store = new LabState({ file: config.stateFile
             else throw failure("実験室で許可されていない操作です。");
           } catch (error) { sendError(error); }
         });
-      } catch (error) { sendError(error); ws.close(); }
+      } catch (error) {
+        // Nothing here changes on its own (no conversation of this AI yet, a
+        // conversation of another AI, the lab not started), so tell the phone
+        // not to redial; otherwise it reconnects and is refused in a tight loop.
+        sendError(error, { retryable: false });
+        ws.close();
+      }
     });
   });
   const heartbeat = setInterval(() => {
