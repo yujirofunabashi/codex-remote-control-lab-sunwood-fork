@@ -50,6 +50,45 @@ function validateConfig(config) {
   return config;
 }
 
+const labIcon = { name: "Codex Windows実験室", shortName: "Codex Windows", icon180: "bridge-icons/codex-windows-180.png", icon512: "bridge-icons/codex-windows-512.png" };
+
+function htmlAttribute(value) {
+  return String(value).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+}
+
+// The lab only runs Codex, so its one icon is the Windows Codex one. With a
+// key the page links the key-carrying manifest; without one it links none, so
+// Safari cannot make an icon that opens without a key.
+function labInstallPage(html, shell, phoneToken = "") {
+  const manifest = phoneToken ? `site.webmanifest?provider=codex&install=1&token=${encodeURIComponent(phoneToken)}` : "";
+  let page = html
+    .replace(/<title>[^<]*<\/title>/, `<title>${labIcon.name}</title>`)
+    .replace(/<link rel="apple-touch-icon" href="apple-touch-icon\.png" \/>/, `<link rel="apple-touch-icon" sizes="180x180" href="${labIcon.icon180}" />`)
+    .replace(/<meta name="apple-mobile-web-app-title" content="[^"]*" \/>/, `<meta name="apple-mobile-web-app-title" content="${labIcon.shortName}" />`)
+    .replace('href="style.css"', `href="${shell.style}"`)
+    .replace('src="main.js"', `src="${shell.main}"`);
+  page = manifest
+    ? page.replace(/<link rel="manifest" href="site\.webmanifest" \/>/, `<link rel="manifest" href="${htmlAttribute(manifest)}" />`)
+    : page.replace(/\n\s*<link rel="manifest" href="site\.webmanifest" \/>/, "");
+  return page;
+}
+
+function labManifest(base, phoneToken = "") {
+  return {
+    ...base,
+    name: labIcon.name,
+    short_name: labIcon.shortName,
+    id: "/codex-remote-windows-lab",
+    scope: "/",
+    description: "Windows lab relay for the phone bridge (codex).",
+    icons: [
+      { src: `/${labIcon.icon180}`, sizes: "180x180", type: "image/png", purpose: "any" },
+      { src: `/${labIcon.icon512}`, sizes: "512x512", type: "image/png", purpose: "any maskable" },
+    ],
+    start_url: phoneToken ? `/install?provider=codex#token=${encodeURIComponent(phoneToken)}` : "/?provider=codex",
+  };
+}
+
 function createLabServer(config, { store = new LabState({ file: config.stateFile, workRoot: config.workRoot }) } = {}) {
   validateConfig(config);
   const startedAt = Date.now();
@@ -63,7 +102,7 @@ function createLabServer(config, { store = new LabState({ file: config.stateFile
     ...workspace(config.workRoot), repoRoot: config.workRoot, uiPort: config.port, startedAt,
     app: { id: config.id, name: "Windows実験室", shortName: "Windows" }, shell,
     build: build.status(),
-    capabilities: { threads: true, terminalHistory: false, artifacts: true, approvals: false, fleet: true, lab: true },
+    capabilities: { threads: true, terminalHistory: false, artifacts: true, approvals: false, fleet: true, lab: true, homeScreenInstall: true },
     lab: store.target(), projectProgress: readLabProgress(config.progressFile), color: "#3f7f4b" });
   const threadPayload = thread => ({ type: "ready", provider: "codex", threadId: thread.id, threadTitle: thread.name,
     model: config.model, ...workspace(thread.cwd), history: thread.history, run: store.run(thread), clients: clients.get(thread.id)?.size || 1, slashCommands: [], lab: store.target() });
@@ -160,6 +199,21 @@ function createLabServer(config, { store = new LabState({ file: config.stateFile
         return reply(403, { error: "実験室で許可されていない操作です。" });
       }
       if (req.method !== "GET") return reply(405, { error: "Method not allowed" });
+      // A Home Screen icon for the lab. Safari and the installed app keep
+      // separate storage, so only a request carrying the phone key gets a
+      // manifest whose start_url hands that key over, and only in a fragment.
+      if (url.pathname === "/install") {
+        const authenticated = sameSecret(url.searchParams.get("token"), config.phoneToken);
+        res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" });
+        return res.end(labInstallPage(fs.readFileSync(path.join(publicDir, "index.html"), "utf8"), shell, authenticated ? config.phoneToken : ""));
+      }
+      if (url.pathname === "/site.webmanifest") {
+        const install = url.searchParams.get("install") === "1";
+        if (install && !sameSecret(url.searchParams.get("token"), config.phoneToken)) return reply(401, { error: "Unauthorized" });
+        const manifest = labManifest(JSON.parse(fs.readFileSync(path.join(publicDir, "site.webmanifest"), "utf8")), install ? config.phoneToken : "");
+        res.writeHead(200, { "content-type": "application/manifest+json; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" });
+        return res.end(JSON.stringify(manifest, null, 2));
+      }
       let filename = url.pathname === "/" ? "index.html" : decodeURIComponent(url.pathname).slice(1);
       const target = path.resolve(publicDir, filename);
       if (!target.startsWith(`${publicDir}${path.sep}`) || !fs.existsSync(target) || !fs.statSync(target).isFile()) return reply(404, { error: "Not found" });

@@ -29,6 +29,33 @@ async function fixture(t, options = {}) {
   return { ...app, config, origin, request, worker, ready };
 }
 
+test("the lab offers a Windows Codex Home Screen icon and hands its key over only when asked with it", async t => {
+  const { origin, config } = await fixture(t);
+  const info = await (await fetch(origin + "/api/bridge/info", { headers: { authorization: `Bearer ${config.phoneToken}` } })).json();
+  assert.equal(info.capabilities.homeScreenInstall, true);
+  assert.deepEqual(info.providers, ["codex"]);
+
+  const bare = await (await fetch(origin + "/install")).text();
+  assert.match(bare, /apple-touch-icon" sizes="180x180" href="bridge-icons\/codex-windows-180\.png"/);
+  assert.doesNotMatch(bare, /rel="manifest"/);
+  assert.ok(!bare.includes(config.phoneToken));
+  assert.equal((await fetch(origin + "/site.webmanifest?install=1&token=wrong")).status, 401);
+
+  const page = await (await fetch(`${origin}/install?provider=codex&token=${config.phoneToken}`)).text();
+  assert.match(page, /<meta name="apple-mobile-web-app-title" content="Codex Windows" \/>/);
+  const href = page.match(/rel="manifest" href="([^"]+)"/)[1].replace(/&amp;/g, "&");
+  const manifest = await (await fetch(`${origin}/${href}`)).json();
+  assert.equal(manifest.short_name, "Codex Windows");
+  assert.equal(manifest.start_url, `/install?provider=codex#token=${config.phoneToken}`);
+  assert.deepEqual(manifest.icons.map(icon => icon.src), ["/bridge-icons/codex-windows-180.png", "/bridge-icons/codex-windows-512.png"]);
+  const plain = await (await fetch(origin + "/site.webmanifest")).json();
+  assert.equal(plain.start_url, "/?provider=codex");
+
+  const icon = await fetch(origin + "/bridge-icons/codex-windows-180.png");
+  assert.equal(icon.status, 200);
+  assert.equal(icon.headers.get("content-type"), "image/png");
+});
+
 test("phone and host credentials, origins and allowed operations stay separate", async t => {
   const app = await fixture(t);
   assert.equal((await fetch(app.origin + "/api/status")).status, 401);
