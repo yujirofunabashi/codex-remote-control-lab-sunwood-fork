@@ -114,6 +114,8 @@ test("opening the lab in Claude never hands back a Codex conversation", async t 
   assert.match(message.text, /新規セッション/);
   // The phone must not redial a refusal that only the owner's action can clear.
   assert.equal(message.retryable, false);
+  // Marked as "no conversation yet", so the phone shows that instead of a cut.
+  assert.equal(message.code, "lab_no_conversation");
   const codex = new WebSocket(app.origin.replace("http:", "ws:") + "/bridge?provider=codex", protocols);
   t.after(() => codex.terminate());
   const [codexBytes] = await once(codex, "message");

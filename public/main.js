@@ -1405,6 +1405,10 @@ let fleetPollTimer = null;
 let fleetRefreshInFlight = false;
 let fleetRefreshPromise = null;
 const suppressedSocketReconnects = new WeakSet();
+// Sockets a bridge closed only because this AI has no conversation there yet
+// (the Windows lab before its first session). Nothing is broken, so their
+// close reads "会話なし" and leaves the connection card waiting, not "切断".
+const noConversationSockets = new WeakSet();
 const apiTimeoutMs = 9000;
 const uploadTimeoutMs = 60_000;
 const resumeRefreshDebounceMs = 1200;
@@ -9678,6 +9682,7 @@ function connect({ preserveHistory = false, freshThread = false, workdir = "" } 
       }
       if (msg.retryable === false) {
         suppressedSocketReconnects.add(socket);
+        if (msg.code === "lab_no_conversation") noConversationSockets.add(socket);
         if (reconnectTimer) window.clearTimeout(reconnectTimer);
         reconnectTimer = null;
         setReady(false);
@@ -9712,7 +9717,8 @@ function connect({ preserveHistory = false, freshThread = false, workdir = "" } 
     }
     const state = getBridgeState(bridgeId);
     state.connected = false;
-    state.runState = "disconnected";
+    const noConversation = noConversationSockets.has(socket);
+    state.runState = noConversation ? "ready" : "disconnected";
     state.lastEventAt = Date.now();
     renderFleet();
     if (bridgeId !== activeBridgeId) return;
@@ -9724,8 +9730,8 @@ function connect({ preserveHistory = false, freshThread = false, workdir = "" } 
     suppressedSocketReconnects.delete(socket);
     if (ws === socket) ws = null;
     releasePendingSubmission("接続が切れたため送信できませんでした。");
-    meta.textContent = "切断";
-    setRunState("disconnected");
+    meta.textContent = noConversation ? "会話なし" : "切断";
+    setRunState(noConversation ? "ready" : "disconnected", noConversation ? "会話なし" : undefined);
     if (!shouldSuppressReconnect) scheduleReconnectAfterAuthCheck("WebSocket切断", bridge, bridgeToken);
   });
 
