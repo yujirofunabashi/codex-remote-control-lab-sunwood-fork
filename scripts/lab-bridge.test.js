@@ -8,9 +8,9 @@ const path = require("node:path");
 const { createLabServer } = require("./start-lab-bridge");
 const root = "/home/agent-lab/work";
 
-async function fixture(t, options = {}) {
+async function fixture(t, extra = {}) {
   const config = { id: "windows-lab", targetHost: "windows.fixture", host: "127.0.0.1", port: 45251, workRoot: root,
-    phoneToken: "p".repeat(40), workerToken: "w".repeat(40), allowedOrigins: ["http://127.0.0.1:45999"], model: "gpt-6-astra", effort: "xhigh", ...options };
+    phoneToken: "p".repeat(40), workerToken: "w".repeat(40), allowedOrigins: ["http://127.0.0.1:45999"], model: "gpt-6-astra", effort: "xhigh", ...extra };
   const app = createLabServer(config);
   app.server.listen(0, "127.0.0.1");
   await once(app.server, "listening");
@@ -54,6 +54,27 @@ test("the lab offers a Windows Codex Home Screen icon and hands its key over onl
   const icon = await fetch(origin + "/bridge-icons/codex-windows-180.png");
   assert.equal(icon.status, 200);
   assert.equal(icon.headers.get("content-type"), "image/png");
+});
+
+test("with Claude configured the lab also makes a Windows Claude icon, as its own Home Screen app", async t => {
+  const { origin, config } = await fixture(t, { claudeModel: "claude-opus-5-5", claudeEffort: "xhigh" });
+  const page = await (await fetch(`${origin}/install?provider=claude&token=${config.phoneToken}`)).text();
+  assert.match(page, /apple-touch-icon" sizes="180x180" href="bridge-icons\/claude-windows-180\.png"/);
+  assert.match(page, /<meta name="apple-mobile-web-app-title" content="Claude Windows" \/>/);
+  const href = page.match(/rel="manifest" href="([^"]+)"/)[1].replace(/&amp;/g, "&");
+  const manifest = await (await fetch(`${origin}/${href}`)).json();
+  assert.equal(manifest.short_name, "Claude Windows");
+  assert.equal(manifest.start_url, `/install?provider=claude#token=${config.phoneToken}`);
+  const codex = await (await fetch(`${origin}/site.webmanifest?provider=codex`)).json();
+  assert.notEqual(manifest.id, codex.id);
+  assert.equal((await fetch(origin + "/bridge-icons/claude-windows-180.png")).status, 200);
+});
+
+test("without Claude configured an install page never claims to be Claude", async t => {
+  const { origin, config } = await fixture(t);
+  const page = await (await fetch(`${origin}/install?provider=claude&token=${config.phoneToken}`)).text();
+  assert.match(page, /content="Codex Windows"/);
+  assert.doesNotMatch(page, /claude-windows/);
 });
 
 test("phone and host credentials, origins and allowed operations stay separate", async t => {
@@ -164,6 +185,52 @@ test("the real socket protocol accepts a prompt once, rejects scope changes, and
   await until(() => messages.some(message => message.type === "turn" && message.status === "completed"));
   const history = await (await app.request(`/api/thread?thread=${thread.id}`)).json();
   assert.equal(history.history.length, 2);
+  socket.close();
+  await once(socket, "close");
+});
+
+test("Claude is offered only when configured, keeps its own threads and is sent to Windows as the thread's AI", async t => {
+  const plain = await fixture(t);
+  assert.deepEqual((await (await plain.request("/api/bridge/info")).json()).providers, ["codex"]);
+  assert.equal((await plain.request("/api/threads?provider=claude")).status, 400);
+  assert.throws(() => createLabServer({ ...plain.config, claudeModel: "gpt-6", claudeEffort: "xhigh" }));
+  assert.throws(() => createLabServer({ ...plain.config, claudeModel: "claude-opus-5-5", claudeEffort: "low" }));
+
+  const app = await fixture(t, { claudeModel: "claude-opus-5-5", claudeEffort: "xhigh" });
+  await app.ready();
+  const info = await (await app.request("/api/bridge/info")).json();
+  assert.deepEqual(info.providers, ["codex", "claude"]);
+  assert.equal(info.modelsByProvider.claude, "claude-opus-5-5");
+  assert.deepEqual(info.reasoningChoices.claude, ["xhigh"]);
+  const messages = [];
+  const socket = new WebSocket(app.origin.replace("http:", "ws:") + `/bridge?provider=claude&fresh=1&workdir=${encodeURIComponent(root)}`,
+    ["phone-bridge-v1", "phone-token." + Buffer.from(app.config.phoneToken).toString("base64url")]);
+  t.after(() => socket.terminate());
+  socket.on("message", bytes => messages.push(JSON.parse(String(bytes))));
+  await once(socket, "open");
+  const until = async predicate => {
+    for (let i = 0; i < 100; i++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 10)); }
+    throw new Error("Expected socket event was not received");
+  };
+  await until(() => messages.some(message => message.type === "ready"));
+  const ready = messages.find(message => message.type === "ready");
+  assert.equal(ready.provider, "claude");
+  assert.equal(ready.model, "claude-opus-5-5");
+  socket.send(JSON.stringify({ type: "prompt", clientMessageId: "c-1", text: "検査して", options: { model: app.config.model } }));
+  await until(() => messages.some(message => message.type === "error"));
+  socket.send(JSON.stringify({ type: "prompt", clientMessageId: "c-2", text: "検査して", options: { model: "claude-opus-5-5", effort: "xhigh" } }));
+  await until(() => messages.some(message => message.type === "promptAccepted"));
+  const poll = await (await app.worker("poll", { target: { vmState: "running", guestReady: true, aiReady: true } })).json();
+  assert.equal(poll.command.op, "run");
+  assert.equal(poll.command.args.provider, "claude");
+  const records = await (await app.request("/api/threads?provider=claude")).json();
+  assert.deepEqual(records.data.map(item => item.provider), ["claude"]);
+  assert.deepEqual((await (await app.request("/api/threads?provider=codex")).json()).data, []);
+  const mismatch = new WebSocket(app.origin.replace("http:", "ws:") + `/bridge?provider=codex&thread=${ready.threadId}`,
+    ["phone-bridge-v1", "phone-token." + Buffer.from(app.config.phoneToken).toString("base64url")]);
+  t.after(() => mismatch.terminate());
+  const [bytes] = await once(mismatch, "message");
+  assert.equal(JSON.parse(String(bytes)).type, "error");
   socket.close();
   await once(socket, "close");
 });

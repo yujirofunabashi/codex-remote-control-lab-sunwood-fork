@@ -23,6 +23,13 @@ import time
 PREFIX = b"PHONE_LAB_V1 "
 MAX_FRAME = 400000
 UUID = re.compile(r"^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$")
+# Claude uses the same narrow provider proxy and launch settings that the
+# Windows supervisor already verified inside this guest.
+CLAUDE_PROXY_UNIT = "phone-lab-claude-proxy.service"
+CLAUDE_SETTINGS = {"switchModelsOnFlag": False, "fallbackModel": [], "disableAllHooks": True,
+                   "disableClaudeAiConnectors": True, "enableArtifact": False, "forceLoginMethod": "claudeai"}
+CLAUDE_TOOLS = "Read,Edit,Write,Glob,Grep,Bash"
+PROBE_ID = re.compile(r"^[a-f0-9]{32}$")
 
 
 def encode_frame(value):
@@ -209,27 +216,122 @@ def codex_command(config, workdir, session=None):
     return args + ["-"]
 
 
-def service_command(config, task_id, workdir, session=None):
+def claude_command(config, workdir, session=None):
+    args = [config["claude"], "--safe-mode", "--restricted", "--setting-sources", "", "--settings", json.dumps(CLAUDE_SETTINGS),
+            "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--tools", CLAUDE_TOOLS, "--allowedTools", "Bash",
+            "--permission-mode", "acceptEdits", "--permission-prompts", "none", "--no-chrome",
+            "--output-format", "stream-json", "--verbose", "--model", config["claudeModel"], "--effort", config["claudeEffort"]]
+    if session:
+        if not UUID.fullmatch(session):
+            raise ValueError("Invalid Claude conversation id")
+        args += ["--resume", session]
+    return args + ["-p"]
+
+
+def providers(config):
+    return ["codex", "claude"] if config.get("claude") else ["codex"]
+
+
+def turn_properties(config, provider, workdir):
+    """Each provider writes only the work root and its own login; the other login is hidden."""
+    if provider not in providers(config):
+        raise ValueError("Unsupported lab provider")
+    own, other = (config["claudeHome"], config["authDir"]) if provider == "claude" else (config["authDir"], config.get("claudeHome"))
+    hidden = " ".join("-" + path for path in (other, config["stateDir"]) if path)
+    return ["User=" + config["user"], "Group=" + config["user"], "WorkingDirectory=" + workdir,
+            "RuntimeMaxSec=600", "TimeoutStopSec=10", "KillMode=control-group", "NoNewPrivileges=yes",
+            "ProtectSystem=strict", "ProtectHome=read-only", "ReadWritePaths=" + config["workRoot"] + " " + own,
+            "InaccessiblePaths=" + hidden,
+            "Type=exec", "PrivateTmp=yes", "PrivateDevices=yes", "ProtectKernelTunables=yes", "ProtectKernelModules=yes", "ProtectControlGroups=yes",
+            "CapabilityBoundingSet=", "RestrictAddressFamilies=AF_INET AF_UNIX AF_NETLINK", "UMask=0077", "TasksMax=128", "MemoryMax=2G"]
+
+
+def provider_environment(config, provider):
+    if provider == "claude":
+        home = "/home/" + config["user"]
+        values = {"HOME": home, "CLAUDE_CONFIG_DIR": config["claudeHome"], "HTTPS_PROXY": "http://127.0.0.1:3129",
+                  "HTTP_PROXY": "http://127.0.0.1:3129", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+                  "ENABLE_CLAUDEAI_MCP_SERVERS": "false", "DISABLE_AUTOUPDATER": "1", "CLAUDE_CODE_DISABLE_ARTIFACT": "1",
+                  "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1", "DO_NOT_TRACK": "1"}
+    else:
+        values = {"HTTPS_PROXY": "http://127.0.0.1:3128", "HTTP_PROXY": "http://127.0.0.1:3128", "RUST_LOG": "off"}
+    return ["--setenv=" + key + "=" + value for key, value in values.items()]
+
+
+def unit_command(config, unit, provider, workdir):
+    args = ["systemd-run", "--quiet", "--pipe", "--wait", "--collect", "--no-ask-password", "--expand-environment=no", "--unit=" + unit]
+    for prop in turn_properties(config, provider, workdir):
+        args += ["--property=" + prop]
+    return args + provider_environment(config, provider)
+
+
+def service_command(config, task_id, workdir, session=None, provider="codex"):
     if not UUID.fullmatch(task_id):
         raise ValueError("Invalid task id")
-    properties = ["User=" + config["user"], "Group=" + config["user"], "WorkingDirectory=" + workdir,
-                  "RuntimeMaxSec=600", "TimeoutStopSec=10", "KillMode=control-group", "NoNewPrivileges=yes",
-                  "ProtectSystem=strict", "ProtectHome=read-only", "ReadWritePaths=" + config["workRoot"] + " " + config["authDir"],
-                  "Type=exec", "PrivateTmp=yes", "PrivateDevices=yes", "ProtectKernelTunables=yes", "ProtectKernelModules=yes", "ProtectControlGroups=yes",
-                  "CapabilityBoundingSet=", "RestrictAddressFamilies=AF_INET AF_UNIX AF_NETLINK", "UMask=0077", "TasksMax=128", "MemoryMax=2G"]
-    args = ["systemd-run", "--quiet", "--pipe", "--wait", "--collect", "--no-ask-password", "--expand-environment=no", "--unit=phone-lab-turn-" + task_id]
-    for prop in properties:
-        args += ["--property=" + prop]
-    args += ["--setenv=HTTPS_PROXY=http://127.0.0.1:3128", "--setenv=HTTP_PROXY=http://127.0.0.1:3128", "--setenv=RUST_LOG=off"]
-    return args + codex_command(config, workdir, session)
+    command = claude_command if provider == "claude" else codex_command
+    return unit_command(config, "phone-lab-turn-" + task_id, provider, workdir) + command(config, workdir, session)
+
+
+def probe_command(config, provider, probe_id):
+    """Run the boundary probe as the same confined unit an AI turn would use, without any AI."""
+    if not PROBE_ID.fullmatch(probe_id):
+        raise ValueError("Invalid probe id")
+    other = config.get("claudeHome") if provider == "codex" else config["authDir"]
+    spec = {"id": probe_id, "workRoot": config["workRoot"],
+            "denyWrite": ["/opt/agent-lab/control", "/var/lib/agent-lab", "/home/" + config["user"], "/etc"],
+            "denyRead": [path for path in (config["stateDir"], other, str(Path(__file__).with_name("config.json"))) if path]}
+    return unit_command(config, "phone-lab-probe-" + provider + "-" + probe_id, provider, config["workRoot"]) + [
+        "/usr/bin/python3", "-B", str(Path(__file__).resolve()), "--probe", json.dumps(spec)]
+
+
+def boundary_probe(spec):
+    """Executed inside the confined unit. Only the work root may be written; nothing listed may be read."""
+    def attempt(action):
+        try:
+            action()
+            return True
+        except OSError:
+            return False
+    def create(directory):
+        target = Path(directory) / (".phone-lab-probe-" + spec["id"])
+        with open(target, "x") as output:
+            output.write("probe")
+        target.unlink()
+    def read(path):
+        if Path(path).is_dir():
+            os.listdir(path)
+        else:
+            with open(path, "rb") as source:
+                source.read(1)
+    def direct_network():
+        import socket
+        socket.create_connection(("1.1.1.1", 443), timeout=3).close()
+    result = {"work_write": attempt(lambda: create(spec["workRoot"])), "direct_network": attempt(direct_network)}
+    result.update({"write:" + path: attempt(lambda path=path: create(path)) for path in spec["denyWrite"]})
+    result.update({"read:" + path: attempt(lambda path=path: read(path)) for path in spec["denyRead"]})
+    return result
+
+
+def probe_passed(result):
+    return (isinstance(result, dict) and result.get("work_write") is True and len(result) > 2 and
+            all(value is False for key, value in result.items() if key != "work_write"))
 
 
 class Guest:
-    def __init__(self, config, emit, *, guard=None, launch=None):
+    def __init__(self, config, emit, *, guard=None, launch=None, probe=None):
         self.config, self.emit = config, emit
         self.guard = guard or (lambda: guarded_helper(config))
         self.launch = launch or subprocess.Popen
         self.guard()
+        self.boundary = {}
+        if config.get("aiExecutionVerified") is True:
+            # Owner approval alone is not enough: every boot re-checks the
+            # confinement on this hardware before any AI turn may start.
+            for provider in providers(config):
+                try:
+                    self.boundary[provider] = probe_passed((probe or self.run_probe)(provider))
+                except Exception:
+                    self.boundary[provider] = False
         self.files = WorkFiles(config["workRoot"])
         self.state_dir = Path(config["stateDir"])
         self.state_dir.mkdir(mode=0o700, exist_ok=True)
@@ -258,8 +360,25 @@ class Guest:
     def result(self, task_id, result):
         self.emit({"id": task_id, "result": result})
 
+    def run_probe(self, provider):
+        if provider == "claude":
+            with open(self.config["claude"], "rb") as binary:
+                if hashlib.file_digest(binary, "sha256").hexdigest() != self.config["claudeSha256"]:
+                    raise RuntimeError("Installed Claude differs from the verified guest release")
+        response = subprocess.run(probe_command(self.config, provider, os.urandom(16).hex()),
+                                  capture_output=True, text=True, timeout=60)
+        if response.returncode != 0:
+            raise RuntimeError("Boundary probe failed to run")
+        return json.loads(response.stdout.strip().splitlines()[-1])
+
+    def ready_providers(self):
+        if self.config.get("aiExecutionVerified") is not True:
+            return []
+        return [provider for provider in providers(self.config) if self.boundary.get(provider) is True]
+
     def identity(self):
-        return {"ready": not self.stopping, "aiReady": not self.stopping and self.config.get("aiExecutionVerified") is True,
+        return {"ready": not self.stopping, "aiReady": not self.stopping and bool(self.ready_providers()),
+                "providers": self.ready_providers(), "boundary": self.boundary,
                 "activeTask": self.active, "guestSha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}
 
     def handle(self, request):
@@ -315,6 +434,11 @@ class Guest:
                 raise RuntimeError("実験室は停止処理中です。")
             if self.config.get("aiExecutionVerified") is not True:
                 raise RuntimeError("この接続の作業権限の承認・実機検証が未完了です。AIは起動していません。")
+            provider = args.get("provider", "codex")
+            if provider not in providers(self.config):
+                raise ValueError("この実験室では使えないAIです。")
+            if provider not in self.ready_providers():
+                raise RuntimeError("起動時の閉じ込め確認に合格していないため、このAIは起動しません。")
             prompt, thread_id, workdir = args.get("prompt"), args.get("threadId", ""), args.get("workdir", "")
             if not isinstance(prompt, str) or not 0 < len(prompt.strip()) <= 20000 or not re.fullmatch(r"lab-(?:first-plan|[a-f0-9-]{36})", thread_id):
                 raise ValueError("Invalid task input")
@@ -324,21 +448,26 @@ class Guest:
             session = self.state["sessions"].get(thread_id)
             if session and session["workdir"] != workdir:
                 raise ValueError("Conversation belongs to a different folder")
-            self.state["tasks"][task_id] = {"threadId": thread_id, "workdir": workdir, "startedAt": time.time()}
+            if session and session.get("provider", "codex") != provider:
+                raise ValueError("この会話は別のAIで始めています。新規セッションを作ってください。")
+            self.state["tasks"][task_id] = {"threadId": thread_id, "workdir": workdir, "provider": provider, "startedAt": time.time()}
             self.active = task_id
             self.save()  # Save before launch. A repeated delivery cannot execute again.
-            self.thread = threading.Thread(target=self.execute, args=(task_id, args, session), daemon=False)
+            self.thread = threading.Thread(target=self.execute, args=(task_id, dict(args, provider=provider), session), daemon=False)
             self.thread.start()
 
     def execute(self, task_id, args, session):
         text, native_id, completed, failed = "", session and session["nativeId"], False, False
+        provider = args["provider"]
         process = None
         diagnostic = self.state_dir / (task_id + ".log")
         try:
+            if provider == "claude":
+                subprocess.run(["systemctl", "start", CLAUDE_PROXY_UNIT], check=True, timeout=20, capture_output=True)
             prompt = "この作業はWindows内の隔離された実験室だけで行います。作業フォルダ内の実装・検査を行い、公開・外部送信・実際の支出・本番操作・信頼側の台帳や制御の変更は禁止です。結果と実施した検査を日本語で報告してください。\n\n" + args["prompt"]
             if args["threadId"] == "lab-first-plan" and not session:
                 prompt += "\n\n既存の計画草案:\n" + self.files.read(args["workdir"] + "/PLAN.json")["text"]
-            command = service_command(self.config, task_id, args["workdir"], native_id)
+            command = service_command(self.config, task_id, args["workdir"], native_id, provider)
             with diagnostic.open("x") as errors:
                 process = self.launch(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errors, text=True, encoding="utf-8")
                 process.stdin.write(prompt)
@@ -351,12 +480,24 @@ class Guest:
                         subprocess.run(["systemctl", "stop", "phone-lab-turn-" + task_id], timeout=20, capture_output=True)
                         raise RuntimeError("実行記録の上限に達しました。")
                     event = json.loads(line)
-                    if event.get("type") == "thread.started" and UUID.fullmatch(event.get("thread_id", "")):
+                    if not isinstance(event, dict):
+                        raise ValueError("Unexpected event")
+                    kind = event.get("type")
+                    if provider == "claude":
+                        if kind in ("system", "result") and UUID.fullmatch(str(event.get("session_id", ""))):
+                            native_id = event["session_id"]
+                        if kind == "result":
+                            text = str(event.get("result", "")).encode()[-100000:].decode("utf-8", errors="ignore")
+                            success = event.get("subtype") == "success" and event.get("is_error") is False
+                            completed |= success
+                            failed |= not success
+                        continue
+                    if kind == "thread.started" and UUID.fullmatch(event.get("thread_id", "")):
                         native_id = event["thread_id"]
-                    if event.get("type") == "item.completed" and event.get("item", {}).get("type") == "agent_message":
+                    if kind == "item.completed" and event.get("item", {}).get("type") == "agent_message":
                         text = str(event["item"].get("text", "")).encode()[-100000:].decode("utf-8", errors="ignore")
-                    completed |= event.get("type") == "turn.completed"
-                    failed |= event.get("type") in ("turn.failed", "error")
+                    completed |= kind == "turn.completed"
+                    failed |= kind in ("turn.failed", "error")
                 returncode = process.wait(timeout=20)
             with self.lock:
                 interrupted = self.state["tasks"][task_id].get("interrupted", False)
@@ -366,7 +507,7 @@ class Guest:
                 result["error"] = "作業を中断しました。" if interrupted else "実験担当の作業が完了しませんでした。診断記録は実験室内に保存しました。"
             if native_id:
                 with self.lock:
-                    self.state["sessions"][args["threadId"]] = {"nativeId": native_id, "workdir": args["workdir"]}
+                    self.state["sessions"][args["threadId"]] = {"nativeId": native_id, "workdir": args["workdir"], "provider": provider}
         except Exception:
             if process is not None:
                 try:
@@ -375,6 +516,11 @@ class Guest:
                 except (OSError, subprocess.SubprocessError):
                     pass
             result = {"ok": False, "error": "実験担当の起動または実行記録の確認に失敗しました。", "data": {"text": text}}
+        if provider == "claude":
+            try:
+                subprocess.run(["systemctl", "stop", CLAUDE_PROXY_UNIT], timeout=20, capture_output=True)
+            except (OSError, subprocess.SubprocessError):
+                pass
         with self.lock:
             self.state["tasks"][task_id]["result"] = result
             self.active = None
@@ -383,6 +529,10 @@ class Guest:
 
 
 def main():
+    if sys.argv[1:2] == ["--probe"] and len(sys.argv) == 3:
+        # Runs as the unprivileged lab user inside the confined unit; no console or AI.
+        print(json.dumps(boundary_probe(json.loads(sys.argv[2]))))
+        return
     import termios
     import tty
     parser = argparse.ArgumentParser(description=__doc__)

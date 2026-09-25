@@ -211,10 +211,8 @@ class WindowsVM:
         if enabled:
             self.net.require(current["State"] == "Running" and self.ready, "guest must report ready before connecting")
             self.net.require(self.ai_ready, "AI作業の承認・実機検証が未完了のため、通信は接続しません。")
-            self.net.gateway_check(current)
-            self.net.require(current["Switch"] in ("", "Default Switch", None), "different guest switch")
-            self.net.ps("Connect-VMNetworkAdapter -VMName agent-lab -SwitchName 'Default Switch'")
-            self.net.validate_acl(self.net.inspect())
+            # 固定番地の専用スイッチへの接続と前後の検査は、照合済みの防御処理（v9）に任せる。
+            self.net.connect()
         else:
             self.net.disconnect()
 
