@@ -5344,6 +5344,13 @@ function bridgeWorkspaceLabel(entry = {}, state = getBridgeState(entry.id), fall
   return meta.repoName || basenameFromPath(meta.workspaceLocation) || fallback;
 }
 
+// A card or row that already lists the workspace on its second line is named
+// for the machine. Titling the open one after its workspace too left the
+// Windows lab's card reading "first-ai-task-01", with no machine on it.
+function bridgeCardTitle(entry = {}, state = getBridgeState(entry.id)) {
+  return bridgeDisplayLabel(entry, "") || bridgeWorkspaceLabel(entry, state, entry.id);
+}
+
 function bridgeMetaText(entry, state = getBridgeState(entry.id)) {
   const info = state.info || {};
   const status = state.status || {};
@@ -5718,7 +5725,7 @@ function renderFleet() {
       const main = document.createElement("span");
       main.className = "bridge-row-main";
       const title = document.createElement("strong");
-      title.textContent = bridgeWorkspaceLabel(entry, state, entry.id);
+      title.textContent = bridgeCardTitle(entry, state);
       const small = document.createElement("small");
       small.textContent = `作業場所: ${bridgeMetaText(entry, state)}`;
       const build = document.createElement("small");
@@ -5764,7 +5771,7 @@ function renderBridgeFleetSheet() {
       const main = document.createElement("span");
       main.className = "bridge-row-main";
       const title = document.createElement("strong");
-      title.textContent = bridgeWorkspaceLabel(entry, state, entry.id);
+      title.textContent = bridgeCardTitle(entry, state);
       const small = document.createElement("small");
       small.textContent = `${entry.baseUrl} / 接続キー ${entry.rememberToken === false ? "この画面だけ" : "保存済み"} ${maskToken(effectiveBridgeToken(entry))}`;
       main.append(title, small);
