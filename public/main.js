@@ -4234,16 +4234,19 @@ function renderApprovalStrip(request = pendingApproval) {
   details.className = "secondary";
   details.textContent = "詳細";
   details.addEventListener("click", () => approval?.scrollIntoView({ block: "center", behavior: "smooth" }));
-  const accept = document.createElement("button");
-  accept.type = "button";
-  accept.textContent = "許可";
-  accept.addEventListener("click", () => approveButton?.click());
+  // Same words and the same order as the card above it (拒否 left, 承認
+  // right). The strip used to read 許可 | 拒否, so the right-hand button meant
+  // the opposite in the two places a thumb lands.
   const reject = document.createElement("button");
   reject.type = "button";
   reject.className = "secondary";
   reject.textContent = "拒否";
   reject.addEventListener("click", () => declineButton?.click());
-  approvalStrip.append(text, details, accept, reject);
+  const accept = document.createElement("button");
+  accept.type = "button";
+  accept.textContent = "承認";
+  accept.addEventListener("click", () => approveButton?.click());
+  approvalStrip.append(text, details, reject, accept);
 }
 
 function handleTerminalMessage(msg) {
