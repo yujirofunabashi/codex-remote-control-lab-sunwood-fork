@@ -366,13 +366,18 @@ const appBasePath = proxyBasePath();
 // so the icon iOS creates launches an app that can already reach the bridge -
 // unlike the root page, whose manifest start_url is deliberately token-free.
 function installEntryUrl() {
-  const bridge = activeBridge();
-  const url = new URL(bridgeAbsoluteUrl("/install", bridge), location.href);
-  const value = effectiveBridgeToken(bridge);
-  if (value) url.searchParams.set("token", value);
   // The icon opens in the AI this chat is using, so a Codex chat on a
   // Claude-default bridge yields a Codex icon, with its own picture and name.
-  const provider = currentThreadProvider();
+  return bridgeInstallUrl(activeBridge(), currentThreadProvider());
+}
+
+// The same page for any registered Mac and either AI. The Home Screen app has
+// no install hint of its own, so without this a Mac added through the fleet
+// could only get an icon by carrying its key into Safari by hand.
+function bridgeInstallUrl(entry, provider = "") {
+  const url = new URL(bridgeAbsoluteUrl("/install", entry), location.href);
+  const value = effectiveBridgeToken(entry);
+  if (value) url.searchParams.set("token", value);
   if (provider) url.searchParams.set("provider", provider);
   return url.href;
 }
@@ -5807,7 +5812,26 @@ function renderBridgeFleetSheet() {
         ? "この接続先からこの画面を開いているため削除できません"
         : `${bridgeDisplayLabel(entry, entry.id)} をこの端末から削除`;
       removeButton.addEventListener("click", () => removeBridge(entry.id));
-      actions.append(switchButton, reconnectButton, openButton, copyButton, removeButton);
+      // One Home Screen icon per AI, each opening that Mac in that AI. Offered
+      // only with a saved key, since an install page without one makes an icon
+      // that cannot connect; an older bridge that lists no providers gets both.
+      const knownProviders = state.info?.providers;
+      const installButtons = !effectiveBridgeToken(entry) ? [] : ["codex", "claude"]
+        .filter((provider) => !Array.isArray(knownProviders) || knownProviders.includes(provider))
+        .map((provider) => {
+          const name = provider === "codex" ? "Codex" : "Claude";
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "secondary";
+          button.textContent = `${name}アイコン`;
+          button.title = `${bridgeDisplayLabel(entry, entry.id)} の ${name} をホーム画面に追加するページを開く`;
+          button.addEventListener("click", () => {
+            window.open(bridgeInstallUrl(entry, provider), "_blank", "noopener");
+            showToast(`開いたページで 共有 →「ホーム画面に追加」を押すと ${name} のアイコンができます。`);
+          });
+          return button;
+        });
+      actions.append(switchButton, reconnectButton, openButton, copyButton, ...installButtons, removeButton);
       card.append(header, metaLine, buildLine, actions);
       bridgeFleetSheetList.appendChild(card);
     }
