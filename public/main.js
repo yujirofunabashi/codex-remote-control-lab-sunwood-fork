@@ -2357,7 +2357,11 @@ function updateModelButton() {
   const lab = activeLabInfo();
   modelButton.disabled = Boolean(lab);
   if (lab) {
-    modelButton.textContent = `${lab.model}・${reasoningDisplayLabel(lab.effort)}（実験用固定）`;
+    // The lab pins one model per AI, so a Claude chat shows Claude's, not Codex's.
+    const provider = currentThreadProvider();
+    const model = lab.modelsByProvider?.[provider] || lab.model;
+    const effort = lab.reasoningChoices?.[provider]?.[0] || lab.effort;
+    modelButton.textContent = `${model}・${reasoningDisplayLabel(effort)}（実験用固定）`;
     modelButton.title = "実験室では確認済みの設定を使います。普段の設定は変更しません。";
     closeModelMenu();
     return;
