@@ -819,6 +819,9 @@ function bridgeInfoPayload() {
       artifacts: true,
       approvals: true,
       fleet: true,
+      // Serves /install with this Mac's icon and a key-carrying start URL; a
+      // bridge without it (the Windows lab relay) has no page to add.
+      homeScreenInstall: true,
     },
   };
 }
@@ -2387,6 +2390,10 @@ const bridgeIconFiles = {
     },
   },
   claude: {
+    windows: {
+      icon180: "bridge-icons/claude-windows-180.png",
+      icon512: "bridge-icons/claude-windows-512.png",
+    },
     air: {
       icon180: "bridge-icons/claude-air-180.png",
       icon512: "bridge-icons/claude-air-512.png",
@@ -2402,13 +2409,14 @@ const bridgeIconFiles = {
   },
 };
 
-function bridgeIconVariant({ provider = agentProvider, machineLabel = "", appId = "", appName = "" } = {}) {
-  const normalizedProvider = normalizeProvider(provider);
+// Which machine's art to use. Every machine has a Codex and a Claude icon, so
+// the provider no longer changes the answer.
+function bridgeIconVariant({ machineLabel = "", appId = "", appName = "" } = {}) {
   const identity = [machineLabel, appId, appName]
     .map((value) => String(value || "").trim().toLowerCase())
     .filter(Boolean)
     .join(" ");
-  if (normalizedProvider === "codex" && /windows|win32|win64/.test(identity)) return "windows";
+  if (/windows|win32|win64/.test(identity)) return "windows";
   // The second Mac mini is its own machine, not a copy of the first: checked
   // before "mini", which would otherwise also match "mini2".
   if (/(?:^|[^a-z0-9])mini[\s_-]?2(?:[^a-z0-9]|$)|minijiro2/.test(identity)) return "mini2";

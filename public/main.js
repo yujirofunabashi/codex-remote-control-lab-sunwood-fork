@@ -5813,10 +5813,11 @@ function renderBridgeFleetSheet() {
         : `${bridgeDisplayLabel(entry, entry.id)} をこの端末から削除`;
       removeButton.addEventListener("click", () => removeBridge(entry.id));
       // One Home Screen icon per AI, each opening that Mac in that AI. Offered
-      // only with a saved key, since an install page without one makes an icon
-      // that cannot connect; an older bridge that lists no providers gets both.
+      // only where the bridge serves an install page and a key is saved, since
+      // a missing page or key makes an icon that cannot connect.
       const knownProviders = state.info?.providers;
-      const installButtons = !effectiveBridgeToken(entry) ? [] : ["codex", "claude"]
+      const canInstall = state.info?.capabilities?.homeScreenInstall === true && effectiveBridgeToken(entry);
+      const installButtons = !canInstall ? [] : ["codex", "claude"]
         .filter((provider) => !Array.isArray(knownProviders) || knownProviders.includes(provider))
         .map((provider) => {
           const name = provider === "codex" ? "Codex" : "Claude";

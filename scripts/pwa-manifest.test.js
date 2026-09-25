@@ -95,19 +95,26 @@ test("bridge icons distinguish provider and machine identity", () => {
     icon180: "bridge-icons/claude-mini-180.png",
     icon512: "bridge-icons/claude-mini-512.png",
   });
+  // Windows has a Claude icon of its own now, not the generic one.
   assert.deepEqual(bookmarkIconFiles({ provider: "claude", machineLabel: "Windows" }), {
+    icon180: "bridge-icons/claude-windows-180.png",
+    icon512: "bridge-icons/claude-windows-512.png",
+  });
+  // A machine nobody named keeps the generic Claude icon.
+  assert.deepEqual(bookmarkIconFiles({ provider: "claude", machineLabel: "Studio" }), {
     icon180: "bookmark-claude.png",
     icon512: "bookmark-claude-512.png",
   });
 
-  const iconCases = [
-    { provider: "codex", appName: "Codex" },
-    { provider: "codex", appName: "AIRCodex 46214" },
-    { provider: "codex", appName: "miniCodex 45224" },
-    { provider: "codex", appName: "WindowsCodex" },
-    { provider: "claude", appName: "Claude mini" },
-    { provider: "claude", appName: "Claude 8443 AIR" },
-  ];
+  // Every machine has both AIs, and each file is really there.
+  const iconCases = [{ provider: "codex", appName: "Codex" }];
+  for (const provider of ["codex", "claude"]) {
+    for (const machineLabel of ["Air", "mini", "mini2", "Windows"]) {
+      const files = bookmarkIconFiles({ provider, machineLabel });
+      assert.equal(files.icon180, `bridge-icons/${provider}-${bridgeIconVariant({ machineLabel })}-180.png`);
+      iconCases.push({ provider, machineLabel });
+    }
+  }
   for (const iconCase of iconCases) {
     const files = bookmarkIconFiles(iconCase);
     assert.ok(fs.existsSync(path.join(__dirname, "..", "public", files.icon180)), files.icon180);
