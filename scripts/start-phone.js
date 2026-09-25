@@ -6564,8 +6564,19 @@ async function main() {
     const fresh = url.searchParams.get("fresh") === "1";
     let requestedProvider;
     try {
-      requestedProvider = requireUnlockedProvider(normalizeProvider(url.searchParams.get("provider") || (threadId?.startsWith("gemini:") ? "gemini" : threadId?.startsWith("claude:") ? "claude" : agentProvider)));
+      requestedProvider = normalizeProvider(url.searchParams.get("provider") || (threadId?.startsWith("gemini:") ? "gemini" : threadId?.startsWith("claude:") ? "claude" : agentProvider));
+      requireUnlockedProvider(requestedProvider);
     } catch (error) {
+      // A locked-down bridge refusing another AI says so over the socket: a
+      // refused upgrade reaches the page as a bare drop, and the phone redials
+      // it about once a second. Only choosing Codex clears this.
+      if (error.statusCode === 403) {
+        wss.handleUpgrade(req, socket, head, (ws) => {
+          ws.send(JSON.stringify({ type: "error", text: `${error.message}使用するAIを Codex にしてください。`, retryable: false, code: "provider_unavailable" }));
+          ws.close();
+        });
+        return;
+      }
       socket.write(`HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n${error.message}`);
       socket.destroy();
       return;

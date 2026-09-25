@@ -9458,6 +9458,13 @@ function connect({ preserveHistory = false, freshThread = false, workdir = "" } 
     renderTokenMissingState();
     return;
   }
+  // A bridge that serves only some AIs (the Windows PC offers Codex alone)
+  // refuses the others, so a Claude choice carried over from another machine
+  // is switched to one it serves before dialling rather than refused.
+  const served = getBridgeState(bridgeId).info?.providers;
+  if (Array.isArray(served) && served.length && !served.map(normalizeProviderName).includes(currentThreadProvider())) {
+    adoptBridgeProvider(served[0], served);
+  }
   const provider = currentThreadProvider();
   const connectionState = getBridgeState(bridgeId);
   connectionState.pendingNewSessions ||= {};
