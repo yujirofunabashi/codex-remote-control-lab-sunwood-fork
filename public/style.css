@@ -3794,10 +3794,27 @@ body[data-terminal-input-mode="keys"] .terminal-input-mode-button {
   background: var(--soft);
 }
 
+/* An image in an answer is shown at its own shape. The attachment previews
+   above cap every image at a short, full-width strip, which shrank a phone
+   screenshot to a sliver in the middle of a wide grey box. The frame now
+   hugs the image, and a tall one may use most of the screen height. */
 .markdown-image {
   display: block;
-  max-width: min(100%, 320px);
+  width: fit-content;
+  max-width: min(100%, 440px);
   margin: 10px 0 14px;
+}
+
+.image-preview.markdown-image a {
+  display: block;
+}
+
+.image-preview.markdown-image img {
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  max-height: min(72vh, 720px);
+  margin: 0 auto;
 }
 
 .image-preview figcaption {

@@ -2876,7 +2876,8 @@ function renderInlineMarkdown(text) {
     .replace(/\u0000IMAGE(\d+)\u0000/g, (_, index) => {
       const image = imageTokens[Number(index)];
       if (!image) return "";
-      return `<figure class="image-preview markdown-image"><img src="${escapeHtml(image.url)}" alt="${escapeHtml(image.name || "image")}" loading="lazy"><figcaption>${escapeHtml(image.name || "image")}</figcaption></figure>`;
+      // Tapping opens the image on its own, where it can be pinched to full size.
+      return `<figure class="image-preview markdown-image"><a href="${escapeHtml(image.url)}" target="_blank" rel="noreferrer"><img src="${escapeHtml(image.url)}" alt="${escapeHtml(image.name || "image")}" loading="lazy"></a><figcaption>${escapeHtml(image.name || "image")}</figcaption></figure>`;
     });
 }
 
