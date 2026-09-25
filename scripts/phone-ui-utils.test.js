@@ -806,6 +806,11 @@ test("the mini and the Air are labelled in the colours of their own app icons", 
   assert.equal(machineAccentToken("Mac mini"), "mini");
   assert.equal(machineAccentToken("Air"), "air");
   assert.equal(machineAccentToken("MacBook-Air"), "air");
+  // The second mini has a colour of its own rather than borrowing the first's.
+  assert.equal(machineAccentToken("mini2"), "mini2");
+  assert.equal(machineAccentToken("mini 2"), "mini2");
+  assert.equal(machineAccentToken("minijiro2"), "mini2");
+  assert.notEqual(machineScopeKey("mini2"), machineScopeKey("mini"));
 });
 
 test("a machine that is neither takes no named colour, including near-misses", () => {

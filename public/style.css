@@ -46,10 +46,11 @@
   --warning-bg: #fff8ed;
   --warning-text: #5b4632;
   --error: #b33122;
-  /* The colours the two Macs already wear on their Home Screen icons: the mini
-     amber, the Air blue. Darkened from the icon art so 10px bold text on a
-     light sidebar stays legible. */
+  /* The colours the Macs already wear on their Home Screen icons: the mini
+     amber, the mini2 violet, the Air blue. Darkened from the icon art so 10px
+     bold text on a light sidebar stays legible. */
   --machine-mini: #a35c05;
+  --machine-mini2: #6d28d9;
   --machine-air: #15669f;
   --machine-color: var(--muted);
   --state-ready: #266b42;
@@ -403,8 +404,9 @@
   --warning-bg: rgba(255, 176, 74, 0.1);
   --warning-text: #ffd89b;
   --error: #ff7a9b;
-  /* Same two hues, lifted for a dark background. */
+  /* Same hues, lifted for a dark background. */
   --machine-mini: #ffb454;
+  --machine-mini2: #c4a5ff;
   --machine-air: #6fc8ff;
   --state-ready: #5eead4;
   --state-running: #7dd3fc;
@@ -451,6 +453,7 @@
   --warning-text: #6b4c21;
   --error: #b14a32;
   --machine-mini: #8f5410;
+  --machine-mini2: #6b3fa0;
   --machine-air: #2f6f9f;
   --state-ready: #326b3c;
   --state-running: #2f6f9f;
@@ -1594,6 +1597,10 @@ button.project-heading.active {
    a Mac the app has no colour for; JS fills that one in from the palette. */
 [data-machine="mini"] {
   --machine-color: var(--machine-mini);
+}
+
+[data-machine="mini2"] {
+  --machine-color: var(--machine-mini2);
 }
 
 [data-machine="air"] {

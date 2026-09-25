@@ -1075,14 +1075,16 @@
     return { text: "チャット一覧を読み込んでいます…", retry: false };
   }
 
-  // The two Macs already have colours their owner recognises before reading
-  // anything: the mini's icon is amber, the Air's is blue. The label carries the
-  // same two, so the machine registers at a glance. A machine that is neither
+  // The Macs already have colours their owner recognises before reading
+  // anything: the mini's icon is amber, the mini2's violet, the Air's blue. The
+  // label carries the same ones, so the machine registers at a glance. A machine that is neither
   // gets a stable colour from the shared palette instead, which is why this
   // answers with a name rather than a colour.
   function machineAccentToken(machine = "") {
     const key = machineScopeKey(machine);
     if (!key) return "";
+    // "mini2" also reads as "mini" below, so the second mini is checked first.
+    if (/(?:^|[^a-z0-9])mini-?2(?:[^a-z0-9]|$)|minijiro2/.test(key)) return "mini2";
     if (/(?:^|[^a-z])mini(?:[^a-z]|$)/.test(key)) return "mini";
     if (/(?:^|[^a-z])air(?:[^a-z]|$)/.test(key)) return "air";
     return "";

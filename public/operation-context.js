@@ -4,11 +4,13 @@
 })(typeof globalThis !== "undefined" ? globalThis : window, () => {
   const maxAgeMs = 12 * 60 * 60 * 1000;
   const storageKey = "codexPhoneOperationContext:v1";
-  const machines = { air: "Air", mini: "mini", iphone: "iPhone", ipad: "iPad", windows: "Windows", android: "Android", mac: "Mac" };
+  const machines = { air: "Air", mini: "mini", mini2: "mini2", iphone: "iPhone", ipad: "iPad", windows: "Windows", android: "Android", mac: "Mac" };
   const presets = [
     { id: "air", label: "Airで直接", operator: "air", screen: "air", route: "direct" },
     { id: "mini", label: "miniで直接", operator: "mini", screen: "mini", route: "direct" },
     { id: "air-mini", label: "Airからminiの画面", operator: "air", screen: "mini", route: "screen-sharing" },
+    { id: "mini2", label: "mini2で直接", operator: "mini2", screen: "mini2", route: "direct" },
+    { id: "air-mini2", label: "Airからmini2の画面", operator: "air", screen: "mini2", route: "screen-sharing" },
     { id: "iphone", label: "iPhone", operator: "iphone", screen: "iphone", route: "direct" },
     { id: "ipad", label: "iPad", operator: "ipad", screen: "ipad", route: "direct" },
     { id: "windows", label: "Windowsで直接", operator: "windows", screen: "windows", route: "direct" },
@@ -51,7 +53,7 @@
     const context = normalize(saved, now);
     const detected = browserScreen(navigatorLike);
     // A profile copied to a different browser family is not current evidence.
-    if (detected && context.screen && (detected === "mac" ? !["air", "mini", "mac"].includes(context.screen) : detected !== context.screen)) {
+    if (detected && context.screen && (detected === "mac" ? !["air", "mini", "mini2", "mac"].includes(context.screen) : detected !== context.screen)) {
       return normalize({ screen: detected }, now);
     }
     return { ...context, screen: context.screen || detected };

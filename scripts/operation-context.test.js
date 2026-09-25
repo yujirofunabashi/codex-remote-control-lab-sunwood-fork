@@ -34,6 +34,20 @@ test("a selected screen-sharing route expires without renewing its observation a
   assert.equal(stale.selectedAt, null);
 });
 
+test("mini2 is its own operator and screen, not the first mini", () => {
+  const direct = context.forBrowser(context.selectPreset("mini2", now), { userAgent: "Macintosh" }, now);
+  assert.equal(direct.operator, "mini2");
+  assert.equal(direct.screen, "mini2");
+  assert.equal(context.badge(direct), "操作 mini2");
+  const shared = context.forBrowser(context.selectPreset("air-mini2", now), { userAgent: "Macintosh" }, now);
+  assert.equal(shared.operator, "air");
+  assert.equal(shared.screen, "mini2");
+  assert.equal(shared.route, "screen-sharing");
+  const text = context.turnContext(shared, "mini2", now);
+  assert.match(text, /手元: Air \/ 画面: mini2 \/ 経路: 画面共有 .* 実行先: mini2/);
+  assert.equal(context.visibleUserContent([{ type: "text", text: "hi" }, { type: "text", text }]).length, 1);
+});
+
 test("copied profiles and impossible or future-dated routes cannot assert an operator", () => {
   const saved = context.selectPreset("air-mini", now);
   assert.equal(context.forBrowser(saved, { userAgent: "iPhone" }, now).operator, "");

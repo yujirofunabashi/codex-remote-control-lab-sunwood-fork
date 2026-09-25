@@ -252,6 +252,9 @@ test("which Mac a message came from is visible before it is read", () => {
   assert.notEqual(machineColor("studio"), machineColor(""));
   assert.equal(machineColor("mini", "#123abc"), "#123ABC");
   assert.equal(machineColor("MacBook-Air.local"), "#2563EB");
+  assert.equal(machineColor("mini2"), "#7C3AED");
+  assert.equal(machineColor("minijiro2"), "#7C3AED");
+  assert.equal(machineColor("mini"), "#F59E0B");
 
   const payload = discordPayload({ ...mini, message: `${mini.headline}\n${mini.body}` });
   assert.equal(payload.username, "Claude mini");

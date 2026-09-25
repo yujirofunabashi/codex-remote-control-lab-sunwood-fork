@@ -2316,6 +2316,10 @@ const bridgeIconFiles = {
       icon180: "bridge-icons/codex-mini-180.png",
       icon512: "bridge-icons/codex-mini-512.png",
     },
+    mini2: {
+      icon180: "bridge-icons/codex-mini2-180.png",
+      icon512: "bridge-icons/codex-mini2-512.png",
+    },
     windows: {
       icon180: "bridge-icons/codex-windows-180.png",
       icon512: "bridge-icons/codex-windows-512.png",
@@ -2330,6 +2334,10 @@ const bridgeIconFiles = {
       icon180: "bridge-icons/claude-mini-180.png",
       icon512: "bridge-icons/claude-mini-512.png",
     },
+    mini2: {
+      icon180: "bridge-icons/claude-mini2-180.png",
+      icon512: "bridge-icons/claude-mini2-512.png",
+    },
   },
 };
 
@@ -2340,6 +2348,9 @@ function bridgeIconVariant({ provider = agentProvider, machineLabel = "", appId 
     .filter(Boolean)
     .join(" ");
   if (normalizedProvider === "codex" && /windows|win32|win64/.test(identity)) return "windows";
+  // The second Mac mini is its own machine, not a copy of the first: checked
+  // before "mini", which would otherwise also match "mini2".
+  if (/(?:^|[^a-z0-9])mini[\s_-]?2(?:[^a-z0-9]|$)|minijiro2/.test(identity)) return "mini2";
   if (/(?:^|[^a-z])mini(?:[^a-z]|$)|mac.?mini|mini.?codex|claude.?mini/.test(identity)) return "mini";
   if (/(?:^|[^a-z])air(?:[^a-z]|$)|macbook.?air|air.?codex|claude.?air/.test(identity)) return "air";
   return "default";

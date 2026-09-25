@@ -77,6 +77,15 @@ test("bridge icons distinguish provider and machine identity", () => {
   assert.equal(bridgeIconVariant({ provider: "claude", appName: "Claude 8443 AIR" }), "air");
   assert.equal(bridgeIconVariant({ provider: "codex", appName: "WindowsCodex" }), "windows");
   assert.equal(bridgeIconVariant({ provider: "codex", appName: "Codex" }), "default");
+  // The second mini is not drawn as the first one.
+  assert.equal(bridgeIconVariant({ provider: "codex", machineLabel: "mini2" }), "mini2");
+  assert.equal(bridgeIconVariant({ provider: "claude", machineLabel: "Mini 2" }), "mini2");
+  assert.equal(bridgeIconVariant({ provider: "claude", machineLabel: machineLabelForEnvironment("", "minijiro2") }), "mini2");
+  assert.equal(bridgeIconVariant({ provider: "codex", appName: "miniCodex 25224" }), "mini");
+  assert.deepEqual(bookmarkIconFiles({ provider: "claude", machineLabel: "mini2" }), {
+    icon180: "bridge-icons/claude-mini2-180.png",
+    icon512: "bridge-icons/claude-mini2-512.png",
+  });
 
   assert.deepEqual(bookmarkIconFiles({ provider: "codex", machineLabel: "MacBook Air" }), {
     icon180: "bridge-icons/codex-air-180.png",

@@ -128,9 +128,9 @@ function redactNotificationText(value) {
 // Which Mac a message is about has to be visible before the message is read:
 // two Macs post to the same channel, and "Claude finished" from one of them
 // looks exactly like the other. Each Mac gets the colour its Home Screen icon
-// carries in the phone UI - mini amber, Air blue - and any other name a fixed
-// colour of its own. `PHONE_BRIDGE_COLOR` overrides the guess.
-const machineAccentColors = { mini: "#F59E0B", air: "#2563EB" };
+// carries in the phone UI - mini amber, mini2 violet, Air blue - and any other
+// name a fixed colour of its own. `PHONE_BRIDGE_COLOR` overrides the guess.
+const machineAccentColors = { mini: "#F59E0B", mini2: "#7C3AED", air: "#2563EB" };
 const accentPalette = ["#FF5D22", "#7C3AED", "#0F766E", "#DB2777", "#CA8A04", "#0891B2"];
 const neutralAccentColor = "#6B7280";
 
@@ -144,6 +144,7 @@ function machineColor(machine, override = "") {
   if (forced) return forced;
   const key = String(machine || "").trim().toLowerCase();
   if (!key) return neutralAccentColor;
+  if (/(?:^|[^a-z0-9])mini[\s_-]?2(?:[^a-z0-9]|$)|minijiro2/.test(key)) return machineAccentColors.mini2;
   if (/(?:^|[^a-z])mini(?:[^a-z]|$)|mac.?mini/.test(key)) return machineAccentColors.mini;
   if (/(?:^|[^a-z])air(?:[^a-z]|$)|macbook.?air/.test(key)) return machineAccentColors.air;
   let hash = 0;
