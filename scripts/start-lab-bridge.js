@@ -46,7 +46,15 @@ function validateConfig(config) {
   if (octets.length !== 4 || octets.some(part => !Number.isInteger(part) || part < 0 || part > 255)
     || !(config.host === "127.0.0.1" || (octets[0] === 100 && octets[1] >= 64 && octets[1] <= 127))) throw new Error("Bind the relay only to loopback or its private Tailscale address");
   if (!config.model || !["high", "xhigh", "max"].includes(config.effort)) throw new Error("A validated model and reasoning effort are required");
+  // Claude is optional; the Windows guest still refuses it unless its per-boot confinement check passed.
+  if ((config.claudeModel || config.claudeEffort) && (!/^claude-[a-z0-9-]+$/.test(config.claudeModel || "") || !["high", "xhigh", "max"].includes(config.claudeEffort))) throw new Error("A validated Claude model and effort are required");
   return config;
+}
+
+function labProviders(config) {
+  const models = { codex: { model: config.model, effort: config.effort } };
+  if (config.claudeModel) models.claude = { model: config.claudeModel, effort: config.claudeEffort };
+  return models;
 }
 
 function createLabServer(config, { store = new LabState({ file: config.stateFile, workRoot: config.workRoot }) } = {}) {
@@ -56,16 +64,27 @@ function createLabServer(config, { store = new LabState({ file: config.stateFile
   const clients = new Map();
   const shell = Object.fromEntries(["main.js", "style.css"].map(file => [file === "main.js" ? "main" : "style", `${file}?v=${crypto.createHash("sha256").update(fs.readFileSync(path.join(publicDir, file))).digest("hex").slice(0, 12)}`]));
   const workspace = cwd => ({ workdir: cwd, cwd, workspaceLocation: cwd, repoName: path.posix.basename(cwd), gitBranch: "" });
+  const models = labProviders(config);
+  const providerNames = Object.keys(models);
+  const providerOf = thread => thread.provider || "codex";
+  const requestedProvider = url => {
+    const value = url.searchParams.get("provider");
+    if (value && !providerNames.includes(value)) throw failure(`この実験室で使えるAIは ${providerNames.join("・")} です。`);
+    return value || "";
+  };
   const info = () => ({ id: config.id, label: "Windows実験室", machineLabel: "Windows", hostName: config.targetHost,
-    group: "windows-lab", provider: "codex", providers: ["codex"], model: config.model, modelsByProvider: { codex: config.model },
-    effort: config.effort, modelChoices: { codex: [config.model] }, reasoningChoices: { codex: [config.effort], byModel: { [config.model]: [config.effort] } },
+    group: "windows-lab", provider: "codex", providers: providerNames, model: config.model,
+    modelsByProvider: Object.fromEntries(providerNames.map(name => [name, models[name].model])),
+    effort: config.effort, modelChoices: Object.fromEntries(providerNames.map(name => [name, [models[name].model]])),
+    reasoningChoices: { ...Object.fromEntries(providerNames.map(name => [name, [models[name].effort]])),
+      byModel: Object.fromEntries(providerNames.map(name => [models[name].model, [models[name].effort]])) },
     ...workspace(config.workRoot), repoRoot: config.workRoot, uiPort: config.port, startedAt,
     app: { id: config.id, name: "Windows実験室", shortName: "Windows" }, shell,
     build: build.status(),
     capabilities: { threads: true, terminalHistory: false, artifacts: true, approvals: false, fleet: true, lab: true },
     lab: store.target(), color: "#3f7f4b" });
-  const threadPayload = thread => ({ type: "ready", provider: "codex", threadId: thread.id, threadTitle: thread.name,
-    model: config.model, ...workspace(thread.cwd), history: thread.history, run: store.run(thread), clients: clients.get(thread.id)?.size || 1, slashCommands: [], lab: store.target() });
+  const threadPayload = thread => ({ type: "ready", provider: providerOf(thread), threadId: thread.id, threadTitle: thread.name,
+    model: models[providerOf(thread)].model, ...workspace(thread.cwd), history: thread.history, run: store.run(thread), clients: clients.get(thread.id)?.size || 1, slashCommands: [], lab: store.target() });
   const emit = (id, message) => {
     for (const socket of clients.get(id) || []) if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ ...message, threadId: id }));
   };
@@ -111,14 +130,13 @@ function createLabServer(config, { store = new LabState({ file: config.stateFile
       }
       if (url.pathname.startsWith("/api/")) {
         if (!sameSecret(requestToken(req, url), config.phoneToken)) return reply(401, { error: "Unauthorized" });
-        const provider = url.searchParams.get("provider");
-        if (provider && provider !== "codex") return reply(400, { error: "この実験室はCodexだけを使用します。" });
+        const provider = requestedProvider(url);
         if (req.method === "GET") {
           if (url.pathname === "/api/bridge/info" || url.pathname === "/api/info") return reply(200, info());
           if (url.pathname === "/api/health") return reply(200, { ok: true, ...info() });
-          if (url.pathname === "/api/status") return reply(200, { provider: "codex", ...workspace(config.workRoot), lab: store.target(), bridges: Object.values(store.state.threads).map(thread => ({ threadId: thread.id, provider: "codex", model: config.model, ...workspace(thread.cwd), run: store.run(thread) })) });
-          if (url.pathname === "/api/threads") return reply(200, { provider: "codex", activeProvider: "codex", data: store.threadRecords(), hiddenProjects: [] });
-          if (url.pathname === "/api/thread") { const thread = store.thread(url.searchParams.get("thread")); return reply(200, { provider: "codex", threadId: thread.id, history: thread.history, ...workspace(thread.cwd), lab: store.target() }); }
+          if (url.pathname === "/api/status") return reply(200, { provider: provider || "codex", ...workspace(config.workRoot), lab: store.target(), bridges: Object.values(store.state.threads).map(thread => ({ threadId: thread.id, provider: providerOf(thread), model: models[providerOf(thread)].model, ...workspace(thread.cwd), run: store.run(thread) })) });
+          if (url.pathname === "/api/threads") return reply(200, { provider: provider || "codex", activeProvider: provider || "codex", data: store.threadRecords(provider), hiddenProjects: [] });
+          if (url.pathname === "/api/thread") { const thread = store.thread(url.searchParams.get("thread")); return reply(200, { provider: providerOf(thread), threadId: thread.id, history: thread.history, ...workspace(thread.cwd), lab: store.target() }); }
           if (url.pathname === "/api/workspaces") return reply(200, { data: Object.values(store.state.folders).map(folder => ({ path: folder.path, name: path.posix.basename(folder.path), label: folder.path, group: "Windows実験室", git: false })) });
           if (url.pathname === "/api/workspaces/browse") {
             const target = labPath(url.searchParams.get("path"), config.workRoot);
@@ -141,7 +159,7 @@ function createLabServer(config, { store = new LabState({ file: config.stateFile
           if (url.pathname === "/api/bridge/registry") return reply(200, { version: 2, revision: 0, bridges: [], tokens: {}, deleted: [] });
           if (["/api/local-settings", "/api/config"].includes(url.pathname)) return reply(200, { ...info(), readOnly: true, workdir: config.workRoot, workspaces: [], lab: store.target() });
           if (["/api/models", "/api/skills", "/api/plugins", "/api/automations"].includes(url.pathname)) return reply(200, { data: [] });
-          if (url.pathname === "/api/rate-limits") return reply(200, { provider: "codex", source: "unavailable", windows: [] });
+          if (url.pathname === "/api/rate-limits") return reply(200, { provider: provider || "codex", source: "unavailable", windows: [] });
           return reply(404, { error: "この操作は実験室では使用できません。" });
         }
         if (req.method !== "POST") return reply(405, { error: "Method not allowed" });
@@ -179,10 +197,11 @@ function createLabServer(config, { store = new LabState({ file: config.stateFile
     wss.handleUpgrade(req, socket, head, ws => {
       const sendError = error => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "error", text: redactSensitiveText(error.message) })); };
       try {
-        if (url.searchParams.get("provider") && url.searchParams.get("provider") !== "codex") throw failure("この実験室はCodexだけを使用します。");
+        const provider = requestedProvider(url);
         const existing = url.searchParams.get("thread");
-        const thread = existing ? store.thread(existing) : url.searchParams.get("fresh") === "1" ? store.createThread(url.searchParams.get("workdir") || config.workRoot) : Object.values(store.state.threads)[0];
+        const thread = existing ? store.thread(existing) : url.searchParams.get("fresh") === "1" ? store.createThread(url.searchParams.get("workdir") || config.workRoot, provider || "codex") : Object.values(store.state.threads)[0];
         if (!thread) throw failure("実験室を起動して、新規セッションから作業フォルダを選んでください。", 409);
+        if (existing && provider && provider !== providerOf(thread)) throw failure("この会話は別のAIで始めています。新規セッションを作ってください。");
         if (!clients.has(thread.id)) clients.set(thread.id, new Set());
         clients.get(thread.id).add(ws);
         ws.send(JSON.stringify(threadPayload(thread)));
@@ -192,8 +211,10 @@ function createLabServer(config, { store = new LabState({ file: config.stateFile
             const message = JSON.parse(String(raw));
             if (message.type === "prompt") {
               const options = message.options || {};
-              if (message.attachments?.length || message.images?.length || (options.model && options.model !== config.model) || (options.effort && options.effort !== config.effort)
-                || (options.serviceTier && options.serviceTier !== "standard") || (options.sandboxMode && options.sandboxMode !== "workspace-write") || (options.approvalPolicy && options.approvalPolicy !== "never")) throw failure("実験室では確認済みのモデル・検討設定、専用フォルダ内の操作、文章の指示だけを使います。");
+              const chosen = models[providerOf(thread)];
+              const codexOnly = providerOf(thread) === "codex" && ((options.sandboxMode && options.sandboxMode !== "workspace-write") || (options.approvalPolicy && options.approvalPolicy !== "never"));
+              if (message.attachments?.length || message.images?.length || (options.model && options.model !== chosen.model) || (options.effort && options.effort !== chosen.effort)
+                || (options.serviceTier && options.serviceTier !== "standard") || codexOnly) throw failure("実験室では確認済みのモデル・検討設定、専用フォルダ内の操作、文章の指示だけを使います。");
               const clientMessageId = String(message.clientMessageId || "");
               if (!/^[a-zA-Z0-9_-]{1,160}$/.test(clientMessageId)) throw failure("送信識別番号が必要です。画面を更新してください。");
               store.enqueue("run", { prompt: message.text }, { threadId: thread.id, clientMessageId });

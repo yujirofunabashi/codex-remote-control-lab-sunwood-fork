@@ -79,20 +79,21 @@ class LabState extends EventEmitter {
     return thread;
   }
 
-  createThread(workdir) {
+  createThread(workdir, provider = "codex") {
+    if (!["codex", "claude"].includes(provider)) throw failure("この実験室では使えないAIです。");
     this.requireReady();
     const cwd = labPath(workdir, this.workRoot);
     if (!this.state.folders[cwd]) throw failure("先に実験室のフォルダを確認してください。", 409);
     const id = `lab-${crypto.randomUUID()}`;
-    const thread = { id, provider: "codex", name: "新しい実験作業", cwd, createdAt: this.now(), updatedAt: 0, history: [], run: { state: "ready", label: "未実行・送信できます" } };
+    const thread = { id, provider, name: "新しい実験作業", cwd, createdAt: this.now(), updatedAt: 0, history: [], run: { state: "ready", label: "未実行・送信できます" } };
     this.state.threads[id] = thread;
     this.save();
     return thread;
   }
 
-  threadRecords() {
-    return Object.values(this.state.threads).filter(thread => thread.history.length).map(thread => ({
-      id: thread.id, provider: "codex", name: thread.name, cwd: thread.cwd,
+  threadRecords(provider) {
+    return Object.values(this.state.threads).filter(thread => thread.history.length && (!provider || (thread.provider || "codex") === provider)).map(thread => ({
+      id: thread.id, provider: thread.provider || "codex", name: thread.name, cwd: thread.cwd,
       createdAt: thread.createdAt, updatedAt: thread.updatedAt, runState: this.run(thread).state,
     }));
   }
@@ -118,7 +119,7 @@ class LabState extends EventEmitter {
       if (Object.values(this.state.jobs).some(job => ["run", "shutdown"].includes(job.op) && !job.finishedAt)) throw failure("実験室で別の作業が動いています。終了後に送信してください。", 409);
       const thread = this.thread(threadId);
       if (typeof args.prompt !== "string" || !args.prompt.trim() || args.prompt.length > 20000) throw failure("指示は1〜20,000文字で入力してください。");
-      args = { prompt: args.prompt, workdir: thread.cwd, threadId };
+      args = { prompt: args.prompt, workdir: thread.cwd, threadId, provider: thread.provider || "codex" };
     }
     if (op === "shutdown" && Object.values(this.state.jobs).some(job => job.op === "run" && !job.finishedAt)) throw failure("作業中です。中断して結果を確認してから停止してください。", 409);
     if (["browse", "read", "snapshot", "start", "shutdown", "interrupt"].includes(op)) {
