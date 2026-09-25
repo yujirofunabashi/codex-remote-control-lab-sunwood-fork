@@ -1119,17 +1119,52 @@ function updateFleetConfigBridgeSettings(filePath, { port = uiPort, bridgeId = "
   return { updated: true };
 }
 
-function isUnderHome(target) {
-  const home = path.resolve(os.homedir());
+function isWithin(root, target) {
+  const base = path.resolve(root);
   const resolved = path.resolve(target);
-  return resolved === home || resolved.startsWith(`${home}${path.sep}`);
+  return resolved === base || resolved.startsWith(`${base}${path.sep}`);
+}
+
+function isUnderHome(target) {
+  return isWithin(os.homedir(), target);
+}
+
+// Folders outside the home folder that the owner has opened to the phone, such
+// as the project area on an external disk. Set as PHONE_WORKSPACE_ROOTS, one
+// absolute path per entry separated by ":" (a path may contain spaces).
+// Nothing is opened by default, and an entry that would expose more than one
+// tree is dropped: "/", a top-level folder such as "/Volumes" or "/Users", and
+// anything that contains the home folder. A root that is not mounted right now
+// is still listed here; every use checks that the folder actually exists, so
+// an unplugged disk fails instead of quietly standing in for another place.
+function extraWorkspaceRoots(value = process.env.PHONE_WORKSPACE_ROOTS) {
+  const roots = [];
+  for (const item of String(value || "").split(":")) {
+    const text = item.trim();
+    if (!text || !path.isAbsolute(text)) continue;
+    const root = path.resolve(text);
+    if (root.split(path.sep).filter(Boolean).length < 2) continue;
+    if (isWithin(root, os.homedir()) || isUnderHome(root)) continue;
+    if (!roots.includes(root)) roots.push(root);
+  }
+  return roots;
+}
+
+function isAllowedWorkspacePath(target, roots = extraWorkspaceRoots()) {
+  return isUnderHome(target) || roots.some((root) => isWithin(root, target));
+}
+
+function extraWorkspaceRootFor(target, roots = extraWorkspaceRoots()) {
+  return roots.find((root) => isWithin(root, target)) || "";
 }
 
 function validateWorkdir(input) {
   const raw = String(input || "").trim();
   if (!raw) throw new Error("Workdir is required");
   const target = path.resolve(raw);
-  if (!path.isAbsolute(target) || !isUnderHome(target)) throw new Error("Workdir must be an absolute path under the home folder");
+  if (!path.isAbsolute(target) || !isAllowedWorkspacePath(target)) {
+    throw new Error("Workdir must be an absolute path under the home folder or a folder allowed by PHONE_WORKSPACE_ROOTS");
+  }
   if (!fs.existsSync(target) || !fs.statSync(target).isDirectory()) throw new Error("Workdir does not exist");
   return target;
 }
@@ -1213,7 +1248,7 @@ function setWorkspaceBookmark(workspacePath, pinned) {
 function workspaceBookmarks() {
   return readWorkspacePrefs().bookmarks.filter((item) => {
     try {
-      return isUnderHome(item) && fs.statSync(item).isDirectory();
+      return isAllowedWorkspacePath(item) && fs.statSync(item).isDirectory();
     } catch {
       return false;
     }
@@ -1222,11 +1257,15 @@ function workspaceBookmarks() {
 
 // Walking the filesystem from a phone means this endpoint is reachable over the
 // LAN or a mesh VPN, so it stays inside the same boundary validateWorkdir
-// enforces: below the home folder, directories only, no symlink escape.
+// enforces: below the home folder or an owner-allowed root, directories only,
+// no symlink escape.
 function browseWorkspaceDirectories(input) {
   const raw = String(input || "").trim();
   const target = raw ? path.resolve(raw) : os.homedir();
-  if (!isUnderHome(target)) throw errorWithStatus("参照できるのはホームフォルダ配下だけです。", 400);
+  const roots = extraWorkspaceRoots();
+  if (!isAllowedWorkspacePath(target, roots)) {
+    throw errorWithStatus("参照できるのはホームフォルダ配下と、設定で許可したフォルダだけです。", 400);
+  }
 
   let stat;
   try {
@@ -1253,7 +1292,7 @@ function browseWorkspaceDirectories(input) {
       // Resolve before trusting it: a link can point anywhere.
       try {
         const resolved = fs.realpathSync(childPath);
-        if (!isUnderHome(resolved) || !fs.statSync(resolved).isDirectory()) continue;
+        if (!isAllowedWorkspacePath(resolved, roots) || !fs.statSync(resolved).isDirectory()) continue;
         isDirectory = true;
       } catch {
         continue;
@@ -1271,10 +1310,31 @@ function browseWorkspaceDirectories(input) {
   children.sort((a, b) => a.name.localeCompare(b.name, "ja"));
 
   const home = path.resolve(os.homedir());
+  // The allowed roots live outside the home folder, so nothing inside it leads
+  // there. The home listing offers them first, and going up from a root comes
+  // back to the home folder rather than into the rest of the disk.
+  if (target === home) {
+    const outside = roots
+      .filter((item) => {
+        try {
+          return fs.statSync(item).isDirectory();
+        } catch {
+          return false;
+        }
+      })
+      .map((item) => ({
+        name: `外付け: ${item.replace(/^\/Volumes\//, "")}`,
+        path: item,
+        isRepo: fs.existsSync(path.join(item, ".git")),
+        pinned: pinned.has(item),
+      }));
+    children.unshift(...outside);
+  }
+  const insideRoot = isUnderHome(target) ? "" : extraWorkspaceRootFor(target, roots);
   return {
     path: target,
     displayPath: displayPath(target),
-    parent: target === home ? null : path.dirname(target),
+    parent: target === home ? null : insideRoot && target === insideRoot ? home : path.dirname(target),
     isRepo: fs.existsSync(path.join(target, ".git")),
     pinned: pinned.has(target),
     entries: children,
@@ -1356,6 +1416,7 @@ function workspaceOptions() {
     { group: "Gitリポ", items: [...collectGitWorkspaces(devRoot, 5), ...collectGitWorkspaces(miniRoot, 3)] },
     { group: "プロジェクト候補", items: [...collectProjectFolders(devRoot, 5), ...collectProjectFolders(miniRoot, 3)] },
     { group: "基本フォルダ", items: [workdir, root, path.join(home, "WORK_LOCAL"), devRoot, miniRoot] },
+    { group: "外付け", items: extraWorkspaceRoots(), preserveOrder: true },
   ];
   const seen = new Set();
   const options = [];
@@ -6514,6 +6575,9 @@ module.exports = {
   bookmarkIconFiles,
   bridgeIconVariant,
   browseWorkspaceDirectories,
+  extraWorkspaceRoots,
+  validateWorkdir,
+  workspaceOptions,
   setWorkspaceBookmark,
   setWorkspaceHidden,
   hiddenWorkspaces,

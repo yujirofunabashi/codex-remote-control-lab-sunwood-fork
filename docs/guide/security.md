@@ -8,6 +8,7 @@ This project is intentionally local-first.
 - The phone bridge is the only LAN-facing server.
 - Page, API, and WebSocket bridge requests require the same token.
 - `.phone-token`, `.uploads/`, `.codex-home*/`, logs, and session databases stay out of Git.
+- A phone can pick working folders only under the Mac's home folder and the exact roots its owner lists in `PHONE_WORKSPACE_ROOTS`; nothing else on the disk is browsable or usable as a workdir.
 - `.phone-fleet.local.json`, `.phone-bridges.local.json`, `.phone-bridges.<port>.local.json`, `.phone-registry-key`, and browser bridge registry state are local-only.
 - Startup notification credentials and tokenized URL messages should stay in private/protected notification accounts, topics, or channels. Startup messages are token-free unless `PHONE_NOTIFY_STARTUP_TOKEN_URLS=1` asks for the tokenized URL, which is the whole fleet's key and stays in the channel's history; turn it on for first-time setup only.
 

@@ -97,7 +97,7 @@ PHONE_DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/... npm run phone
 PHONE_NOTIFY_TIMEOUT_MS=5000 npm run phone
 ```
 
-チャット一覧の上にある「新規セッション」（＝新しい会話を始めるボタン）から、使用するMacとAIを選び、履歴がないフォルダでも開始できます。「ホーム」（＝そのMacの利用者用フォルダ）や「↑ 上の階層」でフォルダをたどり、「このフォルダで開始」を押します。フォルダの場所を直接入力して「開く」で確認することもできます。選べるのはホーム配下の既存フォルダです。キャンセルすると元の会話と下書きが残り、開始しても元の会話は一覧から開き直せます。起動時の既定フォルダは変更しません。
+チャット一覧の上にある「新規セッション」（＝新しい会話を始めるボタン）から、使用するMacとAIを選び、履歴がないフォルダでも開始できます。「ホーム」（＝そのMacの利用者用フォルダ）や「↑ 上の階層」でフォルダをたどり、「このフォルダで開始」を押します。フォルダの場所を直接入力して「開く」で確認することもできます。選べるのはホーム配下の既存フォルダと、`PHONE_WORKSPACE_ROOTS` で許可した外付けディスクのフォルダです。キャンセルすると元の会話と下書きが残り、開始しても元の会話は一覧から開き直せます。起動時の既定フォルダは変更しません。
 
 複数 bridge / 複数 worktree を 1 つの browser tab で扱う場合は、Bridge Fleet / Worktree Switchboard を使います。通常通り 1 つ目の bridge を開き、ヘッダーまたは sidebar の bridge/worktree pill から、残りの protected startup URL または base URL と token を追加します。`CODEX_APP_SERVER_PORT` を指定しない場合、各 slot の Codex app-server は `PHONE_UI_PORT - 1` を使います。たとえば `45224 -> 45223` になり、`45214 -> 45213` の既定 app-server を複数 slot が奪い合いません。active bridge を切り替えると chat / terminal / thread / artifact / approval UI はその bridge の状態へ切り替わり、inactive bridge の稼働・エラー・承認待ちは global monitor / inbox に出ます。session は実行した Mac に残るため、sidebar の thread 一覧は登録済み bridge すべてから集めた 1 つの一覧になります。2 台以上の Mac が並ぶときだけ project 見出しと thread 行に機体名（`mini` / `Air` など）が付き、ホーム画面アイコンに合わせて mini は琥珀色、Air は青で表示されます。別の Mac の thread を開くとその bridge へ接続が切り替わります。設定画面の作業場所・フォルダ選択も、いま見ているのがどの Mac かを見出しとパス表示に出し、上部の chip で設定対象の Mac を切り替えられます。機体名は hostname から推定し、`PHONE_MACHINE_LABEL` を指定した場合はそちらが優先されます。
 
