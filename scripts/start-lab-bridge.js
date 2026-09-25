@@ -285,7 +285,9 @@ function createLabServer(config, { store = new LabState({ file: config.stateFile
       try {
         const provider = requestedProvider(url);
         const existing = url.searchParams.get("thread");
-        const thread = existing ? store.thread(existing) : url.searchParams.get("fresh") === "1" ? store.createThread(url.searchParams.get("workdir") || config.workRoot, provider || "codex") : Object.values(store.state.threads)[0];
+        // With no conversation named, open one of the requested AI - never
+        // another AI's, which the phone would then file under the wrong AI.
+        const thread = existing ? store.thread(existing) : url.searchParams.get("fresh") === "1" ? store.createThread(url.searchParams.get("workdir") || config.workRoot, provider || "codex") : Object.values(store.state.threads).find(item => providerOf(item) === (provider || "codex"));
         if (!thread) throw failure("実験室を起動して、新規セッションから作業フォルダを選んでください。", 409);
         if (existing && provider && provider !== providerOf(thread)) throw failure("この会話は別のAIで始めています。新規セッションを作ってください。");
         if (!clients.has(thread.id)) clients.set(thread.id, new Set());

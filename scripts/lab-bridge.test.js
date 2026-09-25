@@ -101,6 +101,29 @@ test("lab conversations get their own stable numbers, per AI, instead of number 
   assert.equal((await fetch(app.origin + "/api/session-numbers", { method: "POST", body: "{}" })).status, 401);
 });
 
+test("opening the lab in Claude never hands back a Codex conversation", async t => {
+  const app = await fixture(t, { claudeModel: "claude-opus-5-5", claudeEffort: "xhigh" });
+  await app.ready();
+  app.store.createThread(root);
+  const protocols = ["phone-bridge-v1", "phone-token." + Buffer.from(app.config.phoneToken).toString("base64url")];
+  const socket = new WebSocket(app.origin.replace("http:", "ws:") + "/bridge?provider=claude", protocols);
+  t.after(() => socket.terminate());
+  const [bytes] = await once(socket, "message");
+  const message = JSON.parse(String(bytes));
+  assert.equal(message.type, "error");
+  assert.match(message.text, /新規セッション/);
+  const codex = new WebSocket(app.origin.replace("http:", "ws:") + "/bridge?provider=codex", protocols);
+  t.after(() => codex.terminate());
+  const [codexBytes] = await once(codex, "message");
+  assert.equal(JSON.parse(String(codexBytes)).provider, "codex");
+  // Upgraded sockets are not closed with the HTTP server, so close them here.
+  for (const open of [socket, codex]) {
+    if (open.readyState === WebSocket.CLOSED) continue;
+    open.close();
+    await once(open, "close");
+  }
+});
+
 test("phone and host credentials, origins and allowed operations stay separate", async t => {
   const app = await fixture(t);
   assert.equal((await fetch(app.origin + "/api/status")).status, 401);
