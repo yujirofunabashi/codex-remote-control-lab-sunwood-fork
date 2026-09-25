@@ -420,6 +420,15 @@ function persistClaudeRateLimitMessage(message) {
 }
 
 const codexBin = process.env.CODEX_BIN || path.join(root, "node_modules", ".bin", "codex");
+
+// npm's shim in node_modules/.bin is a shell script, and on Windows spawn()
+// cannot run it (only codex.cmd, which needs a shell). The package's own
+// launcher is plain JavaScript that picks the Windows binary, so Windows runs
+// that under this Node instead. CODEX_BIN still wins everywhere.
+function codexLaunch(args, { platform = process.platform, env = process.env } = {}) {
+  if (env.CODEX_BIN || platform !== "win32") return { command: env.CODEX_BIN || codexBin, args };
+  return { command: process.execPath, args: [path.join(root, "node_modules", "@openai", "codex", "bin", "codex.js"), ...args] };
+}
 const claudeBin = process.env.CLAUDE_BIN || "claude";
 const envPath = path.join(root, ".env");
 const fleetConfigPath = process.env.PHONE_FLEET_CONFIG_PATH ? path.resolve(process.env.PHONE_FLEET_CONFIG_PATH) : "";
@@ -800,7 +809,7 @@ function bridgeInfoPayload() {
     // Application code, not the repository selected for this conversation.
     build: bridgeBuildTracker?.status() || { schema: 1, available: false, restartRequired: null },
     provider: agentProvider,
-    providers: ["codex", "claude", "gemini"],
+    providers: offeredProviders(),
     model,
     modelsByProvider: providerModels,
     modelChoices: { codex: codexModelChoices({ configured: modelForProvider("codex") }), claude: claudeModelOptions, gemini: geminiModelOptions },
@@ -818,10 +827,13 @@ function bridgeInfoPayload() {
       terminalHistory: true,
       artifacts: true,
       approvals: true,
-      fleet: true,
+      fleet: !isLockedDown(),
+      lockdown: lockdownInfo(),
       // Serves /install with this Mac's icon and a key-carrying start URL; a
       // bridge without it (the Windows lab relay) has no page to add.
-      homeScreenInstall: true,
+      // A locked-down bridge is opened from another machine's card, never as
+      // the app's home, so the list of other machines never lands on it.
+      homeScreenInstall: !isLockedDown(),
     },
   };
 }
@@ -1132,6 +1144,63 @@ function isUnderHome(target) {
   return isWithin(os.homedir(), target);
 }
 
+// A bridge on a computer that must not be opened up wholesale - the Windows PC
+// that holds the brokerage software - runs locked down to one folder named by
+// PHONE_LOCKDOWN_ROOT. Whatever the phone sends, Codex then works only there
+// with workspace-write and on-request approval, the terminal and the other AIs
+// are refused, no other folder can be picked, and the phone's list of other
+// machines (with their keys) is never stored here. A drive, a top-level folder
+// or anything that contains the home folder is not one folder, so it fails
+// instead of quietly opening the whole disk.
+function lockdownRoot(value = process.env.PHONE_LOCKDOWN_ROOT) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  const target = path.resolve(text);
+  if (!path.isAbsolute(text) || target.split(path.sep).filter(Boolean).length < 2 || isWithin(target, os.homedir())) {
+    throw new Error("PHONE_LOCKDOWN_ROOT must name one dedicated folder, not a drive, a top-level folder or one that contains the home folder");
+  }
+  return target;
+}
+
+function isLockedDown() {
+  return Boolean(lockdownRoot());
+}
+
+// The folder the phone starts from and cannot climb out of.
+function workspaceHome() {
+  return lockdownRoot() || os.homedir();
+}
+
+function requireUnlockedProvider(provider) {
+  if (isLockedDown() && provider !== "codex") throw errorWithStatus("この接続で使えるのは Codex だけです。", 403);
+  return provider;
+}
+
+const lockedCodexPolicy = Object.freeze({ approvalPolicy: "on-request", sandboxMode: "workspace-write" });
+
+function offeredProviders() {
+  return isLockedDown() ? ["codex"] : ["codex", "claude", "gemini"];
+}
+
+// What the phone shows for a locked-down bridge, so it neither offers a mode
+// the bridge would override nor claims more than the bridge enforces.
+function lockdownInfo() {
+  const lockRoot = lockdownRoot();
+  return lockRoot ? { root: displayPath(lockRoot), ...lockedCodexPolicy, terminal: false } : null;
+}
+
+// Checked once at startup: a locked-down bridge must not listen beyond this
+// computer, and its launch folder must be inside the locked folder.
+function assertLockdownLaunch({ host = uiHost, launchWorkdir = workdir } = {}) {
+  const lockRoot = lockdownRoot();
+  if (!lockRoot) return;
+  if (!["127.0.0.1", "::1", "localhost"].includes(String(host))) {
+    throw new Error("PHONE_LOCKDOWN_ROOT requires PHONE_UI_HOST=127.0.0.1; publish it with tailscale serve only");
+  }
+  if (!fs.existsSync(lockRoot) || !fs.statSync(lockRoot).isDirectory()) throw new Error("PHONE_LOCKDOWN_ROOT does not exist");
+  if (!isWithin(lockRoot, launchWorkdir)) throw new Error("PHONE_WORKDIR must be inside PHONE_LOCKDOWN_ROOT");
+}
+
 // Folders outside the home folder that the owner has opened to the phone, such
 // as the project area on an external disk. Set as PHONE_WORKSPACE_ROOTS, one
 // absolute path per entry separated by ":" (a path may contain spaces).
@@ -1154,6 +1223,7 @@ function extraWorkspaceRoots(value = process.env.PHONE_WORKSPACE_ROOTS) {
 }
 
 function isAllowedWorkspacePath(target, roots = extraWorkspaceRoots()) {
+  if (isLockedDown()) return isWithin(lockdownRoot(), target);
   return isUnderHome(target) || roots.some((root) => isWithin(root, target));
 }
 
@@ -1264,8 +1334,8 @@ function workspaceBookmarks() {
 // no symlink escape.
 function browseWorkspaceDirectories(input) {
   const raw = String(input || "").trim();
-  const target = raw ? path.resolve(raw) : os.homedir();
-  const roots = extraWorkspaceRoots();
+  const target = raw ? path.resolve(raw) : workspaceHome();
+  const roots = isLockedDown() ? [] : extraWorkspaceRoots();
   if (!isAllowedWorkspacePath(target, roots)) {
     throw errorWithStatus("参照できるのはホームフォルダ配下と、設定で許可したフォルダだけです。", 400);
   }
@@ -1312,7 +1382,7 @@ function browseWorkspaceDirectories(input) {
   }
   children.sort((a, b) => a.name.localeCompare(b.name, "ja"));
 
-  const home = path.resolve(os.homedir());
+  const home = path.resolve(workspaceHome());
   // The allowed roots live outside the home folder, so nothing inside it leads
   // there. The home listing offers them first, and going up from a root comes
   // back to the home folder rather than into the rest of the disk.
@@ -1333,7 +1403,7 @@ function browseWorkspaceDirectories(input) {
       }));
     children.unshift(...outside);
   }
-  const insideRoot = isUnderHome(target) ? "" : extraWorkspaceRootFor(target, roots);
+  const insideRoot = isWithin(home, target) ? "" : extraWorkspaceRootFor(target, roots);
   return {
     path: target,
     displayPath: displayPath(target),
@@ -1489,7 +1559,7 @@ function localSettingsPayload(overrides = {}) {
       uiHost,
     },
     options: {
-      providers: ["codex", "claude", "gemini"],
+      providers: offeredProviders(),
       models: modelOptionsForProvider(agentProvider),
       modelsByProvider: {
         codex: codexModelChoices({ configured: modelForProvider("codex") }),
@@ -1869,11 +1939,12 @@ function isManagedCodexProcessAlive() {
 
 function startCodexServer() {
   if (isManagedCodexProcessAlive()) return codexProcess;
-  const child = spawn(codexBin, ["app-server", "--listen", codexUrl], {
+  const launch = codexLaunch(["app-server", "--listen", codexUrl]);
+  const child = spawn(launch.command, launch.args, {
     cwd: root,
     env: {
       ...process.env,
-      PATH: `${path.join(root, "node_modules", ".bin")}:${process.env.PATH || ""}`,
+      PATH: `${path.join(root, "node_modules", ".bin")}${path.delimiter}${process.env.PATH || ""}`,
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -1986,9 +2057,9 @@ function requireToken(url, phoneToken, res) {
 
 function queryProvider(url, res, fallback = agentProvider) {
   try {
-    return normalizeProvider(url.searchParams.get("provider") || fallback);
+    return requireUnlockedProvider(normalizeProvider(url.searchParams.get("provider") || fallback));
   } catch (error) {
-    sendJson(res, 400, { error: error.message });
+    sendJson(res, error.statusCode || 400, { error: error.message });
     return null;
   }
 }
@@ -3933,8 +4004,9 @@ class SharedBridge {
     // config says, which is what made the phone's depth menu do nothing.
     if (effort) params.effort = effort;
     if (Object.prototype.hasOwnProperty.call(options, "serviceTier")) params.serviceTier = normalizeServiceTier(options.serviceTier);
-    if (options.approvalPolicy) params.approvalPolicy = options.approvalPolicy;
-    if (options.sandboxMode) params.sandboxPolicy = sandboxPolicyForMode(options.sandboxMode);
+    const policy = isLockedDown() ? lockedCodexPolicy : options;
+    if (policy.approvalPolicy) params.approvalPolicy = policy.approvalPolicy;
+    if (policy.sandboxMode) params.sandboxPolicy = sandboxPolicyForMode(policy.sandboxMode);
     const id = this.request("turn/start", {
       ...params,
     });
@@ -5820,7 +5892,12 @@ async function codexThreadListPayload(requestedProvider) {
     sourceKinds: ["cli", "vscode", "appServer"],
     useStateDbOnly: false,
   });
-  const remoteData = Array.isArray(result.data) ? result.data.map((thread) => ({ ...thread, provider: requestedProvider })) : result.data;
+  // Locked down, conversations from other folders (the PC's own Codex app
+  // keeps its history in the same place) are not this connection's to show.
+  const visible = Array.isArray(result.data) && isLockedDown()
+    ? result.data.filter((thread) => thread.cwd && isAllowedWorkspacePath(path.resolve(thread.cwd)))
+    : result.data;
+  const remoteData = Array.isArray(visible) ? visible.map((thread) => ({ ...thread, provider: requestedProvider })) : visible;
   const data = Array.isArray(remoteData) ? mergeThreadListData(remoteData, localThreadList(requestedProvider)) : remoteData;
   return { ...result, provider: requestedProvider, activeProvider: requestedProvider, data };
 }
@@ -5848,6 +5925,7 @@ function localModelList(provider = agentProvider) {
 }
 
 async function main() {
+  assertLockdownLaunch();
   // Capture before serving requests so later disk edits can require a restart.
   bridgeBuildTracker = createBuildTracker(root);
   const phoneToken = getToken();
@@ -5885,7 +5963,7 @@ async function main() {
       if (!requireToken(url, phoneToken, res)) return;
       sendJson(res, 200, {
         provider: agentProvider,
-        providers: ["codex", "claude", "gemini"],
+        providers: offeredProviders(),
         model,
         modelChoices: { codex: codexModelChoices({ configured: modelForProvider("codex") }), claude: claudeModelOptions, gemini: geminiModelOptions },
     reasoningChoices: reasoningChoicePayload(),
@@ -5925,6 +6003,10 @@ async function main() {
     // "no backup yet" would push its empty registry over the real one.
     if (url.pathname === "/api/bridge/registry") {
       if (!requireToken(url, phoneToken, res)) return;
+      if (isLockedDown()) {
+        sendJson(res, 403, { error: "この接続は接続先一覧を預かりません。", code: "registry-disabled" });
+        return;
+      }
       const store = { filePath: bridgeRegistryPath, keyPath: bridgeRegistryKeyPath };
       if (req.method === "GET") {
         try {
@@ -6154,7 +6236,7 @@ async function main() {
           const body = await readJsonBody(req);
           const updates = {};
           const fleetUpdates = {};
-          const requestedProvider = Object.prototype.hasOwnProperty.call(body, "provider") ? normalizeProvider(body.provider) : agentProvider;
+          const requestedProvider = requireUnlockedProvider(Object.prototype.hasOwnProperty.call(body, "provider") ? normalizeProvider(body.provider) : agentProvider);
           if (Object.prototype.hasOwnProperty.call(body, "provider")) {
             updates[slotEnvKey("PHONE_AGENT_PROVIDER", uiPort)] = requestedProvider;
             fleetUpdates.provider = requestedProvider;
@@ -6239,6 +6321,10 @@ async function main() {
     }
     if (url.pathname === "/api/terminal/run") {
       if (!requireToken(url, phoneToken, res)) return;
+      if (isLockedDown()) {
+        sendJson(res, 403, { error: "この接続ではコマンドの直接実行は使えません。Codex に依頼してください。" });
+        return;
+      }
       if (req.method !== "POST") {
         sendJson(res, 405, { error: "method not allowed" });
         return;
@@ -6478,7 +6564,7 @@ async function main() {
     const fresh = url.searchParams.get("fresh") === "1";
     let requestedProvider;
     try {
-      requestedProvider = normalizeProvider(url.searchParams.get("provider") || (threadId?.startsWith("gemini:") ? "gemini" : threadId?.startsWith("claude:") ? "claude" : agentProvider));
+      requestedProvider = requireUnlockedProvider(normalizeProvider(url.searchParams.get("provider") || (threadId?.startsWith("gemini:") ? "gemini" : threadId?.startsWith("claude:") ? "claude" : agentProvider)));
     } catch (error) {
       socket.write(`HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n${error.message}`);
       socket.destroy();
@@ -6555,6 +6641,11 @@ if (require.main === module) {
 }
 
 module.exports = {
+  assertLockdownLaunch,
+  bridgeInfoPayload,
+  codexLaunch,
+  lockdownRoot,
+  requireUnlockedProvider,
   GeminiBridge,
   ClaudeBridge,
   SharedBridge,

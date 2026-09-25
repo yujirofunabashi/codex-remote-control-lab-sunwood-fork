@@ -5610,14 +5610,23 @@ function activeLabInfo() {
   return info?.capabilities?.lab ? info : null;
 }
 
+// A bridge locked down to one folder (the Windows PC) overrides whatever mode
+// is sent, so the button shows the fixed mode instead of offering a choice.
+function activeLockdownInfo() {
+  return getBridgeState(activeBridgeId).info?.capabilities?.lockdown || null;
+}
+
+const lockedAccessLabel = "確認モード（固定）";
+
 function renderLabControls() {
   if (!labControls) return;
   const info = activeLabInfo();
   renderLabProgress(info);
   labControls.hidden = !info;
   const gemini = currentThreadProvider() === "gemini";
-  accessButton.disabled = Boolean(info) || gemini;
-  accessButton.textContent = info ? "実験フォルダ内のみ" : gemini ? "文章相談（試験）" : accessMode.label;
+  const locked = activeLockdownInfo();
+  accessButton.disabled = Boolean(info) || Boolean(locked) || gemini;
+  accessButton.textContent = info ? "実験フォルダ内のみ" : locked ? lockedAccessLabel : gemini ? "文章相談（試験）" : accessMode.label;
   accessButton.title = gemini ? "文章での提案・推敲を依頼します。厳密な読み取り専用ではなく、操作の許可はPC側のAntigravity設定に従います。承認ボタンには未対応です。" : "";
   const geminiNotice = document.querySelector("#geminiNotice");
   if (geminiNotice) geminiNotice.hidden = !gemini;
@@ -8373,7 +8382,7 @@ async function showSettings() {
     const config = result.config?.config || {};
     addPanelRow("認証", result.auth?.authMethod || "unknown");
     addPanelRow("既定モデル", config.model || selectedModel || "unknown");
-    addPanelRow("許可範囲", accessMode.label);
+    addPanelRow("許可範囲", activeLockdownInfo() ? `${lockedAccessLabel}・${activeLockdownInfo().root} の中だけ` : accessMode.label);
     addPanelRow("作業場所", localResult.value?.active?.workdir || "");
     if (result.errors?.length) addPanelRow("補足エラー", result.errors.join(" / "));
   } catch (error) {
@@ -9810,8 +9819,8 @@ composer.addEventListener("submit", (event) => {
           model: activeLabInfo()?.model || selectedModel || undefined,
           serviceTier: activeLabInfo() ? "standard" : currentThreadProvider() === "codex" ? selectedServiceTier || null : undefined,
           effort: effortForSubmission(),
-          approvalPolicy: currentThreadProvider() === "gemini" ? undefined : activeLabInfo() ? "never" : accessMode.approvalPolicy,
-          sandboxMode: currentThreadProvider() === "gemini" ? undefined : activeLabInfo() ? "workspace-write" : accessMode.sandboxMode,
+          approvalPolicy: currentThreadProvider() === "gemini" ? undefined : activeLabInfo() ? "never" : activeLockdownInfo()?.approvalPolicy || accessMode.approvalPolicy,
+          sandboxMode: currentThreadProvider() === "gemini" ? undefined : activeLabInfo() ? "workspace-write" : activeLockdownInfo()?.sandboxMode || accessMode.sandboxMode,
         },
       }),
     );
@@ -10189,7 +10198,7 @@ fileInput.addEventListener("change", async () => {
   }
 });
 accessButton.addEventListener("click", () => {
-  if (activeLabInfo()) return;
+  if (activeLabInfo() || activeLockdownInfo()) return;
   const index = accessModes.findIndex((candidate) => candidate.label === accessMode.label);
   accessMode = accessModes[(index + 1) % accessModes.length];
   accessButton.textContent = accessMode.label;

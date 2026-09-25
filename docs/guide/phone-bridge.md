@@ -132,6 +132,17 @@ The summary uses `schema: 1`, `status` (`completed`, `revision_limit`, `total_ti
 
 On the target hardware on 2026-09-08, the Windows relay connected, the Hyper-V guest booted, confined folder selection and an existing report opened in the browser, three existing output files matched their previously recorded hashes, and the guest shut down normally. No AI turn was requested during that verification; native AI edits/tests remain unverified. To deliver into the usual Air/mini interfaces, add only the phone credential to the registry while preserving existing connections. Even with restart approval, wait for every conversation to become idle and its reply to be saved before restarting only the bridge processes. An armed restart is not completed delivery: verify a new start time, the running build, served UI, histories and credentials independently on each machine. Verify any new target hardware separately. These checks never grant external or financial approval.
 
+### A Windows PC's own Codex, locked to one folder (not yet run on Windows) {#windows-host}
+
+This is a different connection from the lab above: the ordinary bridge runs on the Windows PC itself and drives that PC's Codex. That PC holds the brokerage software, and the bridge is reachable with its one phone key, so the key must not also get around Codex's limits. Set `PHONE_LOCKDOWN_ROOT` to one dedicated folder. The bridge then:
+
+- runs every Codex thread and turn with `workspace-write` and `on-request` approval, whatever mode the phone sends. The phone shows **確認モード（固定）** and cannot switch it. An approval nobody answers keeps waiting, and the command does not run.
+- accepts only folders inside that root as workdirs and browsing roots, ignores `PHONE_WORKSPACE_ROOTS`, and lists only conversations whose folder is inside it. The PC's own Codex app keeps its history in the same place.
+- refuses `/api/terminal/run`, Claude and Gemini, and the fleet registry backup. The last is refused so that the phone's list of other machines and their keys is never stored on that PC. It offers no Home Screen install, so open it from another machine's card.
+- refuses to start unless `PHONE_UI_HOST` is `127.0.0.1` and `PHONE_WORKDIR` is inside the root. Publish it with `tailscale serve` only. A drive, a top-level folder, or a folder that contains the home folder is rejected as the root.
+
+On Windows, `npm install` brings the matching Codex (`@openai/codex-win32-*`). The bridge starts Codex through the package's JavaScript launcher, because `spawn()` cannot run npm's `.bin` shell shim there. Use `npm run phone:supervise` in place of `phone:loop`, which needs a POSIX shell; it restarts on exit code 42 like the loop. Whether Codex's own sandbox confines `workspace-write` on that Windows build has not been verified on the hardware. Check it with a turn that tries to write outside the root before relying on it. The lockdown does not touch the brokerage software's own rules: no API password, orders, balances or positions.
+
 ## Useful Environment Variables
 
 ```bash
