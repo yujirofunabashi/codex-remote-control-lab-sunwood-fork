@@ -9,6 +9,7 @@ const { LabState, labPath, failure } = require("./lab-state");
 const { redactSensitiveText } = require("./debug-log");
 const { createBuildTracker } = require("./bridge-build");
 const { readLabProgress } = require("./lab-progress");
+const { SessionNumberStore } = require("./session-number-store");
 
 const repository = path.resolve(__dirname, "..");
 const publicDir = path.join(repository, "public");
@@ -112,6 +113,12 @@ function createLabServer(config, { store = new LabState({ file: config.stateFile
   const shell = Object.fromEntries(["main.js", "style.css"].map(file => [file === "main.js" ? "main" : "style", `${file}?v=${crypto.createHash("sha256").update(fs.readFileSync(path.join(publicDir, file))).digest("hex").slice(0, 12)}`]));
   const workspace = cwd => ({ workdir: cwd, cwd, workspaceLocation: cwd, repoName: path.posix.basename(cwd), gitBranch: "" });
   const models = labProviders(config);
+  // The lab numbers its own conversations (Codex Windows①, Claude Windows①),
+  // apart from the relay Mac's, so its shortcuts get a number like every other
+  // machine's instead of "number unconfirmed". The ledger sits beside the
+  // relay state unless a directory is given.
+  const numbersDir = config.sessionNumbersDir || (config.stateFile ? path.join(path.dirname(config.stateFile), "lab-session-numbers") : "");
+  const sessionNumbers = numbersDir ? new SessionNumberStore(numbersDir) : null;
   const providerNames = Object.keys(models);
   const providerOf = thread => thread.provider || "codex";
   const requestedProvider = url => {
@@ -221,6 +228,16 @@ function createLabServer(config, { store = new LabState({ file: config.stateFile
           return reply(202, { ok: true, requestId: job.id });
         }
         if (url.pathname === "/api/bridge/registry") return reply(200, { version: 2, revision: 0, bridges: [], tokens: {}, deleted: [] });
+        if (url.pathname === "/api/session-numbers") {
+          // Only this lab's own conversations, each under the AI it runs.
+          const sessions = Array.isArray(body.sessions) ? body.sessions : null;
+          const own = item => typeof item?.threadId === "string" && Object.hasOwn(store.state.threads, item.threadId)
+            && providerOf(store.state.threads[item.threadId]) === item.provider;
+          if (!sessionNumbers || !sessions || !sessions.every(own)) {
+            return reply(503, { error: "会話番号を確認できません。保存済みの番号は変更していません。" });
+          }
+          return reply(200, { sessions: sessionNumbers.assign(sessions) });
+        }
         return reply(403, { error: "実験室で許可されていない操作です。" });
       }
       if (req.method !== "GET") return reply(405, { error: "Method not allowed" });

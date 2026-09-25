@@ -77,6 +77,27 @@ test("without Claude configured an install page never claims to be Claude", asyn
   assert.doesNotMatch(page, /claude-windows/);
 });
 
+test("lab conversations get their own stable numbers, per AI, instead of number unconfirmed", async t => {
+  const numbersDir = fs.mkdtempSync(path.join(os.tmpdir(), "lab-numbers-"));
+  t.after(() => fs.rmSync(numbersDir, { recursive: true, force: true }));
+  const app = await fixture(t, { claudeModel: "claude-opus-5-5", claudeEffort: "xhigh", sessionNumbersDir: numbersDir });
+  await app.ready();
+  const codexA = app.store.createThread(root);
+  const codexB = app.store.createThread(root);
+  const claude = app.store.createThread(root, "claude");
+  const ask = sessions => app.request("/api/session-numbers", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ sessions }) });
+  const first = await (await ask([{ provider: "codex", threadId: codexA.id }, { provider: "codex", threadId: codexB.id }, { provider: "claude", threadId: claude.id }])).json();
+  assert.deepEqual(first.sessions.map(item => item.sessionNumber), [1, 2, 1]);
+  const again = await (await ask([{ provider: "codex", threadId: codexB.id }])).json();
+  assert.equal(again.sessions[0].sessionNumber, 2);
+
+  // Only this lab's conversations, under the AI they actually run.
+  assert.equal((await ask([{ provider: "claude", threadId: codexA.id }])).status, 503);
+  assert.equal((await ask([{ provider: "codex", threadId: "not-a-lab-thread" }])).status, 503);
+  assert.equal((await ask([{ provider: "codex", threadId: "__proto__" }])).status, 503);
+  assert.equal((await fetch(app.origin + "/api/session-numbers", { method: "POST", body: "{}" })).status, 401);
+});
+
 test("phone and host credentials, origins and allowed operations stay separate", async t => {
   const app = await fixture(t);
   assert.equal((await fetch(app.origin + "/api/status")).status, 401);
