@@ -229,14 +229,19 @@ function createLabServer(config, { store = new LabState({ file: config.stateFile
         }
         if (url.pathname === "/api/bridge/registry") return reply(200, { version: 2, revision: 0, bridges: [], tokens: {}, deleted: [] });
         if (url.pathname === "/api/session-numbers") {
-          // Only this lab's own conversations, each under the AI it runs.
+          // Any conversation of an AI this lab offers, including one the phone
+          // has just opened and not yet saved - as on every other machine. A
+          // saved one is numbered only under the AI it actually runs.
           const sessions = Array.isArray(body.sessions) ? body.sessions : null;
-          const own = item => typeof item?.threadId === "string" && Object.hasOwn(store.state.threads, item.threadId)
-            && providerOf(store.state.threads[item.threadId]) === item.provider;
-          if (!sessionNumbers || !sessions || !sessions.every(own)) {
-            return reply(503, { error: "会話番号を確認できません。保存済みの番号は変更していません。" });
+          const fits = item => providerNames.includes(item?.provider) && (typeof item?.threadId !== "string"
+            || !Object.hasOwn(store.state.threads, item.threadId) || providerOf(store.state.threads[item.threadId]) === item.provider);
+          if (!sessions || !sessions.every(fits)) return reply(400, { error: "この実験室の会話ではありません。" });
+          if (!sessionNumbers) return reply(503, { error: "会話番号を確認できません。保存済みの番号は変更していません。" });
+          try {
+            return reply(200, { sessions: sessionNumbers.assign(sessions) });
+          } catch (error) {
+            return reply(error instanceof TypeError ? 400 : 503, { error: "会話番号を確認できません。保存済みの番号は変更していません。" });
           }
-          return reply(200, { sessions: sessionNumbers.assign(sessions) });
         }
         return reply(403, { error: "実験室で許可されていない操作です。" });
       }

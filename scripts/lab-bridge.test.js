@@ -91,10 +91,13 @@ test("lab conversations get their own stable numbers, per AI, instead of number 
   const again = await (await ask([{ provider: "codex", threadId: codexB.id }])).json();
   assert.equal(again.sessions[0].sessionNumber, 2);
 
-  // Only this lab's conversations, under the AI they actually run.
-  assert.equal((await ask([{ provider: "claude", threadId: codexA.id }])).status, 503);
-  assert.equal((await ask([{ provider: "codex", threadId: "not-a-lab-thread" }])).status, 503);
-  assert.equal((await ask([{ provider: "codex", threadId: "__proto__" }])).status, 503);
+  // A conversation the phone has just opened is numbered too, in the same batch.
+  const fresh = await (await ask([{ provider: "claude", threadId: "phone-new-claude" }, { provider: "codex", threadId: codexA.id }])).json();
+  assert.deepEqual(fresh.sessions.map(item => item.sessionNumber), [2, 1]);
+  // A saved conversation only under the AI it runs; only AIs this lab offers.
+  assert.equal((await ask([{ provider: "claude", threadId: codexA.id }])).status, 400);
+  assert.equal((await ask([{ provider: "gemini", threadId: "x" }])).status, 400);
+  assert.equal((await ask([{ provider: "codex", threadId: "" }])).status, 400);
   assert.equal((await fetch(app.origin + "/api/session-numbers", { method: "POST", body: "{}" })).status, 401);
 });
 
