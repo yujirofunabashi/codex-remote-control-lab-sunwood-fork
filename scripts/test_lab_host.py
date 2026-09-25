@@ -136,7 +136,17 @@ class HostTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "承認・実機検証"):
             vm.network(True)
         vm.net.ps.assert_not_called()
-        vm.net.gateway_check.assert_not_called()
+        vm.net.connect.assert_not_called()
+
+    def test_verified_guest_connects_only_through_pinned_guard(self):
+        vm = WindowsVM.__new__(WindowsVM)
+        vm.ready, vm.ai_ready = True, True
+        vm.net = Mock()
+        vm.net.inspect.return_value = {"State": "Running"}
+        vm.check_attachment = Mock()
+        vm.network(True)
+        vm.net.connect.assert_called_once_with()
+        vm.net.ps.assert_not_called()
 
 
 if __name__ == "__main__":
